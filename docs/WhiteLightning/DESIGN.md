@@ -29,6 +29,9 @@ Not reused: the FET/opto compressor models (they are modeled on specific hardwar
 | Pitch correction character | Classic, period-based, low-latency correction (not a modern formant-preserving mode). Best quality that fits the budget. |
 | Colors | Navy and white base, one electric ice-blue accent, amber for warnings, red only for clipping. |
 | Platform | Intel Mac (2018 hardware), macOS Sequoia. Formats: VST3, AU, AAX. Architecture x86_64 (universal optional). |
+| Host categories | EQ, Dynamics, Pitch Correction. VST3: `Fx EQ Dynamics "Pitch Shift"`. AAX: `EQ Dynamics PitchShift` (bit flags, combined). AU has no category list; Logic files it under the manufacturer name. |
+| Reported latency | 96 samples at 48 kHz for now. To be revisited in Phase 6 (see section 4). |
+| Product name | Pending: "White Lightning" or "ThundernLightnin". Plug-in code and parameter IDs do not depend on the name. |
 
 ### 0.3 Platform facts that affect the plan
 
@@ -251,6 +254,8 @@ Reported latency is constant in time (2.0 ms) for the Tune module and zero for a
 | Oversampling 2x / 4x | | measured in Phase 7 | | | | off by default; labeled as adding latency |
 
 Tune variable delay: a period-based shifter repeats or drops whole pitch periods. Around the fixed 2.0 ms base, the instantaneous delay varies by up to about one pitch period (about 0–4 ms for typical vocals, similar to Waves Tune Real-Time). Phase 6 measures the average and range of this delay per vocal range and documents it. If 2.0 ms causes audible artifacts, the base may rise to at most 2.67 ms (128 samples at 48 kHz).
+
+Lower-latency option (Phase 6): Antares describes Auto-Tune Hybrid on Avid DSP hardware as zero-latency, with a Classic mode. A period-based shifter can run with a base delay near 0 if it accepts a larger delay variation, as Waves Tune Real-Time does. Phase 6 will test base delays of 0, 32, 64, and 96 samples on real vocals. If a lower value sounds as good, the reported latency is reduced in that release.
 
 Measurement method: an impulse and a 1 kHz tone burst through the full plug-in, cross-correlated against the input, at every sample rate and for each module alone and all modules active. The test fails if measured delay ≠ reported delay (± 1 sample for the IIR group delay, which is phase response, not latency).
 
