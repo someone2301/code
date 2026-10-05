@@ -8,11 +8,21 @@ Dailymotion, Bandcamp, Twitch clips, and pages with common embedded players).
 ## Requirements
 
 - Python 3.9+
-- ffmpeg on your PATH
-  - macOS: `brew install ffmpeg`
-  - Windows: `winget install ffmpeg`
-  - Debian/Ubuntu: `sudo apt install ffmpeg`
 - `pip install -r requirements.txt`
+
+ffmpeg is used from your PATH if installed. If not, the `static-ffmpeg`
+package downloads a bundled copy on first run, so Homebrew is not needed
+(useful on Intel Macs, which Homebrew no longer installs on).
+
+### macOS quick setup
+
+```sh
+xcode-select --install          # provides python3
+cd VideoToMP3
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
 
 ## Usage
 

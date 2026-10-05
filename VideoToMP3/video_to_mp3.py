@@ -3,7 +3,7 @@
 
 Uses yt-dlp, which supports YouTube plus over a thousand other sites
 (Vimeo, SoundCloud, Dailymotion, Twitch clips, many embedded players, etc.).
-Requires ffmpeg on PATH.
+Uses ffmpeg from PATH, or the static-ffmpeg pip package if it is missing.
 """
 
 import argparse
@@ -38,6 +38,23 @@ def build_options(out_dir: Path, bitrate: str, playlist: bool, embed_art: bool) 
         "quiet": False,
         "no_warnings": False,
     }
+
+
+def ensure_ffmpeg() -> bool:
+    """Use ffmpeg from PATH, or fall back to the static-ffmpeg pip package."""
+    if shutil.which("ffmpeg") and shutil.which("ffprobe"):
+        return True
+    try:
+        import static_ffmpeg
+    except ImportError:
+        return False
+    print("Using bundled ffmpeg (downloads once on first run)...")
+    try:
+        static_ffmpeg.add_paths(weak=True)
+    except Exception as exc:
+        print(f"Could not download bundled ffmpeg: {exc}")
+        return False
+    return bool(shutil.which("ffmpeg") and shutil.which("ffprobe"))
 
 
 def read_url_file(path: Path) -> list[str]:
@@ -75,8 +92,8 @@ def main() -> int:
     if not urls:
         parser.error("no URLs given")
 
-    if not shutil.which("ffmpeg"):
-        sys.exit("ffmpeg was not found on PATH. Install it first (see README.md).")
+    if not ensure_ffmpeg():
+        sys.exit("ffmpeg was not found. Run: pip install -r requirements.txt")
 
     args.output.mkdir(parents=True, exist_ok=True)
     opts = build_options(args.output, args.quality, args.playlist, not args.no_art)
