@@ -101,8 +101,12 @@ def main() -> int:
     with yt_dlp.YoutubeDL(opts) as ydl:
         code = ydl.download(urls)
 
+    if code:
+        print(f"\nOne or more downloads failed. See the ERROR lines above.")
+        print(f"Any successful files are in: {args.output.resolve()}")
+        return 1
     print(f"\nDone. Files saved to: {args.output.resolve()}")
-    return 1 if code else 0
+    return 0
 
 
 if __name__ == "__main__":
