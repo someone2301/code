@@ -194,6 +194,8 @@ Additional compression parameters (functionality modelled on the FabFilter Pro-C
 | `lv_sc_source` | Sidechain | choice | Internal, External | Internal | |
 | `lv_stereo_link` | Stereo Link | float | 0 … 100 % linked, then Mid only / Side only | 100 % | |
 | `lv_out_gain` | Output | float | −24 … +24 | 0 | dB |
+| `lv_dry` | Dry (parallel dry level added to the compressed signal) | float | Off, −36 … +36 | Off | dB |
+| `lv_sc_level` | Side Chain Level (detector gain) | float | −36 … +36 | 0 | dB |
 
 `lv_mix` range becomes 0–200 % (above 100 % increases the processing). Attack range becomes 0.005–250 ms. The level display, knee display and meters share one meter scale (30/60/90 dB). Styles: Clean (low-distortion feed-forward, default), Vocal (automatic knee and ratio, so the threshold is the main control), Opto (slow, very soft knee), Classic (feedback, program dependent), Punch (analog-like). Lookahead and oversampling add reported latency and are off by default.
 
