@@ -718,6 +718,16 @@ Used for Tune Retune Speed, Multiband, Compression, De-ess and Resonance in the 
 - **Dragging down raises the value**: the hammer fills with colour (white at the top through the accent blue) from the top of the head down towards the pommel; dragging up empties it in reverse. Mouse wheel and arrow keys follow the same direction. The whole control is the drag area.
 - Seven electric arcs crackle around the silhouette. They switch on in a fixed order as the value rises (grey when off, white with a blue glow when on), and a soft aura grows behind the filled part.
 - Parameters where a lower value means more effect (Retune Speed, thresholds) use an inverted mapping, so a fuller hammer always means more effect.
+- Basic-view mappings (fill 0 = hammer empty, 1 = full). Pulling each dynamics hammer down always increases gain reduction:
+
+  | Hammer | Fill 0 | Fill 1 | Mapping |
+  | --- | --- | --- | --- |
+  | Multiband (band 1 threshold) | 0 dB | −60 dB | `mb1_thresh = −60 × fill` |
+  | Compression | 0 dB | −50 dB | `lv_thresh = −50 × fill` |
+  | De-ess | 0 dB | −60 dB | `ds_thresh = −60 × fill` |
+  | Resonance | depth 0 | depth 20 | `rs_depth = 20 × fill` |
+
+  Each strip's GR bar and readout follow the hammer.
 - The drawing is driven only by the parameter value through a `ParameterAttachment`, so automation, preset loads, A/B, undo and host changes update it exactly like a drag. Range, default and automation behavior are the parameter's own.
 - Glow and arcs pulse with the host's beat (tempo, ppq position and play state published once per block, sequence-locked, re-anchored every block so it cannot drift). Pulse peaks on the beat; above 144 BPM it pulses every 2 beats so it stays ≤ 2.4 Hz. No tempo or stopped transport → steady glow.
 - Vector drawing; scales cleanly at any size. Accessibility: role slider, name = parameter name, value = parameter text with unit.
