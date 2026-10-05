@@ -9,6 +9,7 @@
 #include "dsp/Resonance.h"
 #include "dsp/Tune.h"
 #include "dsp/SpectrumAnalyser.h"
+#include "dsp/History.h"
 
 // Kaminari Vocal processor.
 //
@@ -73,6 +74,10 @@ public:
     std::atomic<int> analyserResolution { SpectrumProcessor::High }, analyserSpeed { SpectrumProcessor::Fast };
     std::atomic<int> eqSolo { -1 };         // band being auditioned (-1 = none); not saved
 
+    // Level histories for the Compression and De-ess displays (about 2.7 ms per entry at 48 kHz).
+    static constexpr int historySize = 360;
+    kv::LevelHistory<historySize> compHistory, deessHistory;
+
     // A/B comparison: two parameter snapshots; the active one is live.
     void selectAB (int slot);
     void copyAToB();
@@ -87,6 +92,7 @@ public:
     // Gain reduction per module in dB (Multiband can be negative = boost), for the GUI meters.
     std::array<std::atomic<float>, numModules> moduleGr {};
     std::atomic<float> compMakeup { 0.0f };
+    std::array<std::atomic<float>, 6> mbBandChange {};   // per-band gain change in dB (Multiband display)
 
     kv::Tune tune;              // GUI reads its pitch read-outs
     kv::Resonance resonance;    // GUI reads its per-band reduction

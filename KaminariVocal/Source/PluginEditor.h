@@ -1,7 +1,7 @@
 #pragma once
 
 #include "PluginProcessor.h"
-#include "gui/BasicView.h"
+#include "gui/AdvPages.h"
 
 // Root editor, 1100 x 760 at 100 % (zoom 75-200 %), laid out after the GUI preview.
 //   Header: wordmark, Basic/Advanced, chain presets, A/B, latency, undo/redo, zoom.
@@ -10,7 +10,7 @@
 class KaminariVocalEditor : public juce::AudioProcessorEditor, private juce::Timer
 {
 public:
-    enum Tab { TabTune, TabEq, TabMultiband, TabCompression, TabDeEss, TabResonance, TabReverb, TabDelay, TabWidener, numTabs };
+    enum Tab { TabTune, TabEq, TabMultiband, TabCompression, TabDeEss, TabResonance, TabSends, numTabs };
     static constexpr int baseWidth = 1100, baseHeight = 760;
 
     explicit KaminariVocalEditor (KaminariVocalProcessor&);
@@ -18,7 +18,7 @@ public:
 
     void resized() override;
 
-    void showAdvanced (bool advanced, int send) { showTab (advanced, TabReverb + juce::jlimit (0, 2, send)); }
+    void showAdvanced (bool advanced, int send) { sendsPage.show (send); proc.advancedSend.store (juce::jlimit (0, 2, send)); showTab (advanced, TabSends); }
     void showTab (bool advanced, int tab);
     bool isAdvancedShown() const { return proc.advancedView.load(); }
     int  currentTab() const { return proc.advancedTab.load(); }
@@ -30,11 +30,11 @@ public:
     kvui::ReverbPanel& reverbPanel() { return reverb; }
     kvui::DelayPanel& delayPanel() { return delay; }
     kvui::WidenerPanel& widenerPanel() { return widener; }
-    kvui::TunePanel& tunePanel() { return tunePanel_; }
-    kvui::EqPanel& eqPanel() { return eqPanel_; }
+    kvui::TunePage& tunePage() { return tunePage_; }
+    kvui::EqPage& eqPage() { return eqPage_; }
     juce::Component& panel (int tab) { return *panels[(size_t) tab]; }
     juce::TextButton& viewButton (bool advanced) { return advanced ? advancedButton : basicButton; }
-    juce::TextButton& tabButton (int t) { return tabs[(size_t) t]; }
+    juce::TextButton& tabButton (int t) { return *tabs[(size_t) t]; }
     PresetBar& chainPresets() { return chain; }
     juce::Component& rootComponent() { return root; }
 
@@ -75,16 +75,23 @@ private:
     std::array<std::unique_ptr<kvui::SendCard>, KaminariVocalProcessor::numSends> sendCards;
 
     // Advanced view
-    std::array<juce::TextButton, numTabs> tabs;
-    kvui::TunePanel tunePanel_;
-    kvui::EqPanel eqPanel_;
-    kvui::MultibandPanel multibandPanel;
-    kvui::CompressionPanel compressionPanel;
-    kvui::DeEssPanel deEssPanel;
-    kvui::ResonancePanel resonancePanel;
+    struct TabButton : juce::TextButton
+    {
+        std::function<juce::String()> info;
+        bool send = false;
+        void paintButton (juce::Graphics&, bool, bool) override;
+    };
+    std::array<std::unique_ptr<TabButton>, numTabs> tabs;
+    kvui::TunePage tunePage_;
+    kvui::EqPage eqPage_;
+    kvui::MultibandPage multibandPage;
+    kvui::CompressionPage compressionPage;
+    kvui::DeEssPage deEssPage;
+    kvui::ResonancePage resonancePage;
     kvui::ReverbPanel reverb;
     kvui::DelayPanel delay;
     kvui::WidenerPanel widener;
+    kvui::SendsPage sendsPage { reverb, delay, widener };
     std::array<juce::Component*, numTabs> panels {};
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (KaminariVocalEditor)

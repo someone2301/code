@@ -362,6 +362,9 @@ namespace kv
             return -meter;
         }
 
+        // Current gain change of band k in dB (negative = reduction), for the GUI.
+        float bandChange (int k) const noexcept { return bands[std::clamp (k, 0, 5)].gainDb; }
+
     private:
         struct Band
         {

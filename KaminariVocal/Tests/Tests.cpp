@@ -647,6 +647,20 @@ int main (int argc, char** argv)
         check (ring < -3.0f, "Resonance depth 20: a 2 kHz ring over noise is reduced " + juce::String (-ring, 1) + " dB");
     }
     {
+        // Resonance must not cut broadband noise (no resonances), in mid/side or left/right
+        for (int stereo = 0; stereo < 2; ++stereo)
+        {
+            KaminariVocalProcessor p;
+            neutral (p);
+            setParam (p, "rs_on", 1.0f); setParam (p, "rs_depth", 5.0f); setParam (p, "rs_stereo_mode", (float) stereo);
+            prepare (p);
+            const auto r = render (p, 1.0, [] (int c, long n) { kv::Random rnd ((uint32_t) n * 2246822519u + (uint32_t) c + 9u); return 0.1f * rnd.next(); });
+            double maxRed = 0;
+            for (int k = 0; k < p.resonance.numBands(); ++k) maxRed = std::max (maxRed, (double) p.resonance.bandReduction (k));
+            check (maxRed < 2.0, juce::String ("Resonance leaves white noise alone (") + (stereo ? "M/S" : "L/R") + ", largest cut " + juce::String (maxRed, 1) + " dB)");
+        }
+    }
+    {
         // Tune: A4 + 30 cents, chromatic, retune speed 0 -> pulled to 440 Hz; Tune off leaves it alone
         KaminariVocalProcessor p;
         neutral (p);
@@ -835,11 +849,11 @@ int main (int argc, char** argv)
         prepare (p);
         std::unique_ptr<KaminariVocalEditor> ed (dynamic_cast<KaminariVocalEditor*> (p.createEditor()));
         check (ed != nullptr, "editor opens");
-        check (ed->strip (0).isVisible() && ! ed->reverbPanel().isVisible(), "Basic view shows the compact send strips");
+        check (ed->strip (0).isVisible() && ! ed->panel (KaminariVocalEditor::TabSends).isVisible(), "Basic view shows the compact send strips");
 
         ed->strip (1).open.triggerClick();
         juce::MessageManager::getInstance()->runDispatchLoopUntil (50);
-        check (ed->isAdvancedShown() && ed->delayPanel().isVisible() && ! ed->strip (1).isVisible(),
+        check (ed->isAdvancedShown() && ed->panel (KaminariVocalEditor::TabSends).isVisible() && ed->delayPanel().isVisible() && ! ed->strip (1).isVisible(),
                "a strip's Advanced button opens that send's Advanced panel");
 
         ed->showAdvanced (true, 0);
@@ -905,11 +919,18 @@ int main (int argc, char** argv)
                 juce::MessageManager::getInstance()->runDispatchLoopUntil (40);
             }
             save ("basic.png");
-            const char* names[] = { "tune", "eq", "multiband", "compression", "deess", "resonance", "reverb", "delay", "widener" };
-            for (int t = 0; t < KaminariVocalEditor::numTabs; ++t)
+            const char* names[] = { "tune", "eq", "multiband", "compression", "deess", "resonance" };
+            for (int t = 0; t < KaminariVocalEditor::TabSends; ++t)
             {
                 ed->showTab (true, t);
+                for (int k = 0; k < 4; ++k) { render (p, 0.1, vocal); juce::MessageManager::getInstance()->runDispatchLoopUntil (40); }
                 save (juce::String ("adv_") + names[t] + ".png");
+            }
+            const char* sendNames[] = { "reverb", "delay", "widener" };
+            for (int s2 = 0; s2 < 3; ++s2)
+            {
+                ed->showAdvanced (true, s2);
+                save (juce::String ("adv_") + sendNames[s2] + ".png");
             }
         }
     }

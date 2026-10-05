@@ -91,10 +91,16 @@ namespace kv
                         {
                             float sum = 0; int cnt = 0;
                             for (int j = std::max (0, k - win); j <= std::min (nb - 1, k + win); ++j)
-                                if (std::abs (j - k) > 1) { sum += lvl[c][j] + (lvl[1 - c][j] - lvl[c][j]) * s.link * 0.5f; ++cnt; }
+                                if (std::abs (j - k) > 1)
+                                {
+                                    // same linking as the band's own level, so a silent channel cannot pull the reference down
+                                    const float linkedJ = std::max (lvl[0][j], lvl[1][j]);
+                                    sum += lvl[c][j] + (linkedJ - lvl[c][j]) * s.link;
+                                    ++cnt;
+                                }
                             ref = cnt > 0 ? sum / (float) cnt : level;
                         }
-                        else ref = global[c] + 6.0f;
+                        else ref = std::max (global[0], global[1]) + (global[c] - std::max (global[0], global[1])) * (1.0f - s.link) + 6.0f;
                         const float detail = std::clamp (s.detail + tiltFor (centre[k], s.detailTiltLo, s.detailTiltHi) * 0.5f, 0.0f, 1.0f);
                         const float margin = 10.0f - 7.0f * detail;
                         const float excess = level - ref - margin;

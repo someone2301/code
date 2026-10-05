@@ -39,6 +39,8 @@ void KaminariVocalProcessor::prepareToPlay (double sampleRate, int samplesPerBlo
     dryCopy.setSize (2, block, false, false, true);
 
     tune.prepare (sampleRate);
+    compHistory.setHop ((int) std::lround (sampleRate / 375.0));
+    deessHistory.setHop ((int) std::lround (sampleRate / 375.0));
     eq.prepare (sampleRate);
     multiband.prepare (sampleRate);
     compressor.prepare (sampleRate);
@@ -225,10 +227,18 @@ void KaminariVocalProcessor::processModules (float* l, float* r, int n)
     }
     analyserPost.push (l, r, n);
     crossfaded (ModMultiband, [&] { moduleGr[ModMultiband].store (multiband.process (l, r, n, mbSettings)); });
+    for (int k = 0; k < 6; ++k)
+        mbBandChange[(size_t) k].store (moduleOn[ModMultiband] && k < mbSettings.count ? multiband.bandChange (k) : 0.0f);
     // Compression and De-ess always run (their lookahead delay must stay in the path); "off" means neutral settings.
+    dryCopy.copyFrom (0, 0, l, n);
+    dryCopy.copyFrom (1, 0, r, n);
     moduleGr[ModCompression].store (compressor.process (l, r, n, compSettings));
     compMakeup.store (compressor.currentMakeup());
+    compHistory.push (dryCopy.getReadPointer (0), dryCopy.getReadPointer (1), l, r, n);
+    dryCopy.copyFrom (0, 0, l, n);
+    dryCopy.copyFrom (1, 0, r, n);
     moduleGr[ModDeEss].store (deesser.process (l, r, n, dsSettings));
+    deessHistory.push (dryCopy.getReadPointer (0), dryCopy.getReadPointer (1), l, r, n);
     crossfaded (ModResonance, [&] { moduleGr[ModResonance].store (resonance.process (l, r, n, rsSettings)); });
 }
 
