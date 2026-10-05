@@ -23,7 +23,7 @@ public:
     {
         juce::Colour cloudDark  { 0xff0e1426 };
         juce::Colour cloudLight { 0xff56627f };
-        juce::Colour latent     { 0xff1c3563 };   // strikes that are off
+        juce::Colour latent     { 0xff7a8499 };   // strikes that are off: grey
         juce::Colour bolt       { 0xff5ce1ff };   // electric accent (glow)
         juce::Colour core       { 0xfff4f7fc };   // white core of an active strike
         juce::Colour text       { 0xfff4f7fc };
@@ -144,7 +144,7 @@ public:
             if (level < 1.0f)
                 for (size_t k = 0; k < bolt.paths.size(); ++k)
                 {
-                    g.setColour (colours.latent.withAlpha (0.55f * (1.0f - level)));
+                    g.setColour (colours.latent.withAlpha (0.5f * (1.0f - level)));
                     g.strokePath (bolt.paths[k], stroke (base * weightOf (k)));
                 }
 

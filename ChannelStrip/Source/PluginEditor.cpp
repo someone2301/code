@@ -3,16 +3,17 @@
 ChannelStripEditor::ChannelStripEditor (ChannelStripProcessor& p)
     : AudioProcessorEditor (&p), proc (p),
       lnf (palettes::dark()),
-      inSlider (*p.apvts.getParameter (ids::inGain), p.hostTempo, "INPUT"),
-      outSlider (*p.apvts.getParameter (ids::outGain), p.hostTempo, "OUTPUT"),
+      inKnob (p.apvts, ids::inGain, "INPUT"),
       panKnob (p.apvts, ids::pan, "PAN"),
+      outKnob (p.apvts, ids::outGain, "OUTPUT"),
       inMeter (p.inPeak), outMeter (p.outPeak),
       deess (p), eqPanel (p), comp (p)
 {
-    panKnob.setLNF (&lnf);
-    addAndMakeVisible (panKnob);
-    addAndMakeVisible (inSlider);
-    addAndMakeVisible (outSlider);
+    for (auto* k : { &inKnob, &panKnob, &outKnob })
+    {
+        k->setLNF (&lnf);
+        addAndMakeVisible (*k);
+    }
     for (auto* b : { &phaseBtn, &monoBtn })
     {
         b->setLookAndFeel (&lnf);
@@ -54,13 +55,13 @@ void ChannelStripEditor::paint (juce::Graphics& g)
 
 void ChannelStripEditor::resized()
 {
-    inMeter.setBounds (360, 24, 10, 120);
-    inSlider.setBounds (376, 4, 146, 148);
-    phaseBtn.setBounds (532, 40, 50, 26);
-    monoBtn.setBounds (532, 72, 50, 26);
-    panKnob.setBounds (592, 30, 96, 84);
-    outSlider.setBounds (698, 4, 146, 148);
-    outMeter.setBounds (850, 24, 10, 120);
+    inMeter.setBounds (400, 24, 10, 120);
+    inKnob.setBounds (416, 30, 96, 96);
+    phaseBtn.setBounds (528, 40, 50, 26);
+    monoBtn.setBounds (528, 72, 50, 26);
+    panKnob.setBounds (594, 30, 96, 96);
+    outKnob.setBounds (706, 30, 96, 96);
+    outMeter.setBounds (808, 24, 10, 120);
 
     deess.setBounds (10, 166, 240, 340);
     eqPanel.setBounds (258, 166, 832, 340);

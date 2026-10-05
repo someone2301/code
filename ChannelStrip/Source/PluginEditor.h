@@ -17,8 +17,7 @@ private:
     ModuleLNF lnf;
 
     juce::TooltipWindow tooltips { this, 350 };
-    LightningSlider inSlider, outSlider;
-    Knob panKnob;
+    Knob inKnob, panKnob, outKnob;
     juce::TextButton phaseBtn { juce::String::fromUTF8 ("\xc3\x98") }, monoBtn { "MONO" };
     std::unique_ptr<APVTS::ButtonAttachment> phaseAtt, monoAtt;
     LevelMeter inMeter, outMeter;

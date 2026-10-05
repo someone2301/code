@@ -388,11 +388,11 @@ Meters: Level GR = solid white bars, De-ess GR = bolt bars with diagonal hatch, 
 
 ### 6.5 Lightning slider
 
-Used for Input, Output, Tune Strength, Level Compression, De-ess, and Low-Mid (Basic view). Advanced detail controls stay plain knobs (no bolt pointer).
+Used for Tune Strength, Level Compression, De-ess, and Low-Mid (Basic view). Input and Output are plain circular knobs beside their always-visible meters. Advanced detail controls stay plain knobs (no bolt pointer).
 
 - No box or track. A dark thunder cloud (shaded billows) sits at the top; a row of full-length lightning strikes hangs below it, each with a jagged trunk, side branches, and fine filaments. Strike count follows the control's width (odd, 3–9).
 - A grip hangs on a thin line from the centre of the cloud. **Pulling down raises the value**; pushing up lowers it. Mouse wheel and arrow keys follow the same direction (Down/PageDown = more). The whole control is the drag area.
-- The value adds strikes **across the width, from the centre outwards** (centre, then right, left, right, …). A strike that is on glows over its full length; the next strike fades in as the value approaches it. Strikes that are off show as faint navy shapes. The underside of the cloud lights up with the number of active strikes.
+- The value adds strikes **across the width, from the centre outwards** (centre, then right, left, right, …). A strike that is on glows over its full length; the next strike fades in as the value approaches it. Strikes that are off are grey; they turn white (with glow) as they switch on. The cloud is always visible. The underside of the cloud lights up with the number of active strikes.
 - The drawing is driven only by the parameter value through a `ParameterAttachment`, so automation, preset loads, A/B, undo, and host changes update it exactly like a drag. Range, default, and automation behavior are the parameter's own.
 - Glow: active strikes pulse with the host's beat. The audio thread publishes tempo, ppq position, and play state once per block (sequence-locked, no allocation); the GUI extrapolates from that block's anchor only (≤ 250 ms), so it is re-synchronized on every block and cannot drift. Pulse peaks on the beat (cosine, no hard edges); above 144 BPM it pulses every 2 beats so it stays ≤ 2.4 Hz. No tempo, stopped transport, or no recent block → steady glow.
 - Vector drawing; strike shapes are generated per parameter and size from a fixed seed, so they stay the same between sessions and scale cleanly.
