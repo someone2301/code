@@ -140,6 +140,8 @@ Scale behavior: choosing a named scale writes the 12 `tn_note_*` values. If the 
 
 Reserved IDs, created only if the feature passes its tests: `eq<N>_dyn_on`, `eq<N>_dyn_thresh`, `eq<N>_dyn_range`, `eq<N>_dyn_attack`, `eq<N>_dyn_release`, `eq<N>_chan` (Stereo/Left/Right/Mid/Side).
 
+Pro-Q 3–based additions (own implementation): shapes Bell, Low Shelf, Low Cut, High Shelf, High Cut, Notch, Band Pass, Tilt Shelf, Flat Tilt; slopes 6–96 dB/oct plus Brickwall for cuts; per-band dynamic EQ (`eq<N>_dyn_range` ring around Gain, `eq<N>_dyn_thresh`; program-dependent timing) — the reserved dynamic IDs become real; per-band stereo placement (Stereo, Left, Right, Mid, Side) — the reserved `eq<N>_chan` becomes real; global `eq_auto_gain`, `eq_gain_scale` (0–200 %), `eq_phase_invert`, `eq_out_gain`, `eq_out_pan`; processing mode Zero latency (default) / Natural / Linear phase (the last two add reported latency); solo by click-and-hold on a band; Spectrum Grab. Band count stays 8 (Pro-Q 3 allows 24; can be raised later).
+
 Not parameters (UI state, saved with the session): band solo/audition, selection, analyzer on/off, pre/post, speed, resolution, tilt, freeze, range, zoom/scroll.
 
 Analyzer (defaults: **Resolution High, Speed Fast**):
@@ -180,6 +182,21 @@ Detector EQ: 8 bands with the same filter types, ranges and graph as the main EQ
 
 Parallel compression: `lv_mix` blends the compressed (wet) signal with the uncompressed (dry) signal; dry and wet stay time-aligned because the compressor has no latency. `lv_wet_gain` sets the wet level before the blend.
 
+Additional compression parameters (functionality modelled on the FabFilter Pro-C 2 manual; own implementation and names):
+
+| ID | Name | Type | Range | Default | Unit |
+| --- | --- | --- | --- | --- | --- |
+| `lv_style` | Style | choice | Clean, Vocal, Opto, Classic, Punch | Clean | |
+| `lv_auto_release` | Auto Release | bool | | on | |
+| `lv_hold` | Hold | float | 0 … 500 | 0 | ms |
+| `lv_lookahead` | Lookahead | float | 0 … 20 (0 = off) | 0 | ms |
+| `lv_oversample` | Oversampling | choice | Off, 2x, 4x | Off | |
+| `lv_sc_source` | Sidechain | choice | Internal, External | Internal | |
+| `lv_stereo_link` | Stereo Link | float | 0 … 100 % linked, then Mid only / Side only | 100 % | |
+| `lv_out_gain` | Output | float | −24 … +24 | 0 | dB |
+
+`lv_mix` range becomes 0–200 % (above 100 % increases the processing). Attack range becomes 0.005–250 ms. The level display, knee display and meters share one meter scale (30/60/90 dB). Styles: Clean (low-distortion feed-forward, default), Vocal (automatic knee and ratio, so the threshold is the main control), Opto (slow, very soft knee), Classic (feedback, program dependent), Punch (analog-like). Lookahead and oversampling add reported latency and are off by default.
+
 Compressor type: a clean digital feed-forward compressor (VCA-style behavior; not an opto or FET model). Soft knee, peak or smooth (RMS) detection, user attack and release, fixed (not program-dependent) timing. The Basic one-fader control works like the single compression fader of Waves R-Vox: one control sets how hard it works, with bounded automatic makeup gain. Audition plays the detector signal (latched, amber "AUDITION" tag, Escape exits).
 
 Advanced Compression display: a scrolling level view (input level as a translucent area, output level as a brighter area, gain reduction as a line hanging from the top, threshold as a draggable dashed line), a small knee/transfer-curve inset, and IN / GR / OUT meters on the right. No separate gain-reduction history graph.
@@ -197,7 +214,12 @@ External sidechain: postponed (see section 9).
 | `ds_on` | De-Ess On | bool | | on | | B |
 | `ds_thresh` | Threshold | float | −60 … 0 | −28 | dB | B (as De-ess) |
 | `ds_range` | Range (max reduction) | float | 0 … 24 | 8 | dB | A |
-| `ds_lookahead` | Lookahead | float | 0 … 10 | 0 (off) | ms | A |
+| `ds_lookahead` | Lookahead | float | 0 … 15 | 0 (off) | ms | A |
+| `ds_mode` | Mode | choice | Single Vocal, Allround | Single Vocal | | A |
+| `ds_stereo_link` | Stereo Link | float | 0 … 100 | 100 | % | A |
+| `ds_link_mode` | Link Mode | choice | Stereo, Mid, Side | Stereo | | A |
+| `ds_sc_source` | Sidechain | choice | Internal, External | Internal | | A |
+| `ds_audition_trigger` | Audition Triggering (hear only what is removed) | bool | | off | | A (non-auto) |
 | `ds_oversample` | Oversampling | choice | Off, 2x, 4x | Off | | A |
 | `ds_detect` | Detection | choice | Voice Focus, Full Band | Voice Focus | | A |
 | `ds_det_lo` | Detector Low Edge | float, log | 1000 … 16000 | 3500 | Hz | A |
@@ -212,7 +234,7 @@ External sidechain: postponed (see section 9).
 - Basic "De-ess" control = `ds_thresh` displayed as `De-ess % = −thresh / 60 × 100` (default −28 dB = 47 %). Range, attack, release, and filters stay at their own values.
 - No user attack/release: timing is automatic (0.3 ms attack, program-dependent 30–80 ms release).
 - Lookahead and oversampling are off by default; each adds latency that is reported to the host and shown in the header badge.
-- Advanced view sets the detector range with a horizontal two-handle frequency slider (1–20 kHz) over a live spectrum; dragging the band moves both edges.
+- Advanced view sets the trigger range with a horizontal two-handle frequency slider (2–20 kHz, as in Pro-DS) over a live spectrum of the sidechain; dragging the band moves both edges. In Split Band processing the split frequency follows the low edge automatically (`ds_split_freq` is removed). A circular detector meter surrounds the Threshold knob. Functionality modelled on the FabFilter Pro-DS manual; own implementation and names.
 - Internal ratio is fixed at 6:1; the gain reduction is `min(range, over · (1 − 1/6))`. Documented in the tooltip.
 - Split Band: the signal is split complementarily (`high = x − LP(x)`, so `low + high = x` exactly) at `ds_split_freq`; only `high` is attenuated. Wideband: the whole signal is attenuated.
 - Stereo: detector is linked (max of channels). Unlinked mode is postponed.
@@ -244,6 +266,8 @@ Per band (N = 1..6; band 1 defaults shown, bands 2–6 are created on demand):
 | `mb<N>_range` | Range (max reduction) | float | 0 … 24 | 6 | dB | A |
 | `mb<N>_makeup` | Auto Makeup | bool | | off | | A |
 | `mb<N>_solo` | Band Solo | bool | | off | | A (non-auto) |
+
+Pro-MB–based additions (own implementation): per band `mb<N>_mode` (Compress, Expand), `mb<N>_range` becomes −24 … +24 dB (negative = downward, positive = upward), `mb<N>_gain` (band output gain, ±24 dB), `mb<N>_lookahead`, `mb<N>_trigger` (Band, Free with its own sidechain range), `mb<N>_sc_source` (Internal, External), `mb<N>_stereo_link`; Attack/Release shown as 0–100 % (program dependent); global `mb_processing` (Minimum phase default, zero latency; Linear phase adds latency).
 
 Bands may not overlap; the DSP keeps each band's high edge ≥ 1.5 × its low edge without rewriting stored values. Each band is extracted as `LP_hi(HP_lo(x))` and processed as `x − band · (1 − g)`, so at 0 dB reduction the output equals the input exactly; regions outside every band pass untouched. Zero latency unless lookahead or oversampling is on. The Advanced view has no transfer-curve graph.
 
@@ -474,18 +498,17 @@ White on navy-900 has a contrast ratio above 15:1; mist on navy-900 is above 7:1
 
 Meters: Level GR = solid white bars, De-ess GR = bolt bars with diagonal hatch, Low-Mid GR = ice bars with dotted segments. Each has a text label and numeric readout.
 
-### 6.5 Lightning slider
+### 6.5 Hammer slider (Basic view)
 
-Used for Tune Strength, Level Compression, De-ess, and Low-Mid (Basic view). Input and Output are plain circular knobs beside their always-visible meters. Advanced detail controls stay plain knobs (no bolt pointer).
+Used for Tune Retune Speed, Multiband, Compression, De-ess and Resonance in the Basic view. Input and Output are plain knobs; Advanced controls are plain knobs.
 
-- No box or track. A dark thunder cloud (shaded billows) sits at the top; a row of full-length lightning strikes hangs below it, each with a jagged trunk, side branches, and fine filaments. Strike count follows the width of the storm area (odd, 3–9).
-- A brass fader in the R-Vox style (long dark slot, wide brass cap with three grip ridges) sits to the right of the cloud. Scale marks beside the slot are shown on every lightning slider except Compression.
-- Parameters where a lower value means more effect (Retune Speed, thresholds) use an inverted mapping, so more strikes always means more effect. **Pulling the fader down raises the value**; pushing up lowers it. Mouse wheel and arrow keys follow the same direction (Down/PageDown = more). The whole control is the drag area.
-- The value adds strikes **across the width, from the centre outwards** (centre, then right, left, right, …). A strike that is on glows over its full length; the next strike fades in as the value approaches it. Strikes that are off are grey; they turn white (with glow) as they switch on. The cloud is always visible. The underside of the cloud lights up with the number of active strikes.
-- The drawing is driven only by the parameter value through a `ParameterAttachment`, so automation, preset loads, A/B, undo, and host changes update it exactly like a drag. Range, default, and automation behavior are the parameter's own.
-- Glow: active strikes pulse with the host's beat. The audio thread publishes tempo, ppq position, and play state once per block (sequence-locked, no allocation); the GUI extrapolates from that block's anchor only (≤ 250 ms), so it is re-synchronized on every block and cannot drift. Pulse peaks on the beat (cosine, no hard edges); above 144 BPM it pulses every 2 beats so it stays ≤ 2.4 Hz. No tempo, stopped transport, or no recent block → steady glow.
-- Vector drawing; strike shapes are generated per parameter and size from a fixed seed, so they stay the same between sessions and scale cleanly.
-- Accessibility: role slider, name = parameter name, value = parameter text with unit, range = parameter range; screen-reader set-value goes through the same attachment.
+- An original war-hammer drawing standing head up: chamfered head with engraved lines, collar, wrapped grip, pommel. No box or track. (A generic Norse-style hammer, not a copy of any film or comic design.)
+- **Dragging down raises the value**: the hammer fills with colour (white at the top through the accent blue) from the top of the head down towards the pommel; dragging up empties it in reverse. Mouse wheel and arrow keys follow the same direction. The whole control is the drag area.
+- Seven electric arcs crackle around the silhouette. They switch on in a fixed order as the value rises (grey when off, white with a blue glow when on), and a soft aura grows behind the filled part.
+- Parameters where a lower value means more effect (Retune Speed, thresholds) use an inverted mapping, so a fuller hammer always means more effect.
+- The drawing is driven only by the parameter value through a `ParameterAttachment`, so automation, preset loads, A/B, undo and host changes update it exactly like a drag. Range, default and automation behavior are the parameter's own.
+- Glow and arcs pulse with the host's beat (tempo, ppq position and play state published once per block, sequence-locked, re-anchored every block so it cannot drift). Pulse peaks on the beat; above 144 BPM it pulses every 2 beats so it stays ≤ 2.4 Hz. No tempo or stopped transport → steady glow.
+- Vector drawing; scales cleanly at any size. Accessibility: role slider, name = parameter name, value = parameter text with unit.
 
 ### 6.6 Scaling
 

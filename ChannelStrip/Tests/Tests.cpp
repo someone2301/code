@@ -235,26 +235,26 @@ int main (int argc, char** argv)
         sl.resetToDefault();
         check (std::abs (prm.getValue() - defBefore) < 1.0e-6f, "double-click resets to the parameter default");
 
-        // strikes switch on from the centre outwards, each one fully
+        // arcs switch on in centre-out order (values snap to the parameter interval, hence the tolerance)
         {
             const int n = sl.getNumBolts();
             const int c = n / 2;
             sl.setNormalised (1.0f / (float) n);
-            bool centreOnly = sl.boltLevel (c) > 0.999f;
+            bool centreOnly = sl.boltLevel (c) > 0.99f;
             for (int i = 0; i < n; ++i)
-                centreOnly = centreOnly && (i == c || sl.boltLevel (i) < 1.0e-4f);
+                centreOnly = centreOnly && (i == c || sl.boltLevel (i) < 0.01f);
             sl.setNormalised (3.0f / (float) n);
-            const bool three = sl.boltLevel (c - 1) > 0.999f && sl.boltLevel (c + 1) > 0.999f && sl.boltLevel (0) < 1.0e-4f;
+            const bool three = sl.boltLevel (c - 1) > 0.99f && sl.boltLevel (c + 1) > 0.99f && sl.boltLevel (0) < 0.01f;
             sl.setNormalised (1.0f);
             bool all = true;
             for (int i = 0; i < n; ++i)
-                all = all && sl.boltLevel (i) > 0.999f;
+                all = all && sl.boltLevel (i) > 0.99f;
             sl.setNormalised (0.0f);
             bool none = true;
             for (int i = 0; i < n; ++i)
-                none = none && sl.boltLevel (i) < 1.0e-4f;
+                none = none && sl.boltLevel (i) < 0.01f;
             check (n % 2 == 1 && n >= 3 && centreOnly && three && all && none,
-                   "strikes activate from the centre outwards (" + juce::String (n) + " strikes)");
+                   "arcs activate in centre-out order (" + juce::String (n) + " arcs)");
             sl.resetToDefault();
         }
 

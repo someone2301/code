@@ -5,33 +5,30 @@
 #include "../HostTempo.h"
 #include <vector>
 
-// Vertical slider drawn as a thunder cloud with a row of lightning strikes below it.
+// Vertical slider drawn as a war hammer wrapped in lightning.
 //
-// A brass fader sits to the right of the cloud. Pulling it down raises the parameter value and switches
-// on more strikes across the width, from the centre outwards (grey strikes turn white); pushing up switches them
-// off in reverse order. An active strike always glows over its full length. The drawing is driven only by
-// the parameter's value (through a ParameterAttachment), so automation, preset loads and host changes move
-// it exactly like a mouse drag does.
+// The hammer stands head up. Dragging down raises the parameter value: the hammer fills with colour from the
+// top of the head down towards the pommel, and more electric arcs crackle around it (switched on in a fixed
+// centre-out order, grey when off, white with a glow when on); dragging up empties it in reverse. The drawing
+// is driven only by the parameter's value (through a ParameterAttachment), so automation, preset loads and
+// host changes move it exactly like a mouse drag does.
 //
-// Active strikes glow with a soft pulse locked to the host's beat position (HostTempo). Without tempo or
-// with the transport stopped the glow is steady.
+// The glow and arcs pulse softly with the host's beat position (HostTempo). Without tempo or with the
+// transport stopped the glow is steady.
 class LightningSlider : public juce::Component,
                         public juce::SettableTooltipClient
 {
 public:
     struct Colours
     {
-        juce::Colour cloudDark  { 0xff0e1426 };
-        juce::Colour cloudLight { 0xff56627f };
-        juce::Colour latent     { 0xff7a8499 };   // strikes that are off: grey
-        juce::Colour bolt       { 0xff5ce1ff };   // electric accent (glow)
-        juce::Colour core       { 0xfff4f7fc };   // white core of an active strike
+        juce::Colour steelDark  { 0xff1e2740 };
+        juce::Colour steelLight { 0xff5d6a88 };
+        juce::Colour latent     { 0xff7a8499 };   // arcs that are off: grey
+        juce::Colour bolt       { 0xff5ce1ff };   // electric accent (fill, glow)
+        juce::Colour core       { 0xfff4f7fc };   // white core of an active arc
         juce::Colour text       { 0xfff4f7fc };
         juce::Colour subText    { 0xffa9b8d6 };
         juce::Colour editBack   { 0xff0b1a33 };
-        juce::Colour brassLight { 0xfff3dc9a };
-        juce::Colour brassMid   { 0xffc9a253 };
-        juce::Colour brassDark  { 0xff7a5a22 };
     };
 
     LightningSlider (juce::RangedAudioParameter& p, const HostTempo& tempoSource, const juce::String& captionText)
@@ -43,7 +40,7 @@ public:
     {
         setWantsKeyboardFocus (true);
         setTitle (param.getName (64));
-        setDescription ("Vertical fader. Pull down to increase, push up to decrease.");
+        setDescription ("Vertical slider. Drag down to fill the hammer and increase, up to decrease.");
         setHelpText ("Shift-drag for fine control. Double-click to reset. Double-click the value to type it.");
 
         valueLabel.setJustificationType (juce::Justification::centred);
@@ -60,9 +57,6 @@ public:
         attachment.sendInitialUpdate();
     }
 
-    // Scale marks beside the fader slot (off for the compression control).
-    void setShowScale (bool shouldShow) { showScale = shouldShow; repaint(); }
-
     void setColours (const Colours& c)
     {
         colours = c;
@@ -77,8 +71,8 @@ public:
 
     int getNumBolts() const noexcept { return numBolts; }
 
-    // Activation 0..1 of strike i (0 = leftmost). Strikes switch on from the centre outwards:
-    // value v activates v * numBolts strikes in that order; the next one fades in.
+    // Activation 0..1 of arc i. Arcs switch on in a fixed centre-out order:
+    // value v activates v * numBolts arcs in that order; the next one fades in.
     float boltLevel (int i) const noexcept
     {
         if (i < 0 || i >= numBolts)
@@ -124,7 +118,7 @@ public:
         {
             glow = g;
             if (norm > 0.0f)
-                repaint (artArea().toNearestInt().expanded (4));
+                repaint();
         }
     }
 
@@ -137,100 +131,81 @@ public:
         g.drawText (caption, b.removeFromTop (captionHeight), juce::Justification::centred);
 
         const bool enabled = isEnabled();
-        const float base = strokeBase();
         const float pulse = 0.45f + 0.55f * glow;   // kept subtle
-        const auto stroke = [] (float w) { return juce::PathStrokeType (w, juce::PathStrokeType::mitered, juce::PathStrokeType::rounded); };
+        const auto art = artArea();
+        const float fillY = fillLevel();
+        const auto stroke = [] (float w) { return juce::PathStrokeType (w, juce::PathStrokeType::curved, juce::PathStrokeType::rounded); };
 
-        // strikes (drawn first so they emerge from under the cloud)
+        // aura behind the filled part
+        if (enabled && norm > 0.0f)
+        {
+            const auto aura = juce::Rectangle<float> (headWidth() * 1.8f + 20.0f, (fillY - art.getY()) + 24.0f)
+                                  .withCentre ({ art.getCentreX(), (art.getY() + fillY) * 0.5f });
+            juce::ColourGradient halo (colours.bolt.withAlpha ((0.15f + 0.4f * norm) * pulse), aura.getCentreX(), aura.getCentreY(),
+                                       colours.bolt.withAlpha (0.0f), aura.getRight(), aura.getCentreY(), true);
+            g.setGradientFill (halo);
+            g.fillEllipse (aura);
+        }
+
+        // arcs that are off
         for (int i = 0; i < numBolts; ++i)
         {
             const float level = enabled ? boltLevel (i) : 0.0f;
-            const auto& bolt = bolts[(size_t) i];
-
             if (level < 1.0f)
-                for (size_t k = 0; k < bolt.paths.size(); ++k)
-                {
-                    g.setColour (colours.latent.withAlpha (0.5f * (1.0f - level)));
-                    g.strokePath (bolt.paths[k], stroke (base * weightOf (k)));
-                }
-
-            if (level <= 0.0f)
-                continue;
-
-            for (size_t k = 0; k < bolt.paths.size(); ++k)
             {
-                const float w = base * weightOf (k);
-                g.setColour (colours.bolt.withAlpha (0.08f * level * pulse));
-                g.strokePath (bolt.paths[k], stroke (w * 6.0f));
-                g.setColour (colours.bolt.withAlpha (0.20f * level * pulse));
-                g.strokePath (bolt.paths[k], stroke (w * 3.0f));
-                g.setColour (colours.bolt.withAlpha (0.55f * level * pulse));
-                g.strokePath (bolt.paths[k], stroke (w * 1.7f));
-                g.setColour (colours.core.withAlpha (0.95f * level));
-                g.strokePath (bolt.paths[k], stroke (w * 0.85f));
+                g.setColour (colours.latent.withAlpha (0.35f * (1.0f - level)));
+                g.strokePath (arcs[(size_t) i], stroke (1.0f));
             }
         }
 
-        // cloud: dark body, lit from below by the active strikes
-        const auto cloud = cloudArea();
-        g.setColour (colours.cloudDark);
-        g.fillPath (cloudPath);
-        for (const auto& puff : puffRects)   // back to front, each puff lit from above
-        {
-            juce::ColourGradient shade (colours.cloudLight, puff.getCentreX() - puff.getWidth() * 0.15f, puff.getY() + puff.getHeight() * 0.15f,
-                                        colours.cloudDark, puff.getCentreX(), puff.getBottom(), true);
-            g.setGradientFill (shade);
-            g.fillEllipse (puff);
-        }
-        const float active = enabled ? norm : 0.0f;
-        if (active > 0.0f)
-        {
-            juce::ColourGradient under (colours.bolt.withAlpha (0.45f * pulse * juce::jmin (1.0f, active * 1.5f)),
-                                        cloud.getCentreX(), cloud.getBottom(),
-                                        colours.bolt.withAlpha (0.0f),
-                                        cloud.getCentreX() + cloud.getWidth() * 0.55f, cloud.getBottom(), true);
-            g.setGradientFill (under);
-            g.fillPath (cloudPath);
-        }
-        g.setColour (colours.cloudLight.withAlpha (0.35f));
-        g.strokePath (cloudPath, juce::PathStrokeType (0.8f));
+        // steel body
+        g.setGradientFill (juce::ColourGradient (colours.steelLight, art.getCentreX() - headWidth() * 0.3f, art.getY(),
+                                                 colours.steelDark, art.getCentreX() + headWidth() * 0.5f, art.getY(), false));
+        g.fillPath (body);
 
-        // brass fader to the right of the cloud: slot, ticks, cap
-        const auto fader = faderArea();
-        g.setColour (juce::Colour (0xff05080f));
-        g.fillRoundedRectangle (juce::Rectangle<float> (4.0f, fader.getHeight()).withCentre (fader.getCentre()), 2.0f);
-        g.setColour (colours.subText.withAlpha (0.45f));
-        for (int t = 0; showScale && t <= 10; ++t)
+        // colour fill from the top down to the value
+        if (norm > 0.0f)
         {
-            const float ty = faderTop() + faderRange() * (float) t / 10.0f;
-            const float len = (t % 5 == 0) ? 5.0f : 3.0f;
-            g.drawHorizontalLine ((int) ty, fader.getX(), fader.getX() + len);
-            g.drawHorizontalLine ((int) ty, fader.getRight() - len, fader.getRight());
+            g.saveState();
+            g.reduceClipRegion (body);
+            g.reduceClipRegion (art.withBottom (fillY).toNearestInt().expanded (1, 0));
+            juce::ColourGradient fill (colours.core, 0.0f, art.getY(), colours.bolt.darker (0.5f), 0.0f, art.getBottom(), false);
+            fill.addColour (0.35, colours.bolt);
+            g.setGradientFill (fill);
+            g.fillRect (art.withBottom (fillY));
+            g.restoreState();
         }
-        const auto grip = capBounds();
-        g.setColour (juce::Colours::black.withAlpha (0.45f));
-        g.fillRoundedRectangle (grip.translated (0.0f, 1.5f), 2.5f);
-        juce::ColourGradient brass (colours.brassLight, grip.getX(), grip.getY(), colours.brassDark, grip.getX(), grip.getBottom(), false);
-        brass.addColour (0.45, colours.brassMid);
-        g.setGradientFill (brass);
-        g.fillRoundedRectangle (grip, 2.5f);
-        g.setColour (colours.brassDark.darker (0.4f));
-        g.drawRoundedRectangle (grip, 2.5f, 0.8f);
-        g.setColour (colours.brassDark.darker (0.6f).withAlpha (0.85f));  // three grip ridges
-        for (int r = 1; r <= 3; ++r)
-            g.drawHorizontalLine ((int) (grip.getY() + grip.getHeight() * (float) r / 4.0f), grip.getX() + 3.0f, grip.getRight() - 3.0f);
-        g.setColour (colours.brassLight.withAlpha (0.7f));
-        g.drawHorizontalLine ((int) grip.getY() + 1, grip.getX() + 3.0f, grip.getRight() - 3.0f);
-        if (! enabled)
+        g.setColour (colours.subText.withAlpha (0.7f));
+        g.strokePath (body, juce::PathStrokeType (1.0f));
+        g.setColour (juce::Colour (0xff0b1a33).withAlpha (0.55f));
+        g.strokePath (detail, juce::PathStrokeType (1.1f));
+
+        // fill edge
+        if (norm > 0.0f)
         {
-            g.setColour (juce::Colours::black.withAlpha (0.4f));
-            g.fillRoundedRectangle (grip, 2.5f);
+            g.saveState();
+            g.reduceClipRegion (body);
+            g.setColour (colours.core);
+            g.drawLine (art.getX(), fillY, art.getRight(), fillY, 2.0f);
+            g.restoreState();
+        }
+
+        // arcs that are on: glow + white core
+        for (int i = 0; i < numBolts; ++i)
+        {
+            const float level = enabled ? boltLevel (i) : 0.0f;
+            if (level <= 0.0f)
+                continue;
+            g.setColour (colours.bolt.withAlpha (0.35f * level * pulse));
+            g.strokePath (arcs[(size_t) i], stroke (4.0f));
+            g.setColour (colours.core.withAlpha (0.95f * level));
+            g.strokePath (arcs[(size_t) i], stroke (1.3f));
         }
 
         if (hasKeyboardFocus (false))
         {
             juce::Path ring, dashed;
-            ring.addRoundedRectangle (grip.expanded (4.0f), 5.0f);
+            ring.addRoundedRectangle (headBounds().expanded (5.0f), 6.0f);
             const float dashes[] = { 3.0f, 2.5f };
             juce::PathStrokeType (1.5f).createDashedStroke (dashed, ring, dashes, 2);
             g.setColour (colours.bolt);
@@ -346,59 +321,29 @@ private:
         LightningSlider& owner;
     };
 
-    // One strike: paths grouped by thickness (trunk, branches, filaments).
-    struct Bolt
-    {
-        std::vector<juce::Path> paths;
-    };
-
     static constexpr float captionHeight = 16.0f;
     static constexpr int valueHeight = 18;
-    static constexpr float weights[3] = { 1.0f, 0.5f, 0.28f };
-
-    static float weightOf (size_t k) noexcept { return weights[juce::jmin<size_t> (k, 2)]; }
 
     juce::Rectangle<float> artArea() const
     {
         auto b = getLocalBounds().toFloat();
         b.removeFromTop (captionHeight);
         b.removeFromBottom ((float) valueHeight + 2.0f);
-        return b;
+        return b.reduced (0.0f, 2.0f);
     }
 
-    // Cloud and strikes on the left, brass fader column on the right.
-    juce::Rectangle<float> faderArea() const
+    float headWidth() const { return juce::jmin (artArea().getWidth() * 0.42f, 64.0f); }
+
+    juce::Rectangle<float> headBounds() const
     {
-        auto a = artArea();
-        return a.removeFromRight (juce::jlimit (20.0f, 28.0f, a.getWidth() * 0.2f));
+        const auto a = artArea();
+        return { a.getCentreX() - headWidth() * 0.5f, a.getY(), headWidth(), a.getHeight() * 0.36f };
     }
 
-    juce::Rectangle<float> stormArea() const
-    {
-        auto a = artArea();
-        a.removeFromRight (faderArea().getWidth() + 4.0f);
-        return a;
-    }
+    // The fill runs from the top of the head to the bottom of the pommel.
+    float fillLevel() const { const auto a = artArea(); return a.getY() + norm * a.getHeight(); }
 
-    static constexpr float capHeight = 16.0f;
-    float faderTop() const   { return faderArea().getY() + capHeight * 0.5f + 1.0f; }
-    float faderRange() const { return juce::jmax (1.0f, faderArea().getHeight() - capHeight - 2.0f); }
-
-    juce::Rectangle<float> capBounds() const
-    {
-        const auto f = faderArea();
-        return juce::Rectangle<float> (f.getWidth() - 2.0f, capHeight).withCentre ({ f.getCentreX(), faderTop() + norm * faderRange() });
-    }
-
-    juce::Rectangle<float> cloudArea() const
-    {
-        const auto a = stormArea();
-        return a.withHeight (juce::jlimit (18.0f, 64.0f, a.getHeight() * 0.30f)).withTrimmedTop (2.0f);
-    }
-
-    float pullRange() const { return faderRange(); }
-
-    float strokeBase() const { return juce::jlimit (0.9f, 2.6f, stormArea().getWidth() / (float) juce::jmax (1, numBolts) * 0.11f); }
+    float pullRange() const { return juce::jmax (1.0f, artArea().getHeight()); }
 
     // Centre-out order: rank 0 is the middle strike, then alternately right and left of it.
     int rankOf (int i) const noexcept
@@ -444,78 +389,69 @@ private:
         m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (this));
     }
 
-    // Jagged path heading in direction `angle` (radians from straight down), with side branches.
-    void growBranch (juce::Random& rnd, Bolt& bolt, juce::Point<float> start, float angle, float length,
-                     int depth, float minX, float maxX, float bottom, float step)
-    {
-        juce::Path& path = bolt.paths[(size_t) juce::jmin (depth, 2)];
-        path.startNewSubPath (start);
-        auto p = start;
-        const int steps = juce::jmax (3, (int) (length / step));
-        for (int s = 0; s < steps && p.y < bottom; ++s)
-        {
-            const float a = angle + (rnd.nextFloat() - 0.5f) * (depth == 0 ? 0.8f : 0.9f);
-            p = { juce::jlimit (minX, maxX, p.x + std::sin (a) * step), juce::jmin (bottom, p.y + std::cos (a) * step) };
-            path.lineTo (p);
-
-            if (depth < 2 && s > 0 && rnd.nextFloat() < (depth == 0 ? 0.22f : 0.18f))
-            {
-                const float side = rnd.nextBool() ? 1.0f : -1.0f;
-                growBranch (rnd, bolt, p, angle + side * (0.55f + 0.5f * rnd.nextFloat()),
-                            length * (depth == 0 ? 0.3f + 0.25f * rnd.nextFloat() : 0.35f + 0.2f * rnd.nextFloat()),
-                            depth + 1, minX, maxX, bottom, step * 0.75f);
-                path.startNewSubPath (p);   // continue the parent from the fork point
-            }
-        }
-    }
-
-    // Deterministic per parameter and size: strike count follows the width (odd, 3..9).
+    // Hammer outline, engraving and the arcs around it. Deterministic per parameter and size.
     void rebuildGeometry()
     {
-        const auto art = stormArea();
-        const auto cloud = cloudArea();
+        const auto a = artArea();
+        const auto head = headBounds();
+        const float cx = a.getCentreX(), ch = juce::jmin (5.0f, head.getHeight() * 0.2f);
+        const float gw = juce::jlimit (5.0f, 9.0f, head.getWidth() * 0.12f), collarH = 5.0f, pomH = 7.0f;
+        const float gripTop = head.getBottom() + collarH, gripBot = a.getBottom() - pomH;
 
-        int n = juce::jlimit (3, 9, juce::roundToInt (art.getWidth() / 16.0f));
-        if (n % 2 == 0)
-            --n;
-        numBolts = n;
+        body.clear();
+        body.startNewSubPath (head.getX() + ch, head.getY());
+        body.lineTo (head.getRight() - ch, head.getY());
+        body.lineTo (head.getRight(), head.getY() + ch);
+        body.lineTo (head.getRight(), head.getBottom() - ch);
+        body.lineTo (head.getRight() - ch, head.getBottom());
+        body.lineTo (head.getX() + ch, head.getBottom());
+        body.lineTo (head.getX(), head.getBottom() - ch);
+        body.lineTo (head.getX(), head.getY() + ch);
+        body.closeSubPath();
+        body.addRectangle (cx - gw - 2.0f, head.getBottom(), 2.0f * gw + 4.0f, collarH);          // collar
+        body.addRectangle (cx - gw * 0.5f, gripTop, gw, juce::jmax (1.0f, gripBot - gripTop));     // grip
+        body.startNewSubPath (cx - gw, gripBot);                                                  // pommel
+        body.lineTo (cx + gw, gripBot);
+        body.lineTo (cx + gw - 2.0f, gripBot + pomH);
+        body.lineTo (cx - gw + 2.0f, gripBot + pomH);
+        body.closeSubPath();
+        body.setUsingNonZeroWinding (true);
 
+        detail.clear();
+        detail.startNewSubPath (head.getX() + 6.0f, head.getY() + 6.0f);
+        detail.lineTo (head.getRight() - 6.0f, head.getY() + 6.0f);
+        detail.startNewSubPath (head.getX() + 6.0f, head.getBottom() - 6.0f);
+        detail.lineTo (head.getRight() - 6.0f, head.getBottom() - 6.0f);
+        const float my = head.getCentreY();
+        detail.startNewSubPath (cx - 6.0f, my - 5.0f);
+        detail.lineTo (cx, my + 5.0f);
+        detail.lineTo (cx + 6.0f, my - 5.0f);
+        for (float y = gripTop + 4.0f; y < gripBot - 2.0f; y += 5.0f)
+        {
+            detail.startNewSubPath (cx - gw * 0.5f, y + 3.0f);
+            detail.lineTo (cx + gw * 0.5f, y);
+        }
+
+        numBolts = 7;
         juce::Random rnd ((juce::int64) seed);
-        bolts.assign ((size_t) numBolts, Bolt {});
-        const float colW = art.getWidth() / (float) numBolts;
-        const float top = cloud.getBottom() - cloud.getHeight() * 0.25f;
-        const float bottom = art.getBottom() - 2.0f;
-        const float step = juce::jmax (3.0f, (bottom - top) / 14.0f);
-
+        arcs.assign ((size_t) numBolts, juce::Path());
         for (int i = 0; i < numBolts; ++i)
         {
-            auto& bolt = bolts[(size_t) i];
-            bolt.paths.assign (3, juce::Path());
-            const float cx = art.getX() + colW * ((float) i + 0.3f + 0.4f * rnd.nextFloat());
-            // outer strikes lean outwards a little, like a storm front
-            const float lean = ((float) i - (float) (numBolts - 1) * 0.5f) / (float) numBolts * 0.35f;
-            growBranch (rnd, bolt, { cx, top }, lean, bottom - top, 0,
-                        art.getX() + 1.0f, art.getRight() - 1.0f, bottom, step);
+            const float side = (i % 2 == 0) ? -1.0f : 1.0f;
+            const float y0 = a.getY() + 4.0f + (a.getHeight() - 8.0f) * ((float) i + 0.5f) / (float) numBolts;
+            const float edge = y0 < head.getBottom() ? head.getWidth() * 0.5f : (y0 < gripBot ? gw * 0.5f + 1.0f : gw);
+            juce::Point<float> p { cx + side * (edge + 1.0f), y0 };
+            auto& arc = arcs[(size_t) i];
+            arc.startNewSubPath (p);
+            const int len = 4 + rnd.nextInt (3);
+            for (int k = 0; k < len; ++k)
+            {
+                p = { juce::jlimit (a.getX(), a.getRight(), p.x + side * (3.0f + rnd.nextFloat() * 5.0f)),
+                      p.y + (rnd.nextFloat() - 0.6f) * 10.0f };
+                arc.lineTo (p);
+            }
+            arc.lineTo (p.x - side * (2.0f + rnd.nextFloat() * 4.0f), p.y + 4.0f + rnd.nextFloat() * 6.0f);
         }
-
-        // cloud outline from overlapping puffs (unit coordinates inside the cloud box)
-        cloudPath.clear();
-        puffRects.clear();
-        // x, y, w, h in the cloud box; listed back to front (upper billows first, low dark base last)
-        static constexpr float puffs[][4] = {
-            { 0.20f, 0.00f, 0.30f, 0.62f }, { 0.44f, -0.06f, 0.34f, 0.70f }, { 0.66f, 0.08f, 0.26f, 0.55f },
-            { 0.02f, 0.28f, 0.26f, 0.52f }, { 0.12f, 0.18f, 0.30f, 0.60f }, { 0.34f, 0.16f, 0.32f, 0.66f },
-            { 0.56f, 0.20f, 0.30f, 0.60f }, { 0.76f, 0.30f, 0.24f, 0.50f },
-            { 0.06f, 0.52f, 0.30f, 0.46f }, { 0.30f, 0.54f, 0.40f, 0.46f }, { 0.62f, 0.52f, 0.32f, 0.46f }
-        };
-        for (const auto& pf : puffs)
-        {
-            const juce::Rectangle<float> r (cloud.getX() + pf[0] * cloud.getWidth(), cloud.getY() + pf[1] * cloud.getHeight(),
-                                            pf[2] * cloud.getWidth(), pf[3] * cloud.getHeight());
-            puffRects.push_back (r);
-            cloudPath.addEllipse (r);
-        }
-        cloudPath.setUsingNonZeroWinding (true);
     }
 
     juce::RangedAudioParameter& param;
@@ -526,13 +462,12 @@ private:
     juce::Label valueLabel;
     Colours colours;
 
-    std::vector<Bolt> bolts;
-    juce::Path cloudPath;
-    std::vector<juce::Rectangle<float>> puffRects;
+    juce::Path body, detail;
+    std::vector<juce::Path> arcs;
     int numBolts = 0;
 
     float norm = 0.0f, dragNorm = 0.0f, lastY = 0.0f, glow = HostTempo::steadyGlow;
-    bool dragging = false, showScale = true;
+    bool dragging = false;
 
     juce::VBlankAttachment vblank { this, std::function<void()> ([this] { updateGlow (juce::Time::getMillisecondCounterHiRes()); }) };
 
