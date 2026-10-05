@@ -30,6 +30,30 @@ This fetches JUCE 8.0.8, builds an x86_64 VST3 and copies it to
 so Gatekeeper does not block it. If you move a copy to another Mac, run
 `xattr -cr "Channel Strip.vst3"` and `codesign --force --deep --sign - "Channel Strip.vst3"` there.
 
+## Installer (.pkg)
+
+On the Mac:
+
+```
+./installer/make_installer.sh
+```
+
+This builds the plugin, signs it (ad-hoc by default) and writes `dist/ChannelStrip-0.1.0.pkg`.
+The package installs `Channel Strip.vst3` system-wide to `/Library/Audio/Plug-Ins/VST3`. Double-click it to install.
+To remove the plugin, run `./installer/uninstall_mac.sh`.
+
+Without an Apple Developer ID the package is unsigned. On your own Mac that is fine. On any other Mac that receives it by download,
+Gatekeeper blocks the double-click; right-click the package, choose Open, or allow it in System Settings > Privacy & Security.
+For a package that opens without warnings, set these variables (needs a paid Apple Developer account, a Developer ID Application and a
+Developer ID Installer certificate, and a `notarytool store-credentials` profile):
+
+```
+CODESIGN_IDENTITY="Developer ID Application: Name (TEAMID)" \
+INSTALLER_SIGN_IDENTITY="Developer ID Installer: Name (TEAMID)" \
+NOTARY_PROFILE=my-profile \
+./installer/make_installer.sh
+```
+
 ## Pro Tools through Blue Cat PatchWork
 
 Pro Tools does not load VST3 itself. Insert Blue Cat PatchWork as an AAX plug-in and load Channel Strip inside it.

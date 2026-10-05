@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<installer-gui-script minSpecVersion="2">
+    <title>Channel Strip</title>
+    <welcome file="welcome.html" mime-type="text/html"/>
+    <conclusion file="conclusion.html" mime-type="text/html"/>
+    <options customize="never" require-scripts="false"/>
+    <domains enable_anywhere="false" enable_currentUserHome="false" enable_localSystem="true"/>
+    <volume-check>
+        <allowed-os-versions>
+            <os-version min="10.15"/>
+        </allowed-os-versions>
+    </volume-check>
+    <choices-outline>
+        <line choice="vst3"/>
+    </choices-outline>
+    <choice id="vst3" title="Channel Strip VST3" description="Installs Channel Strip.vst3 to /Library/Audio/Plug-Ins/VST3">
+        <pkg-ref id="@IDENTIFIER@"/>
+    </choice>
+    <pkg-ref id="@IDENTIFIER@" version="@VERSION@" onConclusion="none">ChannelStrip-component.pkg</pkg-ref>
+</installer-gui-script>
