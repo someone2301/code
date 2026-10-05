@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>VideoToMP3</h1>
+<p class="sub">Enter the access code to continue.</p>
+<form method="post" action="/login">
+  <label for="code">Access code</label>
+  <input id="code" name="code" type="password" autocomplete="current-password" required autofocus>
+  {% if error %}<div class="msg err">{{ error }}</div>{% endif %}
+  <button type="submit">Enter</button>
+</form>
+{% endblock %}

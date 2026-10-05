@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>VideoToMP3</title>
+<style>
+  :root { --bg:#f5f6f8; --card:#fff; --text:#1b1f24; --muted:#5f6b7a; --accent:#2563eb;
+          --accent-text:#fff; --border:#d8dde4; --err:#b42318; --ok:#067647; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#0f1216; --card:#181c22; --text:#e6e9ee; --muted:#9aa4b2; --accent:#4f8cff;
+            --accent-text:#0b0d10; --border:#2a313b; --err:#f97066; --ok:#47cd89; }
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center;
+         background:var(--bg); color:var(--text);
+         font:16px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; padding:16px; }
+  .card { width:100%; max-width:560px; background:var(--card); border:1px solid var(--border);
+          border-radius:14px; padding:28px; }
+  h1 { margin:0 0 4px; font-size:1.5rem; }
+  p.sub { margin:0 0 20px; color:var(--muted); font-size:.95rem; }
+  label { display:block; font-weight:600; margin:14px 0 6px; font-size:.9rem; }
+  input, select { width:100%; padding:11px 12px; font:inherit; color:var(--text);
+                  background:var(--bg); border:1px solid var(--border); border-radius:8px; }
+  input:focus, select:focus { outline:2px solid var(--accent); outline-offset:1px; }
+  button, .btn { display:inline-block; margin-top:18px; width:100%; padding:12px; font:inherit;
+                 font-weight:600; border:0; border-radius:8px; background:var(--accent);
+                 color:var(--accent-text); cursor:pointer; text-align:center; text-decoration:none; }
+  button:disabled { opacity:.6; cursor:wait; }
+  .link { background:none; color:var(--muted); width:auto; margin:0; padding:0; font-weight:400;
+          text-decoration:underline; font-size:.85rem; white-space:nowrap; }
+  .bar { height:8px; background:var(--border); border-radius:4px; overflow:hidden; margin-top:16px; }
+  .bar > div { height:100%; width:0; background:var(--accent); transition:width .3s; }
+  .msg { margin-top:12px; font-size:.95rem; word-break:break-word; }
+  .err { color:var(--err); } .ok { color:var(--ok); }
+  .hidden { display:none; }
+  footer { margin-top:22px; font-size:.8rem; color:var(--muted); display:flex;
+           justify-content:space-between; gap:12px; align-items:center; }
+</style>
+</head>
+<body>
+<main class="card">{% block content %}{% endblock %}</main>
+</body>
+</html>

@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>VideoToMP3</h1>
+<p class="sub">Paste a video link to get an MP3. Max {{ max_min }} minutes per video.</p>
+<form id="form">
+  <label for="url">Video link</label>
+  <input id="url" type="url" placeholder="https://www.youtube.com/watch?v=..." required>
+  <label for="quality">Quality</label>
+  <select id="quality">
+    <option value="128">128 kbps (smaller file)</option>
+    <option value="192" selected>192 kbps (standard)</option>
+    <option value="256">256 kbps</option>
+    <option value="320">320 kbps (best)</option>
+  </select>
+  <button id="go" type="submit">Convert</button>
+</form>
+
+<div id="progress" class="hidden">
+  <div class="bar"><div id="fill"></div></div>
+  <div id="msg" class="msg"></div>
+  <a id="dl" class="btn hidden" href="#">Download MP3</a>
+</div>
+
+<footer>
+  <span>Only convert content you own or have permission to use. Files are deleted after {{ ttl_min }} minutes.</span>
+  <form method="post" action="/logout"><button class="link" type="submit">Log out</button></form>
+</footer>
+
+<script>
+const $ = id => document.getElementById(id);
+const form = $("form"), go = $("go"), box = $("progress"), fill = $("fill"), msg = $("msg"), dl = $("dl");
+
+function show(text, cls) { msg.textContent = text; msg.className = "msg " + (cls || ""); }
+
+form.addEventListener("submit", async e => {
+  e.preventDefault();
+  go.disabled = true; go.textContent = "Working...";
+  box.classList.remove("hidden"); dl.classList.add("hidden");
+  fill.style.width = "0"; show("Starting...");
+  try {
+    const r = await fetch("/api/convert", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({url: $("url").value, quality: $("quality").value})
+    });
+    if (r.status === 401) { location.reload(); return; }
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || "Request failed");
+    poll(data.id);
+  } catch (err) { fail(err.message); }
+});
+
+async function poll(id) {
+  try {
+    const r = await fetch("/api/status/" + id);
+    if (!r.ok) throw new Error("Job not found");
+    const j = await r.json();
+    if (j.status === "error") return fail(j.error || "Conversion failed");
+    if (j.status === "done") {
+      fill.style.width = "100%"; show("Ready: " + j.name, "ok");
+      dl.href = "/api/file/" + id; dl.classList.remove("hidden");
+      return reset();
+    }
+    fill.style.width = (j.progress || 0) + "%";
+    show(j.status === "converting" ? "Converting to MP3..." :
+         j.status === "queued" ? "Waiting in queue..." : "Downloading... " + (j.progress || 0) + "%");
+    setTimeout(() => poll(id), 1000);
+  } catch (err) { fail(err.message); }
+}
+
+function fail(text) { show(text, "err"); reset(); }
+function reset() { go.disabled = false; go.textContent = "Convert"; }
+</script>
+{% endblock %}

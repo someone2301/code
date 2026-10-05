@@ -1,2 +1,4 @@
 yt-dlp>=2026.8.19
 static-ffmpeg>=2.7
+flask>=3.0
+gunicorn>=22.0

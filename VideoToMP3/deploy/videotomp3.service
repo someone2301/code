@@ -1,0 +1,21 @@
+[Unit]
+Description=VideoToMP3 web app
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=videotomp3
+Group=videotomp3
+WorkingDirectory=/opt/videotomp3
+EnvironmentFile=/etc/videotomp3.env
+ExecStart=/opt/videotomp3/.venv/bin/gunicorn -w 1 --threads 8 --timeout 600 -b 127.0.0.1:8000 web.app:app
+Restart=on-failure
+StateDirectory=videotomp3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/videotomp3 /opt/videotomp3/.venv
+
+[Install]
+WantedBy=multi-user.target
