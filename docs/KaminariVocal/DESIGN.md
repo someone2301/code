@@ -247,28 +247,59 @@ Per band (N = 1..6; band 1 defaults shown, bands 2–6 are created on demand):
 
 Bands may not overlap; the DSP keeps each band's high edge ≥ 1.5 × its low edge without rewriting stored values. Each band is extracted as `LP_hi(HP_lo(x))` and processed as `x − band · (1 − g)`, so at 0 dB reduction the output equals the input exactly; regions outside every band pass untouched. Zero latency unless lookahead or oversampling is on. The Advanced view has no transfer-curve graph.
 
-### 2.7 Resonance (dynamic resonance suppression)
+### 2.7 Resonance (resonant suppressor)
+
+Follows the Resonant Suppressor description supplied by the user (soft/hard modes, depth curve, side panel). Stereo only in version 1; multichannel (up to 9.1.6) is postponed.
+
+Main controls:
 
 | ID | Name | Type | Range | Default | Unit | Vis |
 | --- | --- | --- | --- | --- | --- | --- |
 | `rs_on` | Resonance On | bool | | off | | B |
-| `rs_depth` | Depth | float | 0 … 20 | 4 | | B (lightning slider) |
+| `rs_mode` | Mode | choice | Soft (adaptive threshold), Hard (level-dependent) | Soft | | A |
+| `rs_depth` | Depth | float | 0 … 20 (relative; up to 40 dB of reduction at maximum) | 4 | | B (lightning slider) |
 | `rs_detail` | Detail | float | 0 … 100 | 50 | % | A |
-| `rs_attack` | Attack | float, log | 0.5 … 50 | 5 | ms | A |
-| `rs_release` | Release | float, log | 5 … 500 | 100 | ms | A |
-| `rs_maxcut` | Max Cut | float | 0 … 24 (0 = off) | 8 | dB | A |
+| `rs_attack` | Attack | float | 0 … 100 (frequency-dependent time) | 50 | % | A |
+| `rs_release` | Release | float | 0 … 100 (frequency-dependent time) | 50 | % | A |
 | `rs_mix` | Mix | float | 0 … 100 | 100 | % | A |
-| `rs_trim` | Trim | float | −12 … +12 | 0 | dB | A |
-| `rs_mode` | Mode | choice | Soft (adaptive threshold), Hard (fixed threshold) | Soft | | A |
-| `rs_quality` | Processing | choice | Low latency, Standard, Linear phase | Low latency | | A |
-| `rs_detail_tilt` / `rs_attack_tilt` / `rs_release_tilt` | Tilt (side panel) | float | −100 … +100 | 0 | % | A |
-| `rs_chan` | Channel mode | choice | Stereo, Mid/Side, Left/Right | Stereo | | A |
-| `rs_link` | Link | float | 0 … 100 | 100 | % | A |
-| `rs_sidechain` | External sidechain | bool | | off | | A |
-| `rs_node<K>_on/shape/freq/gain/q` | Sensitivity node K (K = 1..8) | shapes: Low cut, Low shelf, Bell, Band pass, Band reject, High shelf, High cut, Tilt | | 3 nodes: Low shelf 120 Hz, Bell 3 kHz, High shelf 12 kHz, 0 dB | | A |
-| `rs_delta` | Delta (hear removed) | bool | | off | | A (non-auto) |
+| `rs_out_gain` | Out Gain (after Mix) | float | −12 … +12 | 0 | dB | A |
+| `rs_delta` | Delta | bool | | off | | A |
+| `rs_bypass` | Bypass (internal, keeps processing for glitch-free A/B) | bool | | off | | A |
+| `rs_quality` | Quality | choice | Normal, High, Ultra | Normal | | A |
+| `rs_low_latency` | Low Latency Mode | bool | | **on** | | A |
+| `rs_linear_phase` | Linear phase | bool | | off | | A |
+| `rs_sc` | Sidechain (SC) | bool | | off | | A |
+| `rs_sc_listen` | Sidechain listen | bool | | off | | A (non-auto) |
 
-The parameter set follows soothe3 as described in its manual and reviews (Depth, Detail, Attack, Release, Max Cut, Mix, Trim, Soft/Hard mode, Delta, frequency tilt for Detail/Attack/Release, eight node shapes, low-latency and linear-phase processing). The implementation, names of IDs, ranges and artwork are original. Low latency (default) uses a bank of zero-latency dynamic IIR notches driven by a resonance detector, so it adds 0 samples at 44.1/48 kHz (the figure oeksound states for soothe3's low-latency mode). Standard and Linear phase use an STFT and add a fixed, reported latency (measured in their phase). This is an original design; no third-party code or tuning is copied.
+Side panel (collapsible; indicator lights show settings that differ from their defaults):
+
+| ID | Name | Type | Range | Default | Unit |
+| --- | --- | --- | --- | --- | --- |
+| `rs_stereo_mode` | Stereo Mode | choice | Left/Right, Mid/Side | Mid/Side | |
+| `rs_link` | Link | float | 0 … 100 | 100 | % |
+| `rs_focus` | Stereo Focus | float | −100 … +100 | 0 | |
+| `rs_detail_tilt_lo` / `rs_detail_tilt_hi` | Detail Tilt low (< ~500 Hz) / high (> ~2 kHz) | float | −100 … +100 | 0 | |
+| `rs_attack_tilt_lo` / `rs_attack_tilt_hi` | Attack Tilt low / high | float | −100 … +100 | 0 | |
+| `rs_release_tilt_lo` / `rs_release_tilt_hi` | Release Tilt low / high | float | −100 … +100 | 0 | |
+| `rs_max_cut` | Max Cut | float | 0 … 40, Off | Off | dB |
+| `rs_wet_trim` | Wet Trim (before Mix) | float | −12 … +12 | 0 | dB |
+
+Depth Curve bands (K = 1..8, created by double-clicking the Reduction Graph; band 1 is not created by default):
+
+| ID | Name | Type | Range | Default |
+| --- | --- | --- | --- | --- |
+| `rs_b<K>_used` | Band exists | bool | | off |
+| `rs_b<K>_on` | Enable/Bypass | bool | | on |
+| `rs_b<K>_shape` | Shape | choice | Low cut, Low shelf, High shelf, High cut, Bell, Bandpass, Band reject, Tilt | Bell |
+| `rs_b<K>_freq` | Frequency | float, log | 20 … 20000 Hz | where created |
+| `rs_b<K>_depth` | Band Depth (boost = more suppression) | float | −24 … +24 dB | 0 |
+| `rs_b<K>_q` | Q or Slope | float / choice | 0.1 … 10 / 6 … 48 dB/oct | 1.0 / 12 |
+| `rs_b<K>_focus` | Band Focus | float | −100 … +100 | 0 |
+| `rs_b<K>_listen` | Band Listen (plays the band's delta) | bool | | off (non-auto) |
+
+Display: Reduction Graph (frequency horizontally, reduction in dB vertically, Max Cut as a shaded limit, reflects Mix) with the Depth Curve overlaid. With unlinked stereo the curve and graph split in two (white = left/mid, dark = right/side).
+
+Latency: minimum phase by default. Low Latency Mode (default on) uses reduced time resolution and no lookahead: 0 samples at 44.1/48 kHz, about 1 ms at higher rates. Normal/High/Ultra quality without Low Latency, and Linear phase, add a fixed reported latency (measured in their phase). The implementation is original; no third-party code is used.
 
 ### 2.7b Non-parameter state added
 
@@ -317,14 +348,14 @@ Reported latency is constant in time (2.0 ms) for the Tune module and zero for a
 | Multiband | 0 | **0** | 0 | 0 | 0 | subtractive bands; lookahead/oversampling off |
 | Compression | 0 | **0** | 0 | 0 | 0 | no lookahead |
 | De-ess | 0 | **0** | 0 | 0 | 0 | complementary split; lookahead/oversampling off |
-| Resonance (Low latency) | 0 | **0** | measured | measured | measured | IIR dynamic notches |
+| Resonance (Low Latency Mode) | 0 | **0** | ≈ 1 ms | ≈ 1 ms | ≈ 1 ms | reduced time resolution, no lookahead |
 | Analyzer, smoothing | 0 | **0** | 0 | 0 | 0 | analyzer reads a copy |
 | Output, Safety | 0 | **0** | 0 | 0 | 0 | |
 | **Total reported** | 88 | **96** | 176 | 192 | 384 | ceiling: 128 at 48 kHz (2.67 ms) |
 | Reserve | | **32** | | | | for Tune tuning in Phase 6 |
 | Optional: De-ess / Multiband lookahead | | + lookahead time | | | | off by default; e.g. 1 ms = +48 samples |
 | Optional: oversampling 2x / 4x | | measured | | | | off by default; labeled as adding latency |
-| Optional: Resonance High resolution | | measured | | | | off by default |
+| Optional: Resonance without Low Latency, or Linear phase | | measured | | | | off by default |
 | EQ Match | 0 | **0** | 0 | 0 | 0 | generates normal minimum-phase bands |
 
 Tune variable delay: a period-based shifter repeats or drops whole pitch periods. Around the fixed 2.0 ms base, the instantaneous delay varies by up to about one pitch period (about 0–4 ms for typical vocals, similar to Waves Tune Real-Time). Phase 6 measures the average and range of this delay per vocal range and documents it. If 2.0 ms causes audible artifacts, the base may rise to at most 2.67 ms (128 samples at 48 kHz).
