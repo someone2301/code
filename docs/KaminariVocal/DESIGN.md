@@ -141,6 +141,23 @@ Reserved IDs, created only if the feature passes its tests: `eq<N>_dyn_on`, `eq<
 
 Not parameters (UI state, saved with the session): band solo/audition, selection, analyzer on/off, pre/post, speed, resolution, tilt, freeze, range, zoom/scroll.
 
+Analyzer (defaults: **Resolution High, Speed Fast**):
+
+| Resolution | FFT at 44.1/48 kHz | Bin width at 48 kHz |
+| --- | --- | --- |
+| Low | 1024 | 46.9 Hz |
+| Medium | 2048 | 23.4 Hz |
+| High | 4096 | 11.7 Hz |
+| Maximum | 8192 | 5.9 Hz |
+
+The FFT length doubles at 88.2/96 kHz and again at 176.4/192 kHz (cap 16384) so the time window stays the same. The audio thread only writes samples into a lock-free ring; the GUI analyses the newest window on every display frame (overlapping windows), so the refresh rate stays at the display rate at every resolution. Hann window, amplitude-corrected so a full-scale sine reads 0 dB. Each 2-px display column shows the loudest bin it covers (narrow peaks stay visible); below one bin per column the bins are interpolated. Tilt 4.5 dB/oct around 1 kHz.
+
+| Speed | Very Slow | Slow | Medium | Fast | Very Fast |
+| --- | --- | --- | --- | --- | --- |
+| Release time constant | 2000 ms | 900 ms | 400 ms | 150 ms | 50 ms |
+
+Attack is immediate. When the host stops sending audio for more than 100 ms the display falls at the selected release speed.
+
 ### 2.4 Level
 
 | ID | Name | Type | Range | Default | Unit | Vis |
@@ -369,7 +386,18 @@ White on navy-900 has a contrast ratio above 15:1; mist on navy-900 is above 7:1
 
 Meters: Level GR = solid white bars, De-ess GR = bolt bars with diagonal hatch, Low-Mid GR = ice bars with dotted segments. Each has a text label and numeric readout.
 
-### 6.5 Scaling
+### 6.5 Lightning slider
+
+Used for Input, Output, Tune Strength, Level Compression, De-ess, and Low-Mid (Basic view). Advanced detail controls stay knobs.
+
+- A vertical track with a branching bolt that hangs from a "cloud" cap at the top. Each parameter gets its own fixed bolt shape (seeded by its ID).
+- The lit part of the bolt ends at the thumb. **Dragging down raises the value** and lights more of the trunk and forks; dragging up dims them in reverse order. Mouse wheel and arrow keys follow the same direction (Down/PageDown = more).
+- The drawing is driven only by the parameter value through a `ParameterAttachment`, so automation, preset loads, A/B, undo, and host changes update it exactly like a drag. Range, default, and automation behavior are the parameter's own.
+- Glow: lit branches pulse with the host's beat. The audio thread publishes tempo, ppq position, and play state once per block (sequence-locked, no allocation); the GUI extrapolates from that block's anchor only (≤ 250 ms), so it is re-synchronized on every block and cannot drift. Pulse peaks on the beat (cosine, no hard edges); above 144 BPM it pulses every 2 beats so it stays ≤ 2.4 Hz. No tempo, stopped transport, or no recent block → steady glow.
+- Vector drawing, stroke widths scale with the track width; works at any scale factor.
+- Accessibility: role slider, name = parameter name, value = parameter text with unit, range = parameter range; screen-reader set-value goes through the same attachment.
+
+### 6.6 Scaling
 
 All layout is in logical units; `setTransform` handles scale. Vector drawing only; the font is embedded. Tested at 100, 125, 150 % OS scaling and on Retina and non-Retina displays.
 
@@ -382,7 +410,7 @@ All layout is in logical units; `setTransform` handles scale. Vector drawing onl
 | Input | Action |
 | --- | --- |
 | Hover 350 ms | Tooltip: name, value + unit, one-sentence description, hints. Placed beside the control, never over it. Hides on mouse-out or 4 s after motion stops. |
-| Click-drag vertical | Adjust; 200 px = full range |
+| Click-drag vertical | Adjust; 200 px = full range (lightning sliders: one track height = full range, drag down = increase) |
 | Shift-drag | Fine, 10 % sensitivity |
 | Double-click control | Reset to default |
 | Double-click value readout | Text entry; Enter confirms, Escape cancels; accepts units ("5k", "−3 dB", "120ms") |

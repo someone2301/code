@@ -3,17 +3,16 @@
 ChannelStripEditor::ChannelStripEditor (ChannelStripProcessor& p)
     : AudioProcessorEditor (&p), proc (p),
       lnf (palettes::dark()),
-      inKnob (p.apvts, ids::inGain, "INPUT"),
+      inSlider (*p.apvts.getParameter (ids::inGain), p.hostTempo, "INPUT"),
+      outSlider (*p.apvts.getParameter (ids::outGain), p.hostTempo, "OUTPUT"),
       panKnob (p.apvts, ids::pan, "PAN"),
-      outKnob (p.apvts, ids::outGain, "OUTPUT"),
       inMeter (p.inPeak), outMeter (p.outPeak),
       deess (p), eqPanel (p), comp (p)
 {
-    for (auto* k : { &inKnob, &panKnob, &outKnob })
-    {
-        k->setLNF (&lnf);
-        addAndMakeVisible (*k);
-    }
+    panKnob.setLNF (&lnf);
+    addAndMakeVisible (panKnob);
+    addAndMakeVisible (inSlider);
+    addAndMakeVisible (outSlider);
     for (auto* b : { &phaseBtn, &monoBtn })
     {
         b->setLookAndFeel (&lnf);
@@ -28,7 +27,7 @@ ChannelStripEditor::ChannelStripEditor (ChannelStripProcessor& p)
     addAndMakeVisible (eqPanel);
     addAndMakeVisible (comp);
 
-    setSize (1100, 780);
+    setSize (1100, 850);
 }
 
 ChannelStripEditor::~ChannelStripEditor()
@@ -50,20 +49,20 @@ void ChannelStripEditor::paint (juce::Graphics& g)
     g.drawText ("de-ess  >  EQ  >  compressor  >  pan  >  out", 20, 46, 340, 16, juce::Justification::centredLeft);
 
     g.setColour (juce::Colour (0xff3a4350));
-    g.drawHorizontalLine (84, 10.0f, (float) getWidth() - 10.0f);
+    g.drawHorizontalLine (156, 10.0f, (float) getWidth() - 10.0f);
 }
 
 void ChannelStripEditor::resized()
 {
-    inMeter.setBounds (400, 10, 10, 66);
-    inKnob.setBounds (416, 2, 96, 84);
-    phaseBtn.setBounds (528, 14, 50, 26);
-    monoBtn.setBounds (528, 46, 50, 26);
-    panKnob.setBounds (594, 2, 96, 84);
-    outKnob.setBounds (706, 2, 96, 84);
-    outMeter.setBounds (808, 10, 10, 66);
+    inMeter.setBounds (400, 24, 10, 120);
+    inSlider.setBounds (416, 6, 96, 144);
+    phaseBtn.setBounds (528, 40, 50, 26);
+    monoBtn.setBounds (528, 72, 50, 26);
+    panKnob.setBounds (594, 30, 96, 84);
+    outSlider.setBounds (706, 6, 96, 144);
+    outMeter.setBounds (808, 24, 10, 120);
 
-    deess.setBounds (10, 94, 240, 340);
-    eqPanel.setBounds (258, 94, 832, 340);
-    comp.setBounds (10, 442, 1080, 326);
+    deess.setBounds (10, 166, 240, 340);
+    eqPanel.setBounds (258, 166, 832, 340);
+    comp.setBounds (10, 514, 1080, 326);
 }

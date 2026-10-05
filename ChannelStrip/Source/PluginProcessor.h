@@ -6,6 +6,7 @@
 #include "dsp/DeEsser.h"
 #include "dsp/Equalizer.h"
 #include "dsp/SpectrumAnalyser.h"
+#include "HostTempo.h"
 
 class ChannelStripProcessor : public juce::AudioProcessor
 {
@@ -42,6 +43,10 @@ public:
     std::atomic<float> inPeak { 0.0f }, outPeak { 0.0f }, compGr { 0.0f }, deessGr { 0.0f };
     std::atomic<double> currentSampleRate { 44100.0 };
     SpectrumAnalyser analyser;
+    HostTempo hostTempo;                                   // transport for the GUI's beat-synced glow
+
+    // Analyser display settings (GUI state, saved with the session; not automatable).
+    std::atomic<int> analyserResolution { SpectrumProcessor::High }, analyserSpeed { SpectrumProcessor::Fast };
 
 private:
     using Raw = std::atomic<float>*;
@@ -55,6 +60,7 @@ private:
         pCompOn, pCompMode, pCompMix, pFetIn, pFetOut, pFetAttack, pFetRelease, pFetRatio, pLaPeak, pLaGain, pLaLimit;
 
     EqParams readEq() const;
+    void publishTempo();
 
     DeEsser deesser;
     Equalizer eq;

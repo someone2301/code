@@ -13,6 +13,8 @@ The EQ can be moved after the compressor with the POST COMP button.
 | Compressor, FET mode | 1176-style: input, output, attack 20 us - 800 us, release 50 ms - 1.1 s, ratio 4 / 8 / 12 / 20 / ALL (distortion) |
 | Compressor, Opto mode | LA-2A-style: peak reduction, gain, compress / limit, program-dependent two-stage release |
 | Compressor | Parallel mix, needle gain-reduction meter, GUI changes with the mode |
+| Analyser | Resolution Low / Medium / High / Maximum (1024-8192-point FFT at 48 kHz), speed Very Slow to Very Fast; default High + Fast |
+| Lightning sliders | Input, Output, De-ess threshold, FET input and Opto peak reduction. Drag down to light more of the bolt (raise the value), up to dim it. Lit branches glow in time with the host tempo; steady when the transport is stopped |
 
 The compressors are style models, not component-level emulations of the hardware.
 
@@ -72,5 +74,7 @@ cmake --build build-test --target ChannelStripTests
 ./build-test/ChannelStripTests_artefacts/Release/ChannelStripTests snapshots
 ```
 
-The test executable checks gain, polarity, mono, pan, EQ, both compressors and the de-esser against measured levels.
+The test executable checks gain, polarity, mono, pan, EQ, both compressors and the de-esser against measured levels,
+the host-tempo hand-off and glow timing, the lightning slider (host updates, drag direction, Shift fine drag, reset,
+accessibility) and the analyser (resolution, level, release speed).
 It also writes PNG snapshots of the editor in both compressor modes.

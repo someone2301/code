@@ -2,6 +2,7 @@
 
 #include "Widgets.h"
 #include "EQDisplay.h"
+#include "LightningSlider.h"
 
 namespace palettes
 {
@@ -50,15 +51,16 @@ public:
     explicit DeEsserPanel (ChannelStripProcessor& p)
         : lnf (palettes::dark()),
           freq (p.apvts, ids::deessFreq, "FREQUENCY"),
-          thresh (p.apvts, ids::deessThresh, "THRESHOLD"),
+          thresh (*p.apvts.getParameter (ids::deessThresh), p.hostTempo, "THRESHOLD"),
           range (p.apvts, ids::deessRange, "RANGE"),
           bar (p.deessGr, juce::Colour (0xffe8a33d))
     {
-        for (auto* k : { &freq, &thresh, &range })
+        for (auto* k : { &freq, &range })
         {
             k->setLNF (&lnf);
             addAndMakeVisible (*k);
         }
+        addAndMakeVisible (thresh);
         for (auto* b : { &onBtn, &listenBtn })
         {
             b->setLookAndFeel (&lnf);
@@ -92,16 +94,18 @@ public:
     void resized() override
     {
         onBtn.setBounds (getWidth() - 66, 10, 52, 24);
+        listenBtn.setBounds (getWidth() - 140, 10, 70, 24);
         freq.setBounds (10, 48, 108, 100);
-        thresh.setBounds (122, 48, 108, 100);
         range.setBounds (10, 152, 108, 100);
-        listenBtn.setBounds (134, 186, 84, 28);
+        thresh.setBounds (122, 44, 108, 214);
         bar.setBounds (14, getHeight() - 62, getWidth() - 28, 16);
     }
 
 private:
     ModuleLNF lnf;
-    Knob freq, thresh, range;
+    Knob freq;
+    LightningSlider thresh;
+    Knob range;
     juce::TextButton onBtn { "ON" }, listenBtn { "LISTEN" };
     std::unique_ptr<APVTS::ButtonAttachment> onAtt, listenAtt;
     ReductionBar bar;
@@ -134,6 +138,21 @@ public:
         typeBox.addItemList (juce::StringArray { "Bell", "Low Shelf", "High Shelf", "High Pass", "Low Pass", "Notch" }, 1);
         addAndMakeVisible (typeBox);
 
+        for (auto* box : { &resBox, &speedBox })
+        {
+            box->setLookAndFeel (&lnf);
+            addAndMakeVisible (*box);
+        }
+        resBox.addItemList (SpectrumProcessor::resolutionNames(), 1);
+        speedBox.addItemList (SpectrumProcessor::speedNames(), 1);
+        resBox.setTooltip ("Analyser resolution. Higher settings resolve low frequencies more finely.");
+        speedBox.setTooltip ("Analyser release speed. Faster settings show level changes more quickly.");
+        resBox.setSelectedItemIndex (p.analyserResolution.load(), juce::dontSendNotification);
+        speedBox.setSelectedItemIndex (p.analyserSpeed.load(), juce::dontSendNotification);
+        auto* proc = &p;
+        resBox.onChange = [this, proc] { proc->analyserResolution.store (resBox.getSelectedItemIndex()); };
+        speedBox.onChange = [this, proc] { proc->analyserSpeed.store (speedBox.getSelectedItemIndex()); };
+
         for (int i = 0; i < cs::numBands; ++i)
         {
             auto& b = bandBtn[(size_t) i];
@@ -158,6 +177,8 @@ public:
         for (auto& b : bandBtn)
             b.setLookAndFeel (nullptr);
         typeBox.setLookAndFeel (nullptr);
+        resBox.setLookAndFeel (nullptr);
+        speedBox.setLookAndFeel (nullptr);
     }
 
     void paint (juce::Graphics& g) override
@@ -169,6 +190,7 @@ public:
         g.setColour (juce::Colour (0xff8b95a3));
         g.setFont (uiFont (11.0f));
         g.drawText ("6 bands", 140, 4, 80, 24, juce::Justification::centredLeft);
+        g.drawText ("ANALYSER", 236, 4, 70, 24, juce::Justification::centredLeft);
         for (int i = 0; i < cs::numBands; ++i)
         {
             auto r = bandBtn[(size_t) i].getBounds().toFloat();
@@ -183,6 +205,8 @@ public:
     void resized() override
     {
         postBtn.setBounds (getWidth() - 116, 6, 102, 22);
+        resBox.setBounds (300, 6, 100, 22);
+        speedBox.setBounds (406, 6, 100, 22);
         onBtn.setBounds (getWidth() - 174, 6, 52, 22);
         display.setBounds (8, 32, getWidth() - 16, 212);
 
@@ -222,7 +246,7 @@ private:
     Knob freq, gain, q;
     juce::TextButton onBtn { "EQ ON" }, postBtn { "POST COMP" }, bandOnBtn { "BAND ON" };
     juce::TextButton bandBtn[cs::numBands];
-    juce::ComboBox typeBox;
+    juce::ComboBox typeBox, resBox, speedBox;
     std::unique_ptr<APVTS::ButtonAttachment> onAtt, postAtt, bandOnAtt;
     std::unique_ptr<APVTS::ComboBoxAttachment> typeAtt;
 };
@@ -234,11 +258,11 @@ public:
     explicit CompressorPanel (ChannelStripProcessor& p)
         : fetLNF (palettes::fet()), laLNF (palettes::opto()),
           meter (p.compGr, VUMeter::Fet),
-          fetIn   (p.apvts, ids::fetIn,      "INPUT"),
+          fetIn   (*p.apvts.getParameter (ids::fetIn), p.hostTempo, "INPUT"),
           fetOut  (p.apvts, ids::fetOut,     "OUTPUT"),
           fetAtk  (p.apvts, ids::fetAttack,  "ATTACK"),
           fetRel  (p.apvts, ids::fetRelease, "RELEASE"),
-          laPeak  (p.apvts, ids::laPeak,     "PEAK REDUCTION"),
+          laPeak  (*p.apvts.getParameter (ids::laPeak), p.hostTempo, "PEAK REDUCTION"),
           laGain  (p.apvts, ids::laGain,     "GAIN"),
           mix     (p.apvts, ids::compMix,    "MIX"),
           modeAtt (*p.apvts.getParameter (ids::compMode), [this] (float v) { setMode (juce::roundToInt (v)); }),
@@ -246,8 +270,16 @@ public:
           limitAtt (*p.apvts.getParameter (ids::laLimit), [this] (float v) { setLimit (v > 0.5f); })
     {
         addAndMakeVisible (meter);
-        for (auto* k : { &fetIn, &fetOut, &fetAtk, &fetRel, &laPeak, &laGain, &mix })
+        for (auto* k : { &fetOut, &fetAtk, &fetRel, &laGain, &mix })
             addAndMakeVisible (*k);
+        addAndMakeVisible (fetIn);
+        addAndMakeVisible (laPeak);
+
+        // the opto face is light grey: dark caption and value text keep the contrast
+        LightningSlider::Colours optoText;
+        optoText.text = juce::Colour (0xff1b1c1f);
+        optoText.subText = juce::Colour (0xff2a2c30);
+        laPeak.setColours (optoText);
         for (auto* b : { &onBtn, &modeFetBtn, &modeOptoBtn, &compressBtn, &limitBtn })
             addAndMakeVisible (*b);
 
@@ -286,7 +318,7 @@ public:
             g.setFont (uiFont (12.0f, true));
             g.drawText ("1176-STYLE  PEAK LIMITING AMPLIFIER", 380, 36, 330, 14, juce::Justification::centredLeft);
             g.setColour (juce::Colour (0xffb8bec6));
-            g.drawText ("RATIO", 370, 184, 120, 14, juce::Justification::centredLeft);
+            g.drawText ("RATIO", 496, 184, 120, 14, juce::Justification::centredLeft);
             for (auto c : screws (b)) drawScrew (g, c, juce::Colour (0xff8d939b));
         }
         else
@@ -309,14 +341,14 @@ public:
         onBtn.setBounds (w - 90, 12, 64, 28);
         meter.setBounds (20, 62, 330, 236);
 
-        fetIn.setBounds  (370, 62, 120, 112);
+        fetIn.setBounds  (370, 62, 110, 236);
         fetOut.setBounds (490, 62, 120, 112);
         fetAtk.setBounds (610, 62, 120, 112);
         fetRel.setBounds (730, 62, 120, 112);
         for (int i = 0; i < 5; ++i)
-            ratioBtn[i].setBounds (370 + i * 74, 204, 66, 44);
+            ratioBtn[i].setBounds (496 + i * 74, 204, 66, 44);
 
-        laPeak.setBounds (390, 62, 200, 236);
+        laPeak.setBounds (390, 52, 200, 246);
         laGain.setBounds (610, 62, 200, 236);
 
         mix.setBounds (w - 210, 62, 120, 112);
@@ -333,11 +365,9 @@ private:
 
     void applyLNF (juce::LookAndFeel* current)
     {
-        fetIn.setLNF (current == nullptr ? nullptr : &fetLNF);
         fetOut.setLNF (current == nullptr ? nullptr : &fetLNF);
         fetAtk.setLNF (current == nullptr ? nullptr : &fetLNF);
         fetRel.setLNF (current == nullptr ? nullptr : &fetLNF);
-        laPeak.setLNF (current == nullptr ? nullptr : &laLNF);
         laGain.setLNF (current == nullptr ? nullptr : &laLNF);
         mix.setLNF (current);
         for (auto* b : { &onBtn, &modeFetBtn, &modeOptoBtn, &compressBtn, &limitBtn })
@@ -352,12 +382,13 @@ private:
         const bool fet = m == 0;
         meter.setStyle (fet ? VUMeter::Fet : VUMeter::Opto);
         applyLNF (fet ? static_cast<juce::LookAndFeel*> (&fetLNF) : &laLNF);
-        for (auto* k : { &fetIn, &fetOut, &fetAtk, &fetRel })
+        for (auto* k : { &fetOut, &fetAtk, &fetRel })
             k->setVisible (fet);
+        fetIn.setVisible (fet);
         for (auto& b : ratioBtn)
             b.setVisible (fet);
-        for (auto* k : { &laPeak, &laGain })
-            k->setVisible (! fet);
+        laGain.setVisible (! fet);
+        laPeak.setVisible (! fet);
         compressBtn.setVisible (! fet);
         limitBtn.setVisible (! fet);
         modeFetBtn.setToggleState (fet, juce::dontSendNotification);
@@ -380,7 +411,10 @@ private:
     int mode = 0;
     ModuleLNF fetLNF, laLNF;
     VUMeter meter;
-    Knob fetIn, fetOut, fetAtk, fetRel, laPeak, laGain, mix;
+    LightningSlider fetIn;
+    Knob fetOut, fetAtk, fetRel;
+    LightningSlider laPeak;
+    Knob laGain, mix;
     juce::TextButton onBtn { "ON" }, modeFetBtn { "FET  1176-style" }, modeOptoBtn { "OPTO  LA-2A-style" },
                      compressBtn { "COMPRESS" }, limitBtn { "LIMIT" };
     juce::TextButton ratioBtn[5];

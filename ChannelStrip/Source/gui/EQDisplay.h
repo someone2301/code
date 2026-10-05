@@ -9,16 +9,31 @@ inline const juce::Colour bandColours[cs::numBands] = {
     juce::Colour (0xff5cdc7e), juce::Colour (0xff4cb6ff), juce::Colour (0xffb584ff)
 };
 
-// Pro-Q style analyser + curve + draggable band nodes.
-class EQDisplay : public juce::Component, private juce::Timer
+// Analyser + curve + draggable band nodes.
+class EQDisplay : public juce::Component
 {
 public:
-    explicit EQDisplay (ChannelStripProcessor& p) : proc (p), apvts (p.apvts)
+    explicit EQDisplay (ChannelStripProcessor& p) : proc (p), apvts (p.apvts) {}
+
+    // Pulls the newest audio from the processor and updates the analyser (called once per display frame).
+    void refreshAnalyser (double nowMs)
     {
-        spec.fill (-120.0f);
-        startTimerHz (30);
+        analyser.configure (proc.analyserResolution.load(), proc.analyserSpeed.load(), proc.currentSampleRate.load());
+        const double dt = lastFrameMs > 0.0 ? nowMs - lastFrameMs : 0.0;
+        lastFrameMs = nowMs;
+        if (proc.analyser.samplesWritten() != lastWritten
+            && proc.analyser.copyLatest (analyser.inputBuffer(), analyser.fftSize()))
+        {
+            lastWritten = proc.analyser.samplesWritten();
+            lastAudioMs = nowMs;
+            analyser.process (dt);
+        }
+        else if (nowMs - lastAudioMs > 100.0)
+        {
+            analyser.releaseToFloor (dt);   // host stopped sending audio: let the display fall
+        }
+        repaint();
     }
-    ~EQDisplay() override { stopTimer(); }
 
     std::function<void (int)> onSelect;
     int selected = 0;
@@ -60,27 +75,24 @@ public:
                         juce::Justification::centredRight);
         }
 
-        // spectrum
+        // spectrum: one column per 2 px, loudest bin per column, tilted 4.5 dB/oct around 1 kHz
+        if (analyser.fftSize() > 0)
         {
             juce::Path sp;
-            bool started = false;
+            sp.startNewSubPath (plot.getX(), plot.getBottom());
             for (float x = plot.getX(); x <= plot.getRight(); x += 2.0f)
             {
-                const double f = xToFreq (x);
-                const double bin = f * SpectrumAnalyser::size / sr;
-                const int i0 = juce::jlimit (0, SpectrumAnalyser::size / 2 - 2, (int) bin);
-                const float fr = (float) (bin - i0);
-                float db = spec[(size_t) i0] * (1.0f - fr) + spec[(size_t) i0 + 1] * fr;
-                db += 3.0f * (float) std::log2 (f / 1000.0);
-                const float y = plot.getBottom() - plot.getHeight() * juce::jlimit (0.0f, 1.0f, (db + 100.0f) / 100.0f);
-                if (! started) { sp.startNewSubPath (x, plot.getBottom()); sp.lineTo (x, y); started = true; }
-                else sp.lineTo (x, y);
+                const double f0 = xToFreq (x - 1.0f), f1 = xToFreq (x + 1.0f);
+                float db = analyser.columnDb (f0, f1);
+                db += 4.5f * (float) std::log2 (std::sqrt (f0 * f1) / 1000.0);
+                const float y = plot.getBottom() - plot.getHeight() * juce::jlimit (0.0f, 1.0f, (db + 90.0f) / 90.0f);
+                sp.lineTo (x, y);
             }
             sp.lineTo (plot.getRight(), plot.getBottom());
             sp.closeSubPath();
             g.setColour (juce::Colour (0x40508fc8));
             g.fillPath (sp);
-            g.setColour (juce::Colour (0x80708fb8));
+            g.setColour (juce::Colour (0x90a9b8d6));
             g.strokePath (sp, juce::PathStrokeType (1.0f));
         }
 
@@ -291,30 +303,12 @@ private:
         }
     }
 
-    void timerCallback() override
-    {
-        if (proc.analyser.pull (frame))
-        {
-            std::copy (frame.begin(), frame.end(), fftData.begin());
-            std::fill (fftData.begin() + SpectrumAnalyser::size, fftData.end(), 0.0f);
-            window.multiplyWithWindowingTable (fftData.data(), (size_t) SpectrumAnalyser::size);
-            fft.performFrequencyOnlyForwardTransform (fftData.data());
-            for (size_t i = 0; i < spec.size(); ++i)
-            {
-                const float db = juce::Decibels::gainToDecibels (fftData[i] / (SpectrumAnalyser::size * 0.25f), -120.0f);
-                spec[i] = db > spec[i] ? db : spec[i] * 0.8f + db * 0.2f;
-            }
-        }
-        repaint();
-    }
-
     ChannelStripProcessor& proc;
     APVTS& apvts;
     int dragging = -1;
 
-    juce::dsp::FFT fft { SpectrumAnalyser::order };
-    juce::dsp::WindowingFunction<float> window { (size_t) SpectrumAnalyser::size, juce::dsp::WindowingFunction<float>::hann };
-    std::array<float, SpectrumAnalyser::size> frame {};
-    std::array<float, 2 * SpectrumAnalyser::size> fftData {};
-    std::array<float, SpectrumAnalyser::size / 2> spec {};
+    SpectrumProcessor analyser;
+    double lastFrameMs = 0.0, lastAudioMs = 0.0;
+    unsigned lastWritten = 0;
+    juce::VBlankAttachment vblank { this, std::function<void()> ([this] { refreshAnalyser (juce::Time::getMillisecondCounterHiRes()); }) };
 };
