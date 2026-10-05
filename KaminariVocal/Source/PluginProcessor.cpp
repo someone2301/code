@@ -6,7 +6,7 @@ KaminariVocalProcessor::KaminariVocalProcessor()
     : AudioProcessor (BusesProperties()
                           .withInput  ("Input",  juce::AudioChannelSet::stereo(), true)
                           .withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
-      apvts (*this, nullptr, "KAMINARI_VOCAL", kvp::createLayout()),
+      apvts (*this, &undoManager, "KAMINARI_VOCAL", kvp::createLayout()),
       presets (apvts, juce::String::fromUTF8 (BinaryData::factory_json, BinaryData::factory_jsonSize))
 {
     sendPtrs[Reverb]  = { raw (kvid::rvOn), raw (kvid::rvSend), raw (kvid::rvTap) };
@@ -191,6 +191,7 @@ void KaminariVocalProcessor::readModuleSettings()
 void KaminariVocalProcessor::processModules (float* l, float* r, int n)
 {
     tune.process (l, r, n, tuneSettings);   // always runs: its fixed delay is part of the reported latency
+    analyserPre.push (l, r, n);
 
     // EQ, Multiband and Resonance crossfade 10 ms against their input when switched on or off
     auto crossfaded = [&] (int m, auto&& run)
@@ -215,6 +216,14 @@ void KaminariVocalProcessor::processModules (float* l, float* r, int n)
     };
 
     crossfaded (ModEq, [&] { eq.process (l, r, n, eqSettings, eqOutGain); });
+    const int solo = eqSolo.load();
+    if (solo >= 0 && solo < kv::Equalizer::numBands && moduleOn[ModEq])
+    {
+        // band audition: hear only the region of the selected band
+        for (auto& bp : soloBp) bp.set (kv::Biquad::BandPass, (float) sampleRateHz, eqSettings[solo].freq, std::max (0.3f, eqSettings[solo].q));
+        for (int i = 0; i < n; ++i) { l[i] = soloBp[0].process (l[i]); r[i] = soloBp[1].process (r[i]); }
+    }
+    analyserPost.push (l, r, n);
     crossfaded (ModMultiband, [&] { moduleGr[ModMultiband].store (multiband.process (l, r, n, mbSettings)); });
     // Compression and De-ess always run (their lookahead delay must stay in the path); "off" means neutral settings.
     moduleGr[ModCompression].store (compressor.process (l, r, n, compSettings));
@@ -330,6 +339,8 @@ void KaminariVocalProcessor::processBlock (juce::AudioBuffer<float>& buffer, juc
     }
 
     inPeak.store (buffer.getMagnitude (0, total));
+    for (int c = 0; c < 2; ++c)
+        inPeakCh[(size_t) c].store (buffer.getMagnitude (juce::jmin (c, chs - 1), 0, total));
 
     const auto rvSettings = readReverb();
     const auto dlSettings = readDelay (bpm);
@@ -459,6 +470,8 @@ void KaminariVocalProcessor::processBlock (juce::AudioBuffer<float>& buffer, juc
         returnPeak[(size_t) s].store (peak[(size_t) s]);
     }
     outPeak.store (buffer.getMagnitude (0, total));
+    for (int c = 0; c < 2; ++c)
+        outPeakCh[(size_t) c].store (buffer.getMagnitude (juce::jmin (c, chs - 1), 0, total));
 }
 
 void KaminariVocalProcessor::publishTempo (double& bpmOut)
@@ -485,6 +498,23 @@ void KaminariVocalProcessor::publishTempo (double& bpmOut)
     hostTempo.publish (t);
 }
 
+void KaminariVocalProcessor::selectAB (int slot)
+{
+    slot = juce::jlimit (0, 1, slot);
+    if (slot == abSlot)
+        return;
+    abState[abSlot] = apvts.copyState();                // keep the slot being left
+    if (abState[slot].isValid())
+        apvts.replaceState (abState[slot].createCopy());
+    abSlot = slot;
+}
+
+void KaminariVocalProcessor::copyAToB()
+{
+    // copies the live settings into the other slot
+    abState[1 - abSlot] = apvts.copyState();
+}
+
 juce::AudioProcessorEditor* KaminariVocalProcessor::createEditor()
 {
     return new KaminariVocalEditor (*this);
@@ -496,6 +526,10 @@ void KaminariVocalProcessor::getStateInformation (juce::MemoryBlock& destData)
     state.setProperty ("ui_view", advancedView.load() ? "advanced" : "basic", nullptr);
     state.setProperty ("ui_send", advancedSend.load(), nullptr);
     state.setProperty ("ui_tab", advancedTab.load(), nullptr);
+    state.setProperty ("ui_scale", uiScale.load(), nullptr);
+    state.setProperty ("analyser_mode", analyserMode.load(), nullptr);
+    state.setProperty ("analyser_resolution", analyserResolution.load(), nullptr);
+    state.setProperty ("analyser_speed", analyserSpeed.load(), nullptr);
     state.setProperty ("state_version", stateVersion, nullptr);
     for (auto* m : { "tune", "eq", "multiband", "compression", "deess", "resonance", "reverb", "delay", "widener" })
         state.setProperty (juce::String ("engine_") + m, engineVersion, nullptr);
@@ -515,6 +549,10 @@ void KaminariVocalProcessor::setStateInformation (const void* data, int sizeInBy
             advancedView.store (state.getProperty ("ui_view", "basic").toString() == "advanced");
             advancedSend.store (juce::jlimit (0, (int) numSends - 1, (int) state.getProperty ("ui_send", 0)));
             advancedTab.store (juce::jlimit (0, 8, (int) state.getProperty ("ui_tab", 6 + advancedSend.load())));
+            uiScale.store (juce::jlimit (0.75f, 2.0f, (float) state.getProperty ("ui_scale", 1.0f)));
+            analyserMode.store (juce::jlimit (0, 2, (int) state.getProperty ("analyser_mode", 1)));
+            analyserResolution.store (juce::jlimit (0, 3, (int) state.getProperty ("analyser_resolution", (int) SpectrumProcessor::High)));
+            analyserSpeed.store (juce::jlimit (0, 4, (int) state.getProperty ("analyser_speed", (int) SpectrumProcessor::Fast)));
             apvts.replaceState (state);
             presets.readState (state);
         }

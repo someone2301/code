@@ -48,7 +48,9 @@ namespace kv
             if (s.quality != builtQuality) build (s.quality);
             computeCurve (s);
             const float depthAmt = std::clamp (s.depth, 0.0f, 20.0f) / 20.0f * 1.5f;
-            const float maxCut = s.maxCutDb >= 40.5f ? 40.0f : std::max (0.0f, s.maxCutDb);
+            // Depth also caps the deepest cut (2 dB per Depth step: up to 40 dB at Depth 20); Max Cut can lower it further
+            const float depthCap = 2.0f * std::clamp (s.depth, 0.0f, 20.0f);
+            const float maxCut = std::min (depthCap, s.maxCutDb >= 40.5f ? 40.0f : std::max (0.0f, s.maxCutDb));
             const float wetTrim = dbToGain (s.wetTrimDb), outGain = dbToGain (s.outGainDb);
             const float focus = std::clamp (s.focus, -1.0f, 1.0f);
             const float chDepth[2] = { depthAmt * (1.0f - std::max (0.0f, focus)), depthAmt * (1.0f + std::min (0.0f, focus)) };

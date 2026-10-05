@@ -837,7 +837,7 @@ int main (int argc, char** argv)
         check (ed != nullptr, "editor opens");
         check (ed->strip (0).isVisible() && ! ed->reverbPanel().isVisible(), "Basic view shows the compact send strips");
 
-        ed->strip (1).advanced.triggerClick();
+        ed->strip (1).open.triggerClick();
         juce::MessageManager::getInstance()->runDispatchLoopUntil (50);
         check (ed->isAdvancedShown() && ed->delayPanel().isVisible() && ! ed->strip (1).isVisible(),
                "a strip's Advanced button opens that send's Advanced panel");
@@ -893,7 +893,17 @@ int main (int argc, char** argv)
                 out.truncate();
                 juce::PNGImageFormat().writeImageToStream (img, out);
             };
+            p.presets.loadChainPreset ("Pop Lead");
+            ed->chainPresets().onLoaded();
+            setParam (p, "rs_on", 1.0f);
+            render (p, 1.5, vocal);   // feed audio so meters, analyzer and read-outs show something
+            juce::MessageManager::getInstance()->runDispatchLoopUntil (400);
             ed->showTab (false, 0);
+            for (int k = 0; k < 6; ++k)
+            {
+                render (p, 0.1, vocal);
+                juce::MessageManager::getInstance()->runDispatchLoopUntil (40);
+            }
             save ("basic.png");
             const char* names[] = { "tune", "eq", "multiband", "compression", "deess", "resonance", "reverb", "delay", "widener" };
             for (int t = 0; t < KaminariVocalEditor::numTabs; ++t)

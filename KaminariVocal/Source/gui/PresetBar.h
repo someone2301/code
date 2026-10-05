@@ -11,9 +11,10 @@ public:
     PresetBar (PresetManager& manager, const juce::String& module, const juce::String& what)
         : presets (manager), moduleKey (module), noun (what)
     {
-        prev.setButtonText ("<");
-        next.setButtonText (">");
-        save.setButtonText ("Save");
+        prev.setButtonText (juce::String (juce::CharPointer_UTF8 ("\xe2\x80\xb9")));
+        next.setButtonText (juce::String (juce::CharPointer_UTF8 ("\xe2\x80\xba")));
+        save.setButtonText ("SAVE");
+        name.getProperties().set ("kvStyle", "combo");
         prev.setTooltip ("Previous " + noun + " preset");
         next.setTooltip ("Next " + noun + " preset");
         save.setTooltip ("Save the current settings as a user " + noun + " preset");
@@ -37,11 +38,11 @@ public:
     {
         auto b = getLocalBounds();
         prev.setBounds (b.removeFromLeft (26));
-        b.removeFromLeft (2);
-        save.setBounds (b.removeFromRight (52));
-        b.removeFromRight (4);
+        b.removeFromLeft (6);
+        save.setBounds (b.removeFromRight (58));
+        b.removeFromRight (6);
         next.setBounds (b.removeFromRight (26));
-        b.removeFromRight (2);
+        b.removeFromRight (6);
         name.setBounds (b);
     }
 

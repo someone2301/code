@@ -8,6 +8,7 @@
 #include "dsp/Dynamics.h"
 #include "dsp/Resonance.h"
 #include "dsp/Tune.h"
+#include "dsp/SpectrumAnalyser.h"
 
 // Kaminari Vocal processor.
 //
@@ -64,6 +65,20 @@ public:
 
     // Meters for the GUI (peak, linear).
     std::atomic<float> inPeak { 0.0f }, outPeak { 0.0f };
+    std::array<std::atomic<float>, 2> inPeakCh {}, outPeakCh {};
+
+    // EQ analyzer: audio before and after the EQ; display settings are saved with the session.
+    SpectrumAnalyser analyserPre, analyserPost;
+    std::atomic<int> analyserMode { 1 };   // 0 Pre, 1 Post, 2 Off
+    std::atomic<int> analyserResolution { SpectrumProcessor::High }, analyserSpeed { SpectrumProcessor::Fast };
+    std::atomic<int> eqSolo { -1 };         // band being auditioned (-1 = none); not saved
+
+    // A/B comparison: two parameter snapshots; the active one is live.
+    void selectAB (int slot);
+    void copyAToB();
+    int activeAB() const { return abSlot; }
+    juce::UndoManager undoManager;
+    std::atomic<float> uiScale { 1.0f };
     std::array<std::atomic<float>, numSends> returnPeak {};
 
     // Tests read the RMS of each return over the last processed block.
@@ -114,6 +129,9 @@ private:
     kv::DeEsser deesser;
     std::array<juce::SmoothedValue<float>, numModules> moduleFade;   // 10 ms bypass crossfades (EQ, Multiband, Resonance)
     juce::AudioBuffer<float> work, dryCopy;
+    kv::Biquad soloBp[2];
+    juce::ValueTree abState[2];
+    int abSlot = 0;
     std::atomic<int> pendingLatency { 0 };
     Raw raw (const char* id) const { return apvts.getRawParameterValue (id); }
     Raw raw (const juce::String& id) const { return apvts.getRawParameterValue (id); }

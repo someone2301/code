@@ -134,9 +134,12 @@ public:
     void paint (juce::Graphics& g) override
     {
         auto b = getLocalBounds().toFloat();
-        g.setColour (colours.subText);
-        g.setFont (uiFont (11.0f, true));
-        g.drawText (caption, b.removeFromTop (captionHeight), juce::Justification::centred);
+        if (captionHeight > 0.0f)
+        {
+            g.setColour (colours.subText);
+            g.setFont (uiFont (11.0f, true));
+            g.drawText (caption, b.removeFromTop (captionHeight), juce::Justification::centred);
+        }
 
         const bool enabled = isEnabled();
         const float pulse = 0.45f + 0.55f * glow;   // kept subtle
@@ -329,14 +332,26 @@ private:
         LightningSlider& owner;
     };
 
-    static constexpr float captionHeight = 16.0f;
-    static constexpr int valueHeight = 18;
+    float captionHeight = 16.0f;
+    int valueHeight = 18;
+
+public:
+    // Compact: no caption above and no value below (the Basic-view card draws its own).
+    void setCompact (bool c)
+    {
+        captionHeight = c ? 0.0f : 16.0f;
+        valueHeight = c ? 0 : 18;
+        valueLabel.setVisible (! c);
+        resized();
+    }
+
+private:
 
     juce::Rectangle<float> artArea() const
     {
         auto b = getLocalBounds().toFloat();
         b.removeFromTop (captionHeight);
-        b.removeFromBottom ((float) valueHeight + 2.0f);
+        b.removeFromBottom ((float) valueHeight + (valueHeight > 0 ? 2.0f : 0.0f));
         return b.reduced (0.0f, 2.0f);
     }
 

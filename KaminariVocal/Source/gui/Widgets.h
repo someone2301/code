@@ -105,7 +105,7 @@ public:
         if (code == juce::KeyPress::homeKey) { setPositionAsGesture (0.0f); return true; }
         if (code == juce::KeyPress::endKey)  { setPositionAsGesture (1.0f); return true; }
         if (code == juce::KeyPress::deleteKey || code == juce::KeyPress::backspaceKey) { resetToDefault(); return true; }
-        if (code == juce::KeyPress::returnKey) { showTextBox(); return true; }
+        if (code == juce::KeyPress::returnKey) { enterValue(); return true; }
         return juce::Slider::keyPressed (key);
     }
 
@@ -130,7 +130,7 @@ private:
     void showMenu()
     {
         juce::PopupMenu m;
-        m.addItem ("Enter Value...", [this] { showTextBox(); });
+        m.addItem ("Enter Value...", [this] { enterValue(); });
         m.addItem ("Reset to Default", [this] { resetToDefault(); });
         m.addSeparator();
         m.addItem ("Copy Value", [this] { juce::SystemClipboard::copyTextToClipboard (getTextFromValue (getValue())); });
@@ -142,8 +142,15 @@ private:
         m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (this));
     }
 
+    void enterValue() { if (onEnterValue) onEnterValue(); else showTextBox(); }
+
     juce::RangedAudioParameter* param = nullptr;
     juce::String displayName, hint;
+
+public:
+    std::function<void()> onEnterValue;   // set by Knob: opens its value label for typing
+
+private:
     float lastY = 0.0f, dragPos = 0.0f;
 };
 
@@ -151,47 +158,80 @@ private:
 class Knob : public juce::Component
 {
 public:
+    // Ring knob with the name and the value underneath (as in the GUI preview). Double-click the value to type one.
     Knob (APVTS& state, const juce::String& paramId, const juce::String& name, const juce::String& hint = {})
         : apvts (state), caption (name)
     {
         addAndMakeVisible (slider);
         addAndMakeVisible (label);
-        slider.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 74, 16);
+        addAndMakeVisible (value);
+        slider.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
         slider.setRotaryParameters (juce::degreesToRadians (225.0f), juce::degreesToRadians (495.0f), true);
         label.setText (name, juce::dontSendNotification);
         label.setJustificationType (juce::Justification::centred);
-        label.setFont (uiFont (12.0f, true));
+        label.setFont (kvtheme::font (11.5f, 0));
+        label.setColour (juce::Label::textColourId, kvtheme::mist);
         label.setInterceptsMouseClicks (false, false);
+        value.setJustificationType (juce::Justification::centred);
+        value.setFont (kvtheme::font (13.0f, 1));
+        value.setEditable (false, true, false);
+        value.setTooltip ("Double-click to type a value.");
+        value.onTextChange = [this]
+        {
+            if (auto* p = apvts.getParameter (paramIdStr))
+            {
+                p->beginChangeGesture();
+                p->setValueNotifyingHost (p->getValueForText (value.getText().trim()));
+                p->endChangeGesture();
+            }
+            refreshValue();
+        };
         attach (paramId);
         slider.setHint (hint);
+        slider.onEnterValue = [this] { value.showEditor(); };
     }
 
     void attach (const juce::String& paramId)
     {
+        paramIdStr = paramId;
         att.reset();
         att = std::make_unique<APVTS::SliderAttachment> (apvts, paramId, slider);
         slider.bind (apvts.getParameter (paramId), caption);   // after the attachment has set the range
+        if (auto* p = apvts.getParameter (paramId))
+        {
+            const auto& r = p->getNormalisableRange();
+            slider.getProperties().set ("kvBipolar", r.start < 0.0f && r.end > 0.0f && std::abs (p->convertFrom0to1 (p->getDefaultValue())) < 1e-6f);
+        }
+        slider.onValueChange = [this] { refreshValue(); };
+        refreshValue();
+    }
+
+    void refreshValue()
+    {
+        value.setText (slider.getTextFromValue (slider.getValue()), juce::dontSendNotification);
     }
 
     void setLNF (juce::LookAndFeel* l)
     {
         slider.setLookAndFeel (l);
         label.setLookAndFeel (l);
+        value.setLookAndFeel (l);
     }
 
     void resized() override
     {
         auto b = getLocalBounds();
-        label.setBounds (b.removeFromTop (16));
+        if (value.isVisible()) value.setBounds (b.removeFromBottom (17));
+        if (label.isVisible()) label.setBounds (b.removeFromBottom (15));
         slider.setBounds (b);
     }
 
     ParamSlider slider;
-    juce::Label label;
+    juce::Label label, value;
 
 private:
     APVTS& apvts;
-    juce::String caption;
+    juce::String caption, paramIdStr;
     std::unique_ptr<APVTS::SliderAttachment> att;
 };
 

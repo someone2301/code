@@ -1,30 +1,32 @@
 #pragma once
 
 #include "PluginProcessor.h"
-#include "gui/ModuleTile.h"
+#include "gui/BasicView.h"
 
-// Root editor (1100 x 760).
-//   Basic view:    EQ graph, five module tiles with hammer sliders, three compact send strips.
-//   Advanced view: one tab per module and per send, each with its own preset bar.
-// The header holds Basic/Advanced, the chain preset bar and the latency read-out.
+// Root editor, 1100 x 760 at 100 % (zoom 75-200 %), laid out after the GUI preview.
+//   Header: wordmark, Basic/Advanced, chain presets, A/B, latency, undo/redo, zoom.
+//   Basic view: IN/OUT rails, EQ section with analyzer, five module cards with hammer sliders, send row.
+//   Advanced view: one tab per module and per send.
 class KaminariVocalEditor : public juce::AudioProcessorEditor, private juce::Timer
 {
 public:
     enum Tab { TabTune, TabEq, TabMultiband, TabCompression, TabDeEss, TabResonance, TabReverb, TabDelay, TabWidener, numTabs };
+    static constexpr int baseWidth = 1100, baseHeight = 760;
 
     explicit KaminariVocalEditor (KaminariVocalProcessor&);
     ~KaminariVocalEditor() override;
 
-    void paint (juce::Graphics&) override;
     void resized() override;
 
     void showAdvanced (bool advanced, int send) { showTab (advanced, TabReverb + juce::jlimit (0, 2, send)); }
     void showTab (bool advanced, int tab);
     bool isAdvancedShown() const { return proc.advancedView.load(); }
     int  currentTab() const { return proc.advancedTab.load(); }
+    void setZoom (float scale);
 
-    kvui::SendStrip& strip (int s) { return *strips[(size_t) s]; }
-    kvui::ModuleTile& tile (int m) { return *tiles[(size_t) m]; }
+    kvui::SendCard& strip (int s) { return *sendCards[(size_t) s]; }
+    kvui::ModuleCard& tile (int m) { return *cards[(size_t) m]; }
+    kvui::EqSection& eqSection() { return eq; }
     kvui::ReverbPanel& reverbPanel() { return reverb; }
     kvui::DelayPanel& delayPanel() { return delay; }
     kvui::WidenerPanel& widenerPanel() { return widener; }
@@ -34,26 +36,43 @@ public:
     juce::TextButton& viewButton (bool advanced) { return advanced ? advancedButton : basicButton; }
     juce::TextButton& tabButton (int t) { return tabs[(size_t) t]; }
     PresetBar& chainPresets() { return chain; }
+    juce::Component& rootComponent() { return root; }
 
 private:
+    struct Root : juce::Component
+    {
+        KaminariVocalEditor& owner;
+        explicit Root (KaminariVocalEditor& o) : owner (o) {}
+        void paint (juce::Graphics&) override;
+        void resized() override { owner.layoutRoot(); }
+        void mouseDown (const juce::MouseEvent&) override {}
+    };
+
+    void layoutRoot();
+    void paintRoot (juce::Graphics&);
     void updateView();
     void timerCallback() override;
 
     KaminariVocalProcessor& proc;
-    ModuleLNF lnf { kvui::palette() };
+    ModuleLNF lnf;
+    Root root { *this };
     juce::TooltipWindow tooltips { this, 350 };
 
-    juce::TextButton basicButton { "Basic" }, advancedButton { "Advanced" };
+    // header
+    juce::TextButton basicButton { "BASIC" }, advancedButton { "ADVANCED" };
     PresetBar chain;
-    juce::Label latencyLabel;
-    Knob inGain, outGain;
-    LevelMeter inMeter, outMeter;
+    juce::TextButton abA { "A" }, abB { "B" }, abCopy;
+    juce::TextButton undo, redo;
+    juce::ComboBox zoom;
+    juce::String latencyText;
+
+    // rails
+    kvui::Rail inRail, outRail;
 
     // Basic view
-    EqCurve basicEq;
-    kvui::ToggleBox eqPower;
-    std::array<std::unique_ptr<kvui::ModuleTile>, 5> tiles;
-    std::array<std::unique_ptr<kvui::SendStrip>, KaminariVocalProcessor::numSends> strips;
+    kvui::EqSection eq;
+    std::array<std::unique_ptr<kvui::ModuleCard>, 5> cards;
+    std::array<std::unique_ptr<kvui::SendCard>, KaminariVocalProcessor::numSends> sendCards;
 
     // Advanced view
     std::array<juce::TextButton, numTabs> tabs;

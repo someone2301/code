@@ -55,8 +55,13 @@ set(KV_SOURCES
     Source/PluginEditor.cpp
     Source/state/PresetManager.cpp)
 
-# factory presets, embedded as BinaryData::factory_json
-juce_add_binary_data(KaminariVocalData SOURCES Presets/factory.json)
+# factory presets (BinaryData::factory_json) and the Barlow fonts (SIL Open Font License, Resources/fonts/OFL.txt)
+juce_add_binary_data(KaminariVocalData SOURCES
+    Presets/factory.json
+    Resources/fonts/Barlow-Regular.ttf
+    Resources/fonts/Barlow-SemiBold.ttf
+    Resources/fonts/Barlow-Bold.ttf
+    Resources/fonts/BarlowCondensed-Bold.ttf)
 
 target_sources(KaminariVocal PRIVATE ${KV_SOURCES})
 
