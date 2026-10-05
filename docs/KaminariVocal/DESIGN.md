@@ -1,6 +1,6 @@
 # Kaminari Vocal — Design Document (pre-implementation)
 
-Status: design only. No Kaminari Vocal code exists yet. Phase 1 starts after this document is approved.
+Status: the effect sends (section 2.9) are implemented in `KaminariVocal/`. The channel modules (Tune, EQ, Multiband, Compression, De-ess, Resonance) are design only; Phase 1 for them has not started.
 
 ## 0. Current project state and recorded decisions
 
@@ -335,6 +335,210 @@ EQ: frequency scale Hz / Piano (shows note names and lets band frequencies snap 
 
 `ui_view` (Basic/Advanced), `ui_module` (selected module), `ui_scale` (75–200 %), analyzer settings, EQ zoom/scroll, A/B slot contents and active slot, preset name and "modified" flag.
 
+### 2.9 Effect sends (implemented)
+
+Three sends: Reverb, Delay, Widener. They are sends, not inserts. Each one taps the vocal, scales the tap by its send level, runs a 100 % wet effect, and adds the return to the dry vocal on the main output. The dry vocal is never processed by a send. No send has a dry/wet Mix control, because a send level already sets the blend.
+
+Routing (decided with the user: returns are summed into the plug-in's own output; a single plug-in has no host aux buses):
+
+```
+ vocal ──► In Gain ──► [channel modules] ──●── Out Gain ──●──────────────────────────► (+) ──► Output
+                                    pre-fader tap      post-fader tap                    ▲
+                                           └──── Tap (per send) ──► × send level ──► effect (100 % wet) ──► return guard ──┘
+```
+
+- **Tap**: Post-fader (default) follows Output Gain. Pre-fader taps before Output Gain. Until the channel modules exist, the pre-fader point sits directly after In Gain.
+- **Send level**: Off (−60 dB is the bottom of the range and means gain 0), up to +6 dB, 20 ms smoothing. At Off the output is bit-identical to the dry signal.
+- **On/Off**: Off fades the return out over 10 ms, then resets the effect and stops processing it. On fades the return in. A send that is on but receives nothing goes idle after its tail falls below −140 dBFS.
+- **Return guard**: each return passes a soft limiter that is transparent below −2 dBFS and never exceeds 0 dBFS. The dry signal is not limited.
+- **Latency**: 0 samples. The sends never delay the dry path. Tail length reported to the host: 30 s.
+- **Mono output**: the two return channels are summed at half level.
+
+Common IDs (`<s>` = `rv`, `dl`, `wd`):
+
+| ID | Name | Type | Range | Default |
+| --- | --- | --- | --- | --- |
+| `<s>_on` | Send On | bool | | off |
+| `<s>_send` | Send level | float | Off, −60 … +6 dB | rv −12, dl −15, wd −12 dB |
+| `<s>_tap` | Tap point | choice | Post-fader, Pre-fader | Post-fader |
+| `gl_in_gain`, `gl_out_gain` | Input / Output Gain | float | −24 … +24 dB | 0 |
+
+#### 2.9.1 Reverb send
+
+Twenty original algorithms on four engines. Each mode picks its engine and also sets the delay scale range, modulation type, diffusion, damping, early reflections and nonlinearity. No third-party code is used. The mode names come from the user's list, and each mode is built to its description. None of them copies another product's algorithm.
+
+| Engine | Structure | Modes |
+| --- | --- | --- |
+| FDN | 8-line feedback delay network, Householder mixing, input allpass diffusion, per-line damping, optional early reflections, optional in-loop saturation and resolution reduction | Concert Hall, Bright Hall, Room, Chamber, Random Space, Chorus Space, Sanctuary, Dirty Hall, Smooth Room, Smooth Random, Chaotic Hall, Chaotic Chamber, Chaotic Neutral, Cathedral, Palace |
+| Plate | figure-eight tank: two cross-coupled halves of modulated allpass, delay, damping, allpass, delay | Plate, Dirty Plate, Smooth Plate |
+| Nonlin | 40 irregular taps over a length set by Size, envelope set by Attack (gated, truncated, reverse); no feedback | Nonlin |
+| Ambience | early-reflection tap set plus a short FDN tail; Attack balances early (0) against late (100) | Ambience |
+
+Modulation types: Chorus (sine per line), Random (smoothed random per line), Detune (triangle: steady pitch offsets that alternate direction between lines), Ensemble (three summed sines), Wow/Flutter (one shared tape-like drift plus a little per-line jitter). "Vintage digital" means sample-and-hold at a reduced rate and reduced bit depth inside the loop. "Saturation" means a soft clipper inside the loop.
+
+| Mode | Family | Engine | Modulation | Character |
+| --- | --- | --- | --- | --- |
+| Concert Hall | Halls | FDN, large | Chorus | Density = echo density |
+| Bright Hall | Halls | FDN, large | Chorus, 2.2× deeper | brighter damping |
+| Plate | Plates | Plate | Chorus | bright, dense |
+| Room | Rooms | FDN, small | Chorus, light | medium diffusion, early echoes, darker |
+| Chamber | Rooms | FDN, medium | Random, light | dense, flat damping |
+| Random Space | Spaces | FDN, very large | Random, deep | long diffusers, slow build, wide |
+| Chorus Space | Spaces | FDN, very large | Chorus, deep | as Random Space |
+| Ambience | Ambience | Ambience | Random, light | early/late balance via Attack |
+| Sanctuary | Vintage | FDN | Detune | distinct spaced early reflections, fast build, 20 kHz / 13-bit |
+| Dirty Hall | Dirty | FDN, large | Random | saturation, 14 kHz / 11-bit, darker |
+| Dirty Plate | Dirty | Plate | Random | saturation, 14 kHz / 11-bit, extra-wide |
+| Smooth Plate | Smooth | Plate | Random, very light | high diffusion |
+| Smooth Room | Smooth | FDN, small | Random, very light | high diffusion |
+| Smooth Random | Smooth | FDN, 0.2–2.0× scale | Random | Size spans small to large spaces |
+| Nonlin | Effects | Nonlin | none | Size = length, Attack = envelope |
+| Chaotic Hall | Chaotic | FDN, large | Wow/Flutter | soft saturation |
+| Chaotic Chamber | Chaotic | FDN, medium | Wow/Flutter | soft saturation |
+| Chaotic Neutral | Chaotic | FDN, large | Wow/Flutter | no saturation, flat damping |
+| Cathedral | Large | FDN, 1.6–2.4× scale | Ensemble | long diffusers, strong high-frequency roll-off |
+| Palace | Palace | FDN, 0.3–1.8× scale | Chorus | early reflections, 24 kHz / 14-bit |
+
+The UI family guide reads:
+- Dirty: vintage grit and character.
+- Smooth: polished vocals and natural spaces.
+- Chaotic: long, animated reverbs that still sit in a mix.
+- Palace: room sounds from small spaces to large halls.
+- Ambience: space that is felt more than heard.
+
+| ID | Name | Range | Default | Shown for |
+| --- | --- | --- | --- | --- |
+| `rv_mode` | Mode | 20 modes above | Concert Hall | all |
+| `rv_decay` | Decay (RT60) | 0.2 … 20 s, log | 2.2 s | all except Nonlin |
+| `rv_size` | Size | 0 … 100 % | 50 % | all |
+| `rv_predelay` | Pre-delay | 0 … 250 ms | 20 ms | all |
+| `rv_hicut` | High Cut (input filter and in-loop damping) | 1 … 20 kHz | 8 kHz | all |
+| `rv_locut` | Low Cut | 20 … 1000 Hz | 150 Hz | all |
+| `rv_mod_rate` | Mod Rate | 0.05 … 5 Hz | 0.6 Hz | all except Nonlin |
+| `rv_mod_depth` | Mod Depth | 0 … 100 % | 40 % | all except Nonlin |
+| `rv_density` | Density (input diffusion) | 0 … 100 % | 70 % | all |
+| `rv_attack` | Attack | 0 … 100 % | 50 % | Ambience, Nonlin |
+
+Changing the mode fades the old algorithm out over 10 ms, resets it, and starts the new one. When the send starts from silence it switches at once.
+
+Limitations:
+- **Echo density**: Concert Hall's echo density is the Density control (input diffusion strength), not a separate control.
+- **Palace scale**: Palace's adjustable scale is the Size control.
+- **Detune**: Sanctuary's "detuned" modulation is triangle delay modulation, so the pitch offsets are steady but flip direction each half cycle. It is not a separate pitch shifter.
+- **Algorithm basis**: no mode copies a commercial algorithm. Each is built from the sonic description in the brief.
+
+#### 2.9.2 Delay send
+
+Original implementation. The control set follows the user-supplied echo manual.
+
+Each side runs two delay stages in series, A then B, with feedback from the end of B into A:
+- Odd repeats leave stage A and even repeats leave stage B. Making A longer and B shorter (or the other way round) gives shuffle or swing (Groove). Different output gains for A and B give alternating accents (Accent).
+- Style tone and saturation sit inside each stage, so every repeat is coloured once more than the one before.
+- Ping-Pong sums the input to mono. Ping comes from A on the left and Pong from B on the right, so Pong follows Ping by the Pong time.
+- Feel shifts every output read by a fixed time, so all echoes drag or rush without changing the repeat spacing.
+- Feedback is capped at a loop gain of 0.97. The styles' saturation and the return guard bound the level.
+
+| ID | Name | Range | Default | Shown in |
+| --- | --- | --- | --- | --- |
+| `dl_mode` | Mode | Single, Dual, Ping-Pong | Single | all |
+| `dl_style` | Style | Clean Digital, Studio Tape, Worn Tape, Analog Bucket, Lo-Fi Radio, Diffused | Studio Tape | all |
+| `dl_t1_unit` / `dl_t2_unit` | Echo 1 / 2 unit | Time, Note, Dot, Trip | Note | Echo 2: Dual, Ping-Pong |
+| `dl_t1_ms` / `dl_t2_ms` | Echo 1 / 2 time | 1 … 2500 ms | 375 / 500 ms | when unit = Time |
+| `dl_t1_note` / `dl_t2_note` | Echo 1 / 2 note | 1/2 … 1/64 | 1/8 / 1/4 | when unit = Note/Dot/Trip; host tempo (120 BPM without one) |
+| `dl_feedback` | Feedback | 0 … 100 % | 30 % | all |
+| `dl_locut`, `dl_hicut` | Low / High Cut (every repeat) | 20 … 2000 Hz / 1 … 20 kHz | 150 Hz / 6 kHz | all |
+| `dl_saturation` | Saturation (style-dependent) | 0 … 100 % | 25 % | all |
+| `dl_width` | Width (above 75 % adds out-of-phase spread) | 0 … 100 % | 50 % | all |
+| `dl_offset` | L/R Offset | 0 … 25 ms | 8 ms | Single, Dual |
+| `dl_accent` | Accent (Echo 1) | −100 … +100 | 0 | Single, Dual |
+| `dl_accent2` | Accent 2 | −100 … +100 | 0 | Dual |
+| `dl_balance` | Balance | −100 … +100 | 0 | Dual, Ping-Pong |
+| `dl_fb_mix` | Feedback Mix (0 independent, 50 equal, 100 crossed) | 0 … 100 % | 0 | Dual |
+| `dl_fb_bal` | Feedback Balance | −100 … +100 | 0 | Dual |
+| `dl_groove` | Groove (− shuffle, + swing; full = triplet) | −100 … +100 | 0 | all |
+| `dl_feel` | Feel (+ drag, − rush) | −50 … +50 ms | 0 | all |
+| `dl_prime` | Prime Numbers (echo times rounded to prime sample counts) | off/on | off | all |
+| `dl_wobble`, `dl_wobble_rate`, `dl_wobble_shape`, `dl_wobble_sync` | Wobble depth, rate, shape (Sine, Triangle, Square, Random Walk, Random S/H), sync (− drift apart, + opposed phase) | 0 … 100 %, 0.05 … 10 Hz | 0 %, 1 Hz, Sine, 0 | all |
+| `dl_diffusion`, `dl_diff_size`, `dl_diff_loop` | Diffusion amount, size, position (Post / Loop) | 0 … 100 %, 0 … 100 %, Post/Loop | 0, 50 %, Post | all |
+
+Style names are descriptive, own names, not hardware names.
+
+Not implemented, and not shown in the UI:
+- Rhythm mode (16-tap pattern editor, Shape, Repeats, Pan Shape, Warp, Grid, Length).
+- The Style Editor (3-band EQ with per-repeat Gain/Decay).
+- Tap Tempo and the MIDI clock switch. Note sync uses the host tempo instead.
+- Separate Input/Output level and the echo-manual Mix knob. The send level and the 100 % wet return replace them.
+- The Out/FB wobble switches. Wobble always acts on the delay reads inside the loop.
+- Decay Sat / Out Sat saturation types.
+
+#### 2.9.3 Widener send
+
+`wd_type` selects MicroShift or SideWidener. They are separate algorithms: only the selected one runs, and a switch fades the old one out over 10 ms, resets it, then starts the new one. They are never layered.
+
+MicroShift follows the user-supplied MicroShift manual:
+- The left side is shifted up and the right side down by a few cents that vary continuously. Each side also gets a short delay that varies continuously.
+- Pitch shifting uses two crossfaded delay taps.
+- Style I: moderate variation and soft saturation.
+- Style II: more delay variation and a darker, thinner response (150 Hz–10 kHz).
+- Style III: much wider, randomly wandering delay variation, harder asymmetric saturation, and a short trapezoid crossfade (hard de-glitch).
+- Focus is a 24 dB/oct crossover. Only content above it is widened and returned.
+- The manual's Mix control is left out on purpose: the return is 100 % wet and the send level sets the blend.
+- The band below Focus is not returned, because the dry vocal already carries it.
+
+| ID | Name | Range | Default |
+| --- | --- | --- | --- |
+| `wd_ms_style` | Style | I, II, III | I |
+| `wd_ms_detune` | Detune (100 % = style amount) | 0 … 200 % | 100 % |
+| `wd_ms_delay` | Delay (100 % = style amount) | 0 … 200 % | 100 % |
+| `wd_ms_focus` | Focus | 20 Hz … 10 kHz | 20 Hz |
+
+SideWidener follows the user-supplied SideWidener manual:
+- A decorrelated copy of the mid signal is returned as pure side (left +, right −), so the return's mono sum is exactly zero and the mono mix is unchanged.
+- Mode 1: one short tap, no time smear.
+- Mode 2: four alternating-sign taps.
+- Mode 3: a six-allpass diffusion network (room-like smear).
+- Tone moves the widened band from 350 Hz–4.5 kHz (0) to full range (100).
+- The manual's Bypass is the send's On switch.
+- The manual's double-click and right-click typing, Ctrl/Cmd-click reset and Shift fine control are covered by the shared control rules in section 7.1. Double-click resets and right-click opens Enter Value.
+
+| ID | Name | Range | Default |
+| --- | --- | --- | --- |
+| `wd_sw_width` | Width | 0 … 100 | 50 |
+| `wd_sw_mode` | Mode | Mode 1, Mode 2, Mode 3 | Mode 1 (the manual gives no default) |
+| `wd_sw_tone` | Tone | 0 … 100 | 50 (the manual gives no default) |
+| `wd_sw_output` | Output | −inf … 0 dB | 0 dB |
+
+#### 2.9.4 UI
+
+- **Basic view**: one compact strip per send with ON, a send-level knob, the current mode/style/type, a return meter and an Advanced button that opens that send's panel.
+- **Advanced view**: tabs Reverb / Delay / Widener. Each panel starts with ON, Send, Tap point and the return meter, followed by the effect controls.
+- **Controls with no effect are hidden**: per reverb mode, per delay mode and time unit, and per widener type.
+- Every control has an accessible name, a tooltip with a one-sentence description, and the shared editing rules from section 7.1.
+- View and open panel are saved with the session (`ui_view`, `ui_send`).
+
+#### 2.9.5 Tests (`KaminariVocal/Tests/Tests.cpp`)
+
+- **Silent cases**: default state, and each send on at Off, give output bit-identical to the input.
+- **Level and isolation**: raising each send raises only its return; the other two returns stay exactly zero.
+- **Dry path**: the dry path is unchanged.
+- **Pre/post fader**: pre-fader ignores Output Gain; post-fader follows it.
+- **Bypass**: switching a send off gives dry-only output after the fade.
+- **Clipping**: full-scale input with all sends at +6 dB, 100 % feedback and 20 s decay keeps every return ≤ 0 dBFS.
+- **Reverb**: all 20 modes give finite, distinct impulse responses. Decay, Nonlin Attack and Ambience Attack each change the sound.
+- **Delay**:
+  - A 1/4 note at 120 BPM gives a 500 ms echo.
+  - 0 % feedback gives a single echo.
+  - Ping-Pong alternates left and right.
+  - 100 % feedback stays bounded.
+  - Groove moves the echoes.
+- **Widener**:
+  - The SideWidener mono sum is zero.
+  - MicroShift and SideWidener differ.
+  - Focus, Detune and Delay each change the return.
+  - Switching type replaces the algorithm rather than layering.
+- **Persistence**: parameter and UI-state round trip.
+- **Editor**: views, Advanced buttons, hidden controls per mode, accessible names and tooltips.
+
 ---
 
 ## 3. Signal flow
@@ -360,6 +564,10 @@ The UI's module order (Tune, Multiband, Compression, De-ess, Resonance) follows 
 
 The order is fixed in version 1. Routing is postponed.
 
+### 3.1 Effect sends
+
+After the channel modules: pre-fader tap → Out Gain → post-fader tap → dry output. Each of the three sends (Reverb, Delay, Widener) taps pre- or post-fader, runs its effect 100 % wet, and its return is added to the dry output (section 2.9).
+
 ---
 
 ## 4. Latency budget
@@ -382,6 +590,7 @@ Reported latency is constant in time (2.0 ms) for the Tune module and zero for a
 | Optional: De-ess / Multiband lookahead | | + lookahead time | | | | off by default; e.g. 1 ms = +48 samples |
 | Optional: oversampling 2x / 4x | | measured | | | | off by default; labeled as adding latency |
 | Optional: Resonance without Low Latency, or Linear phase | | measured | | | | off by default |
+| Effect sends (Reverb, Delay, Widener) | 0 | **0** | 0 | 0 | 0 | returns are added to the undelayed dry path |
 | EQ Match | 0 | **0** | 0 | 0 | 0 | generates normal minimum-phase bands |
 
 Tune variable delay: a period-based shifter repeats or drops whole pitch periods. Around the fixed 2.0 ms base, the instantaneous delay varies by up to about one pitch period (about 0–4 ms for typical vocals, similar to Waves Tune Real-Time). Phase 6 measures the average and range of this delay per vocal range and documents it. If 2.0 ms causes audible artifacts, the base may rise to at most 2.67 ms (128 samples at 48 kHz).
