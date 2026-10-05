@@ -20,9 +20,11 @@ KaminariVocalProcessor::KaminariVocalProcessor()
 bool KaminariVocalProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
 {
     const auto& out = layouts.getMainOutputChannelSet();
+    const auto& in = layouts.getMainInputChannelSet();
     if (out != juce::AudioChannelSet::mono() && out != juce::AudioChannelSet::stereo())
         return false;
-    return layouts.getMainInputChannelSet() == out;
+    // mono -> mono, mono -> stereo, stereo -> stereo
+    return in == out || (in == juce::AudioChannelSet::mono() && out == juce::AudioChannelSet::stereo());
 }
 
 void KaminariVocalProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
@@ -33,6 +35,22 @@ void KaminariVocalProcessor::prepareToPlay (double sampleRate, int samplesPerBlo
     sendIn.setSize (2, block, false, false, true);
     sendOut.setSize (2, block, false, false, true);
     returns.setSize (2, block, false, false, true);
+    work.setSize (2, block, false, false, true);
+    dryCopy.setSize (2, block, false, false, true);
+
+    tune.prepare (sampleRate);
+    eq.prepare (sampleRate);
+    multiband.prepare (sampleRate);
+    compressor.prepare (sampleRate);
+    deesser.prepare (sampleRate);
+    resonance.prepare (sampleRate);
+    readModuleSettings();
+    for (int m = 0; m < numModules; ++m)
+    {
+        moduleFade[(size_t) m].reset (sampleRate, 0.01);
+        moduleFade[(size_t) m].setCurrentAndTargetValue (moduleOn[m] ? 1.0f : 0.0f);
+        moduleGr[(size_t) m].store (0.0f);
+    }
 
     reverb.prepare (sampleRate, block);
     delay.prepare (sampleRate, block);
@@ -53,7 +71,156 @@ void KaminariVocalProcessor::prepareToPlay (double sampleRate, int samplesPerBlo
         returnPeak[(size_t) s].store (0.0f);
         returnRms[(size_t) s].store (0.0f);
     }
-    setLatencySamples (0);   // sends add no latency: the dry path is never delayed
+    // Tune's fixed delay is always reported (also with Tune off); the sends add none.
+    pendingLatency.store (computeLatency());
+    setLatencySamples (pendingLatency.load());
+}
+
+int KaminariVocalProcessor::computeLatency() const
+{
+    const double fs = sampleRateHz;
+    const int la = (int) std::lround (raw ("lv_lookahead")->load() * 0.001 * fs)
+                 + (int) std::lround (raw ("ds_lookahead")->load() * 0.001 * fs);
+    return kv::Tune::latencyFor (fs) + la;
+}
+
+void KaminariVocalProcessor::readEqSettings (kv::EqBandSettings (&out)[kv::Equalizer::numBands]) const
+{
+    for (int b = 0; b < kv::Equalizer::numBands; ++b)
+    {
+        const juce::String p = "eq" + juce::String (b + 1) + "_";
+        auto& e = out[b];
+        e.used = raw (p + "used")->load() > 0.5f;
+        e.on = raw (p + "on")->load() > 0.5f;
+        e.type = juce::roundToInt (raw (p + "type")->load());
+        e.freq = raw (p + "freq")->load();
+        e.gainDb = raw (p + "gain")->load();
+        e.q = raw (p + "q")->load();
+        e.slopeIndex = juce::roundToInt (raw (p + "slope")->load());
+    }
+}
+
+void KaminariVocalProcessor::readModuleSettings()
+{
+    auto f = [this] (const juce::String& id) { return raw (id)->load(); };
+    auto b = [this] (const juce::String& id) { return raw (id)->load() > 0.5f; };
+    auto i = [this] (const juce::String& id) { return juce::roundToInt (raw (id)->load()); };
+
+    moduleOn[ModTune] = b ("tn_on");
+    moduleOn[ModEq] = b ("eq_on");
+    moduleOn[ModMultiband] = b ("mb_on");
+    moduleOn[ModCompression] = b ("lv_on");
+    moduleOn[ModDeEss] = b ("ds_on");
+    moduleOn[ModResonance] = b ("rs_on");
+
+    // Tune: a named scale decides the notes; Custom uses the 12 note switches
+    auto& t = tuneSettings;
+    t.on = moduleOn[ModTune];
+    const int scale = i ("tn_scale");
+    if (scale >= 10)
+        for (int n = 0; n < 12; ++n) t.notes[n] = b ("tn_note_" + juce::String (n));
+    else
+        kv::scaleNotes (i ("tn_key"), scale, t.notes);
+    t.range = i ("tn_range");
+    t.speedMs = f ("tn_speed");
+    t.humanize = f ("tn_humanize") / 100.0f;
+
+    readEqSettings (eqSettings);
+    eqOutGain = f ("eq_out_gain");
+
+    auto& m = mbSettings;
+    m.count = i ("mb_count");
+    m.slopeIndex = i ("mb_slope");
+    m.smoothDetector = i ("mb_detector") == 1;
+    for (int k = 0; k < 6; ++k)
+    {
+        const juce::String p = "mb" + juce::String (k + 1) + "_";
+        auto& bs = m.band[k];
+        bs.lo = f (p + "lo"); bs.hi = f (p + "hi"); bs.threshDb = f (p + "thresh"); bs.ratio = f (p + "ratio");
+        bs.attackMs = f (p + "attack"); bs.releaseMs = f (p + "release"); bs.kneeDb = f (p + "knee");
+        bs.rangeDb = f (p + "range"); bs.gainDb = f (p + "gain"); bs.expand = i (p + "mode") == 1; bs.solo = b (p + "solo");
+    }
+
+    auto& c = compSettings;
+    c = {};
+    c.lookaheadSamples = (int) std::lround (f ("lv_lookahead") * 0.001 * sampleRateHz);
+    if (moduleOn[ModCompression])
+    {
+        c.style = i ("lv_style"); c.threshDb = f ("lv_thresh"); c.ratio = f ("lv_ratio"); c.attackMs = f ("lv_attack");
+        c.releaseMs = f ("lv_release"); c.autoRelease = b ("lv_auto_release"); c.kneeDb = f ("lv_knee"); c.rangeDb = f ("lv_range");
+        c.holdMs = f ("lv_hold"); c.smoothDetector = i ("lv_detector") == 1; c.mix = f ("lv_mix") / 100.0f;
+        c.wetGainDb = f ("lv_wet_gain"); c.dryDb = f ("lv_dry"); c.scLevelDb = f ("lv_sc_level");
+        c.stereoLink = f ("lv_stereo_link") / 100.0f; c.outGainDb = f ("lv_out_gain"); c.autoGain = b ("lv_auto_gain");
+    }
+    else
+    {
+        // off: no reduction or gain change, but the lookahead delay stays so the latency does not change
+        c.threshDb = 0; c.rangeDb = 0; c.autoGain = false;
+    }
+
+    auto& d = dsSettings;
+    d = {};
+    d.lookaheadSamples = (int) std::lround (f ("ds_lookahead") * 0.001 * sampleRateHz);
+    d.rangeDb = 0;
+    if (moduleOn[ModDeEss])
+    {
+        d.threshDb = f ("ds_thresh"); d.rangeDb = f ("ds_range"); d.detLo = f ("ds_det_lo"); d.detHi = f ("ds_det_hi");
+        d.fullBand = i ("ds_detect") == 1; d.wideband = i ("ds_process") == 1; d.allround = i ("ds_mode") == 1;
+        d.stereoLink = f ("ds_stereo_link") / 100.0f; d.linkMode = i ("ds_link_mode");
+        d.listen = b ("ds_listen"); d.audition = b ("ds_audition_trigger");
+    }
+
+    auto& r = rsSettings;
+    r.mode = i ("rs_mode"); r.depth = f ("rs_depth"); r.detail = f ("rs_detail") / 100.0f;
+    r.attack = f ("rs_attack") / 100.0f; r.release = f ("rs_release") / 100.0f; r.mix = f ("rs_mix") / 100.0f;
+    r.outGainDb = f ("rs_out_gain"); r.wetTrimDb = f ("rs_wet_trim"); r.maxCutDb = f ("rs_max_cut");
+    r.delta = b ("rs_delta"); r.bypass = b ("rs_bypass"); r.quality = i ("rs_quality"); r.stereoMode = i ("rs_stereo_mode");
+    r.link = f ("rs_link") / 100.0f; r.focus = f ("rs_focus") / 100.0f;
+    r.detailTiltLo = f ("rs_detail_tilt_lo"); r.detailTiltHi = f ("rs_detail_tilt_hi");
+    r.attackTiltLo = f ("rs_attack_tilt_lo"); r.attackTiltHi = f ("rs_attack_tilt_hi");
+    r.releaseTiltLo = f ("rs_release_tilt_lo"); r.releaseTiltHi = f ("rs_release_tilt_hi");
+    for (int k = 0; k < 8; ++k)
+    {
+        const juce::String p = "rs_b" + juce::String (k + 1) + "_";
+        auto& cb = r.curve[k];
+        cb.used = b (p + "used"); cb.on = b (p + "on"); cb.shape = i (p + "shape");
+        cb.freq = f (p + "freq"); cb.depthDb = f (p + "depth"); cb.q = f (p + "q");
+    }
+}
+
+void KaminariVocalProcessor::processModules (float* l, float* r, int n)
+{
+    tune.process (l, r, n, tuneSettings);   // always runs: its fixed delay is part of the reported latency
+
+    // EQ, Multiband and Resonance crossfade 10 ms against their input when switched on or off
+    auto crossfaded = [&] (int m, auto&& run)
+    {
+        auto& fade = moduleFade[(size_t) m];
+        fade.setTargetValue (moduleOn[m] ? 1.0f : 0.0f);
+        if (! fade.isSmoothing() && fade.getTargetValue() <= 0.0f)
+        {
+            moduleGr[(size_t) m].store (0.0f);
+            return;
+        }
+        dryCopy.copyFrom (0, 0, l, n);
+        dryCopy.copyFrom (1, 0, r, n);
+        run();
+        if (fade.isSmoothing() || fade.getCurrentValue() < 1.0f)
+            for (int i = 0; i < n; ++i)
+            {
+                const float g = fade.getNextValue();
+                l[i] = dryCopy.getSample (0, i) + (l[i] - dryCopy.getSample (0, i)) * g;
+                r[i] = dryCopy.getSample (1, i) + (r[i] - dryCopy.getSample (1, i)) * g;
+            }
+    };
+
+    crossfaded (ModEq, [&] { eq.process (l, r, n, eqSettings, eqOutGain); });
+    crossfaded (ModMultiband, [&] { moduleGr[ModMultiband].store (multiband.process (l, r, n, mbSettings)); });
+    // Compression and De-ess always run (their lookahead delay must stay in the path); "off" means neutral settings.
+    moduleGr[ModCompression].store (compressor.process (l, r, n, compSettings));
+    compMakeup.store (compressor.currentMakeup());
+    moduleGr[ModDeEss].store (deesser.process (l, r, n, dsSettings));
+    crossfaded (ModResonance, [&] { moduleGr[ModResonance].store (resonance.process (l, r, n, rsSettings)); });
 }
 
 void KaminariVocalProcessor::resetSend (int s)
@@ -143,11 +310,24 @@ void KaminariVocalProcessor::processBlock (juce::AudioBuffer<float>& buffer, juc
     publishTempo (bpm);
 
     const int total = buffer.getNumSamples();
-    for (int c = getTotalNumInputChannels(); c < getTotalNumOutputChannels(); ++c)
-        buffer.clear (c, 0, total);
-    const int chs = juce::jmin (buffer.getNumChannels(), 2);
+    const int numIn = getTotalNumInputChannels(), numOut = getTotalNumOutputChannels();
+    // a mono input feeding a stereo output is copied to both channels (dual mono)
+    if (numIn == 1 && numOut >= 2 && buffer.getNumChannels() >= 2)
+        buffer.copyFrom (1, 0, buffer, 0, 0, total);
+    else
+        for (int c = numIn; c < numOut; ++c)
+            buffer.clear (c, 0, total);
+    const int chs = juce::jmin (numOut, buffer.getNumChannels(), 2);
     if (chs == 0 || total == 0)
         return;
+
+    readModuleSettings();
+    const int latencyNow = computeLatency();
+    if (latencyNow != pendingLatency.load())
+    {
+        pendingLatency.store (latencyNow);
+        triggerAsyncUpdate();   // hosts expect setLatencySamples from the message thread
+    }
 
     inPeak.store (buffer.getMagnitude (0, total));
 
@@ -174,19 +354,24 @@ void KaminariVocalProcessor::processBlock (juce::AudioBuffer<float>& buffer, juc
     for (int start = 0; start < total; start += capacity)
     {
         const int n = juce::jmin (capacity, total - start);
-        float* io[2] = { buffer.getWritePointer (0, start), buffer.getWritePointer (chs > 1 ? 1 : 0, start) };
+        float* out2[2] = { buffer.getWritePointer (0, start), buffer.getWritePointer (chs > 1 ? 1 : 0, start) };
+        float* io[2] = { work.getWritePointer (0), work.getWritePointer (1) };
 
-        // dry path: input gain -> (channel modules) -> pre-fader tap -> output gain
+        // dry path: input gain -> channel modules -> pre-fader tap -> output gain
         for (int i = 0; i < n; ++i)
         {
             const float gi = inGainSmooth.getNextValue();
+            io[0][i] = out2[0][i] * gi;
+            io[1][i] = out2[chs > 1 ? 1 : 0][i] * gi;
+        }
+        processModules (io[0], io[1], n);
+        for (int i = 0; i < n; ++i)
+        {
             const float go = outGainSmooth.getNextValue();
             for (int c = 0; c < 2; ++c)
             {
-                const float x = io[c][i] * gi;
-                preTap.setSample (c, i, x);
-                if (c < chs)
-                    io[c][i] = x * go;
+                preTap.setSample (c, i, io[c][i]);
+                io[c][i] *= go;
             }
         }
 
@@ -223,7 +408,7 @@ void KaminariVocalProcessor::processBlock (juce::AudioBuffer<float>& buffer, juc
                 const float g = level.getNextValue();
                 for (int c = 0; c < 2; ++c)
                 {
-                    const float tap = preFader[(size_t) s] ? preTap.getSample (c, i) : io[c < chs ? c : 0][i];
+                    const float tap = preFader[(size_t) s] ? preTap.getSample (c, i) : io[c][i];
                     sendIn.setSample (c, i, tap * g);
                 }
             }
@@ -259,18 +444,12 @@ void KaminariVocalProcessor::processBlock (juce::AudioBuffer<float>& buffer, juc
             }
         }
 
-        // dry + returns. A mono output receives the sum of both return channels at half level.
+        // dry + returns. A mono output receives the average of both channels.
         for (int i = 0; i < n; ++i)
         {
-            if (chs == 2)
-            {
-                io[0][i] += returns.getSample (0, i);
-                io[1][i] += returns.getSample (1, i);
-            }
-            else
-            {
-                io[0][i] += 0.5f * (returns.getSample (0, i) + returns.getSample (1, i));
-            }
+            const float yl = io[0][i] + returns.getSample (0, i), yr = io[1][i] + returns.getSample (1, i);
+            if (chs == 2) { out2[0][i] = yl; out2[1][i] = yr; }
+            else          out2[0][i] = 0.5f * (yl + yr);
         }
     }
 
@@ -316,6 +495,10 @@ void KaminariVocalProcessor::getStateInformation (juce::MemoryBlock& destData)
     auto state = apvts.copyState();
     state.setProperty ("ui_view", advancedView.load() ? "advanced" : "basic", nullptr);
     state.setProperty ("ui_send", advancedSend.load(), nullptr);
+    state.setProperty ("ui_tab", advancedTab.load(), nullptr);
+    state.setProperty ("state_version", stateVersion, nullptr);
+    for (auto* m : { "tune", "eq", "multiband", "compression", "deess", "resonance", "reverb", "delay", "widener" })
+        state.setProperty (juce::String ("engine_") + m, engineVersion, nullptr);
     presets.writeState (state);
     if (auto xml = state.createXml())
         copyXmlToBinary (*xml, destData);
@@ -327,8 +510,11 @@ void KaminariVocalProcessor::setStateInformation (const void* data, int sizeInBy
         if (xml->hasTagName (apvts.state.getType()))
         {
             auto state = juce::ValueTree::fromXml (*xml);
+            // Sessions saved before versioning have no state_version (= 1). Future conversions go here.
+            loadedStateVersion = (int) state.getProperty ("state_version", 1);
             advancedView.store (state.getProperty ("ui_view", "basic").toString() == "advanced");
             advancedSend.store (juce::jlimit (0, (int) numSends - 1, (int) state.getProperty ("ui_send", 0)));
+            advancedTab.store (juce::jlimit (0, 8, (int) state.getProperty ("ui_tab", 6 + advancedSend.load())));
             apvts.replaceState (state);
             presets.readState (state);
         }

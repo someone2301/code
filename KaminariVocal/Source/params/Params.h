@@ -4,6 +4,7 @@
 #include "../sends/Reverb.h"
 #include "../sends/Delay.h"
 #include "../sends/Widener.h"
+#include "../dsp/Eq.h"
 
 // Permanent parameter IDs (see docs/KaminariVocal/DESIGN.md, section 2.9). Never rename or reuse an ID.
 namespace kvid
@@ -109,6 +110,153 @@ namespace kvp
         return a;
     }
 
+
+    // Channel modules (DESIGN.md 2.2 - 2.7). IDs are permanent.
+    inline void addModuleParameters (juce::AudioProcessorValueTreeState::ParameterLayout& layout)
+    {
+        using namespace juce;
+        auto pid = [] (const String& s) { return ParameterID { s, 1 }; };
+        auto addFloat = [&] (const String& id, const String& name, NormalisableRange<float> range, float def,
+                             std::function<String (float, int)> toText, std::function<float (const String&)> fromText = nullptr)
+        {
+            auto attr = AudioParameterFloatAttributes().withStringFromValueFunction (std::move (toText));
+            if (fromText != nullptr) attr = attr.withValueFromStringFunction (std::move (fromText));
+            layout.add (std::make_unique<AudioParameterFloat> (pid (id), name, range, def, attr));
+        };
+        auto addBool = [&] (const String& id, const String& name, bool def) { layout.add (std::make_unique<AudioParameterBool> (pid (id), name, def)); };
+        auto addChoice = [&] (const String& id, const String& name, const StringArray& items, int def)
+        { layout.add (std::make_unique<AudioParameterChoice> (pid (id), name, items, def)); };
+
+        auto dbText  = [] (float v, int) { return String (v > 0.05f ? "+" : "") + String (v, 1) + " dB"; };
+        auto pctText = [] (float v, int) { return String (roundToInt (v)) + " %"; };
+        auto bip     = [] (float v, int) { return std::abs (v) < 0.05f ? String ("0") : (v > 0 ? "+" : "") + String (roundToInt (v)); };
+        auto hzText  = [] (float v, int) { return freqText (v); };
+        auto msText  = [] (float v, int) { return v < 1.0f ? String (v, 2) + " ms" : String (v, v < 10.0f ? 1 : 0) + " ms"; };
+        auto num     = [] (float v, int) { return String (v, 2); };
+        auto ratioTx = [] (float v, int) { return String (v, v < 10.0f ? 1 : 0) + ":1"; };
+
+        // Tune
+        addBool   ("tn_on", "Tune On", true);
+        addChoice ("tn_key", "Key", { "C", "C#/Db", "D", "D#/Eb", "E", "F", "F#/Gb", "G", "G#/Ab", "A", "A#/Bb", "B" }, 0);
+        addChoice ("tn_scale", "Scale", { "Chromatic", "Major", "Natural Minor", "Harmonic Minor", "Melodic Minor", "Major Pentatonic",
+                                          "Minor Pentatonic", "Blues", "Dorian", "Mixolydian", "Custom" }, 0);
+        addChoice ("tn_range", "Vocal Range", { "High", "Middle", "Low", "Deep" }, 1);
+        addFloat  ("tn_speed", "Retune Speed", { 0.0f, 400.0f, 0.1f, 0.4f }, 40.0f, [] (float v, int) { return String (roundToInt (v)) + " ms"; });
+        addFloat  ("tn_humanize", "Humanize", { 0.0f, 100.0f, 0.1f }, 20.0f, pctText);
+        static const char* noteNames[] = { "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B" };
+        for (int n = 0; n < 12; ++n)
+            addBool ("tn_note_" + String (n), String ("Note ") + noteNames[n], true);
+
+        // EQ
+        addBool  ("eq_on", "EQ On", true);
+        addFloat ("eq_out_gain", "EQ Output", { -24.0f, 24.0f, 0.01f }, 0.0f, dbText);
+        const float eqFreqs[8] = { 80, 200, 500, 1000, 2500, 5000, 10000, 15000 };
+        StringArray types, slopes;
+        for (auto* t : kv::eqTypeNames) types.add (t);
+        for (int sl : kv::eqSlopes) slopes.add (String (sl));
+        for (int b = 1; b <= 8; ++b)
+        {
+            const String p = "eq" + String (b) + "_", n = "EQ " + String (b) + " ";
+            addBool   (p + "used", n + "Used", false);
+            addBool   (p + "on", n + "Active", true);
+            addChoice (p + "type", n + "Type", types, 0);
+            addFloat  (p + "freq", n + "Freq", logRange (10.0f, 30000.0f), eqFreqs[b - 1], hzText, freqFromText);
+            addFloat  (p + "gain", n + "Gain", { -30.0f, 30.0f, 0.01f }, 0.0f, dbText);
+            addFloat  (p + "q", n + "Q", logRange (0.025f, 40.0f), 1.0f, num);
+            addChoice (p + "slope", n + "Slope", slopes, 1);
+        }
+
+        // Multiband
+        addBool   ("mb_on", "Multiband On", false);
+        layout.add (std::make_unique<AudioParameterInt> (pid ("mb_count"), "Multiband Bands", 1, 6, 1));
+        addChoice ("mb_slope", "Multiband Crossover Slope", { "6", "12", "24" }, 1);
+        addChoice ("mb_detector", "Multiband Detector", { "Peak", "Smooth" }, 1);
+        const float mbLo[6] = { 100, 500, 2000, 5000, 9000, 14000 }, mbHi[6] = { 500, 2000, 5000, 9000, 14000, 20000 };
+        for (int b = 1; b <= 6; ++b)
+        {
+            const String p = "mb" + String (b) + "_", n = "Band " + String (b) + " ";
+            addFloat  (p + "lo", n + "Low Edge", logRange (20.0f, 16000.0f), mbLo[b - 1], hzText, freqFromText);
+            addFloat  (p + "hi", n + "High Edge", logRange (40.0f, 20000.0f), mbHi[b - 1], hzText, freqFromText);
+            addFloat  (p + "thresh", n + "Threshold", { -60.0f, 0.0f, 0.1f }, -24.0f, dbText);
+            addFloat  (p + "ratio", n + "Ratio", { 1.0f, 10.0f, 0.01f, 0.5f }, 2.0f, ratioTx);
+            addFloat  (p + "attack", n + "Attack", logRange (1.0f, 100.0f), 10.0f, msText);
+            addFloat  (p + "release", n + "Release", logRange (20.0f, 1000.0f), 150.0f, msText);
+            addFloat  (p + "knee", n + "Knee", { 0.0f, 24.0f, 0.1f }, 6.0f, dbText);
+            addFloat  (p + "range", n + "Range", { -24.0f, 24.0f, 0.1f }, -6.0f, dbText);
+            addFloat  (p + "gain", n + "Gain", { -24.0f, 24.0f, 0.01f }, 0.0f, dbText);
+            addChoice (p + "mode", n + "Mode", { "Compress", "Expand" }, 0);
+            addBool   (p + "solo", n + "Solo", false);
+        }
+
+        // Compression
+        addBool   ("lv_on", "Compression On", true);
+        addChoice ("lv_style", "Compression Style", { "Clean", "Vocal", "Opto", "Classic", "Punch" }, 0);
+        addFloat  ("lv_thresh", "Compression Threshold", { -50.0f, 0.0f, 0.1f }, -14.0f, dbText);
+        addFloat  ("lv_ratio", "Compression Ratio", { 1.0f, 20.0f, 0.01f, 0.4f }, 3.0f, ratioTx);
+        addFloat  ("lv_attack", "Compression Attack", logRange (0.005f, 250.0f), 8.0f, msText);
+        addFloat  ("lv_release", "Compression Release", logRange (10.0f, 2000.0f), 150.0f, msText);
+        addBool   ("lv_auto_release", "Compression Auto Release", true);
+        addFloat  ("lv_knee", "Compression Knee", { 0.0f, 24.0f, 0.1f }, 8.0f, dbText);
+        addFloat  ("lv_range", "Compression Range", { 0.0f, 40.0f, 0.1f }, 15.0f, dbText);
+        addFloat  ("lv_hold", "Compression Hold", { 0.0f, 500.0f, 0.1f, 0.5f }, 0.0f, msText);
+        addFloat  ("lv_lookahead", "Compression Lookahead", { 0.0f, 20.0f, 0.01f }, 0.0f, [] (float v, int) { return v < 0.005f ? String ("Off") : String (v, 1) + " ms"; });
+        addChoice ("lv_detector", "Compression Detector", { "Peak", "Smooth" }, 1);
+        addFloat  ("lv_mix", "Compression Mix", { 0.0f, 200.0f, 0.1f }, 100.0f, pctText);
+        addFloat  ("lv_wet_gain", "Compression Wet Gain", { -12.0f, 12.0f, 0.01f }, 0.0f, dbText);
+        addFloat  ("lv_dry", "Compression Dry", { -60.0f, 36.0f, 0.1f }, -60.0f, [] (float v, int) { return v <= -60.0f ? String ("Off") : String (v, 1) + " dB"; });
+        addFloat  ("lv_sc_level", "Compression Side Chain Level", { -36.0f, 36.0f, 0.1f }, 0.0f, dbText);
+        addFloat  ("lv_stereo_link", "Compression Stereo Link", { 0.0f, 100.0f, 0.1f }, 100.0f, pctText);
+        addFloat  ("lv_out_gain", "Compression Output", { -24.0f, 24.0f, 0.01f }, 0.0f, dbText);
+        addBool   ("lv_auto_gain", "Compression Auto Gain", true);
+
+        // De-ess
+        addBool   ("ds_on", "De-Ess On", true);
+        addFloat  ("ds_thresh", "De-Ess Threshold", { -60.0f, 0.0f, 0.1f }, -28.0f, dbText);
+        addFloat  ("ds_range", "De-Ess Range", { 0.0f, 24.0f, 0.1f }, 8.0f, dbText);
+        addFloat  ("ds_det_lo", "De-Ess Low Edge", logRange (1000.0f, 16000.0f), 3500.0f, hzText, freqFromText);
+        addFloat  ("ds_det_hi", "De-Ess High Edge", logRange (2000.0f, 20000.0f), 8600.0f, hzText, freqFromText);
+        addChoice ("ds_detect", "De-Ess Detection", { "Voice Focus", "Full Band" }, 0);
+        addChoice ("ds_process", "De-Ess Processing", { "Split Band", "Wideband" }, 0);
+        addChoice ("ds_mode", "De-Ess Mode", { "Single Vocal", "Allround" }, 0);
+        addFloat  ("ds_lookahead", "De-Ess Lookahead", { 0.0f, 15.0f, 0.01f }, 0.0f, [] (float v, int) { return v < 0.005f ? String ("Off") : String (v, 1) + " ms"; });
+        addFloat  ("ds_stereo_link", "De-Ess Stereo Link", { 0.0f, 100.0f, 0.1f }, 100.0f, pctText);
+        addChoice ("ds_link_mode", "De-Ess Link Mode", { "Stereo", "Mid", "Side" }, 0);
+        addBool   ("ds_listen", "De-Ess Detector Listen", false);
+        addBool   ("ds_audition_trigger", "De-Ess Audition Triggering", false);
+
+        // Resonance
+        addBool   ("rs_on", "Resonance On", false);
+        addChoice ("rs_mode", "Resonance Mode", { "Soft", "Hard" }, 0);
+        addFloat  ("rs_depth", "Resonance Depth", { 0.0f, 20.0f, 0.01f }, 4.0f, [] (float v, int) { return String (v, 1); });
+        addFloat  ("rs_detail", "Resonance Detail", { 0.0f, 100.0f, 0.1f }, 50.0f, pctText);
+        addFloat  ("rs_attack", "Resonance Attack", { 0.0f, 100.0f, 0.1f }, 50.0f, pctText);
+        addFloat  ("rs_release", "Resonance Release", { 0.0f, 100.0f, 0.1f }, 50.0f, pctText);
+        addFloat  ("rs_mix", "Resonance Mix", { 0.0f, 100.0f, 0.1f }, 100.0f, pctText);
+        addFloat  ("rs_out_gain", "Resonance Out Gain", { -12.0f, 12.0f, 0.01f }, 0.0f, dbText);
+        addBool   ("rs_delta", "Resonance Delta", false);
+        addBool   ("rs_bypass", "Resonance Bypass", false);
+        addChoice ("rs_quality", "Resonance Quality", { "Normal", "High", "Ultra" }, 0);
+        addChoice ("rs_stereo_mode", "Resonance Stereo Mode", { "Left/Right", "Mid/Side" }, 1);
+        addFloat  ("rs_link", "Resonance Link", { 0.0f, 100.0f, 0.1f }, 100.0f, pctText);
+        addFloat  ("rs_focus", "Resonance Stereo Focus", { -100.0f, 100.0f, 0.1f }, 0.0f, bip);
+        for (auto* t : { "detail", "attack", "release" })
+            for (auto* side : { "lo", "hi" })
+                addFloat (String ("rs_") + t + "_tilt_" + side, String ("Resonance ") + String (t).substring (0, 1).toUpperCase() + String (t).substring (1)
+                          + " Tilt " + (String (side) == "lo" ? "Low" : "High"), { -100.0f, 100.0f, 0.1f }, 0.0f, bip);
+        addFloat  ("rs_max_cut", "Resonance Max Cut", { 1.0f, 41.0f, 0.1f }, 41.0f, [] (float v, int) { return v >= 40.5f ? String ("Off") : String (v, 1) + " dB"; });
+        addFloat  ("rs_wet_trim", "Resonance Wet Trim", { -12.0f, 12.0f, 0.01f }, 0.0f, dbText);
+        for (int b = 1; b <= 8; ++b)
+        {
+            const String p = "rs_b" + String (b) + "_", n = "Resonance Band " + String (b) + " ";
+            addBool   (p + "used", n + "Used", false);
+            addBool   (p + "on", n + "On", true);
+            addChoice (p + "shape", n + "Shape", { "Low cut", "Low shelf", "High shelf", "High cut", "Bell", "Bandpass", "Band reject", "Tilt" }, 4);
+            addFloat  (p + "freq", n + "Freq", logRange (20.0f, 20000.0f), 1000.0f, hzText, freqFromText);
+            addFloat  (p + "depth", n + "Depth", { -24.0f, 24.0f, 0.01f }, 0.0f, dbText);
+            addFloat  (p + "q", n + "Q", logRange (0.1f, 10.0f), 1.0f, num);
+        }
+    }
+
     inline juce::AudioProcessorValueTreeState::ParameterLayout createLayout()
     {
         using namespace juce;
@@ -142,6 +290,8 @@ namespace kvp
         auto rateText = [] (float v, int) { return String (v, 2) + " Hz"; };
         const StringArray taps { "Post-fader", "Pre-fader" };
         const StringArray units { "Time", "Note", "Dot", "Trip" };
+
+        addModuleParameters (layout);
 
         addFloat (kvid::inGain,  "Input Gain",  { -24.0f, 24.0f, 0.01f }, 0.0f, dbText);
         addFloat (kvid::outGain, "Output Gain", { -24.0f, 24.0f, 0.01f }, 0.0f, dbText);

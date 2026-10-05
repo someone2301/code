@@ -1,0 +1,4 @@
+#!/bin/sh
+# Make macOS re-register Audio Units so Logic and GarageBand see the new or updated plug-in.
+killall -9 AudioComponentRegistrar 2>/dev/null || true
+exit 0

@@ -27,11 +27,13 @@ if(KV_BUILD_AAX AND (APPLE OR WIN32))
     list(APPEND KV_FORMATS AAX)
 endif()
 
+# Copy the built plug-ins into ~/Library/Audio/Plug-Ins after each build (macOS). The installer turns this off.
 if(APPLE)
-    set(_copy_default TRUE)
+    option(KV_COPY_AFTER_BUILD "Copy plug-ins to the user plug-in folders after building" ON)
 else()
-    set(_copy_default FALSE)
+    option(KV_COPY_AFTER_BUILD "Copy plug-ins to the user plug-in folders after building" OFF)
 endif()
+set(_copy_default ${KV_COPY_AFTER_BUILD})
 
 juce_add_plugin(KaminariVocal
     COMPANY_NAME                "Kaminari Audio"

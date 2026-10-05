@@ -567,6 +567,15 @@ namespace kvui
             b.removeFromBottom (6);
             meter.setBounds (b.removeFromBottom (10));
             b.removeFromBottom (4);
+            if (getHeight() < 220)
+            {
+                // compact: knob on the left, mode name on the right
+                level.setBounds (b.removeFromLeft (110));
+                mode.setBounds (b.reduced (6, 0));
+                mode.setJustificationType (juce::Justification::centredLeft);
+                return;
+            }
+            mode.setJustificationType (juce::Justification::centred);
             mode.setBounds (b.removeFromBottom (18));
             level.setBounds (b.withSizeKeepingCentre (juce::jmin (b.getWidth(), 120), b.getHeight()));
         }

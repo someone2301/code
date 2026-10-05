@@ -1,6 +1,6 @@
 # Kaminari Vocal — Design Document (pre-implementation)
 
-Status: the effect sends (section 2.9) are implemented in `KaminariVocal/`. The channel modules (Tune, EQ, Multiband, Compression, De-ess, Resonance) are design only; Phase 1 for them has not started.
+Status: implemented in `KaminariVocal/`: all six channel modules (first versions, section 2.12), the three sends (2.9), presets (2.10), session versioning (2.11), mono/stereo layouts, and the Mac build script and installer. The GUI is functional. The preview's full artwork (Pro-Q-style analyzer, Pro-C-style displays, etc.) is not built yet.
 
 ## 0. Current project state and recorded decisions
 
@@ -593,6 +593,41 @@ Two levels, both with factory and user presets:
 | Podcast Voice | Clear, even speech. No tuning or sends. | Natural / Podcast Voice / Proximity Tamer / Broadcast / Standard / Boxy Room / Air Ambience / Slapback / Side Subtle | none |
 | Backing Vocals Wide | Tucked-back, wide stacks. | Tight Pop / Vocal Clean-up / Even Vocal 3-Band / Gentle Glue / Harsh S Fix / Transparent / Smooth Plate / Wide Doubler / Huge Width | Reverb -14 dB, Delay -18 dB, Widener -10 dB |
 | Lo-Fi Phone | Telephone tone with crunchy echoes. | Natural / Telephone / Low-Mid Control / Parallel Crush / Gentle / Gentle Smooth / Short Room / Lo-Fi Radio Echo / Side Subtle | Reverb -20 dB, Delay -16 dB |
+
+### 2.11 Versioning and updates (implemented)
+
+- **Saved with every session**:
+  - `state_version`, currently 2. Sessions saved before versioning read as 1.
+  - `engine_<module>` for all nine modules, currently 1.
+- **Changing what an existing setting means**: raise `state_version` and convert older sessions in `setStateInformation`.
+- **Improving an algorithm audibly**: raise that module's engine version and keep the old algorithm for sessions that saved the old number.
+- **Never changed after the first shared build**:
+  - The plug-in codes `Kmni`/`KmVc`.
+  - The bundle ID.
+  - Parameter IDs.
+  - Parameter ranges and skews.
+- **New parameters**: they get version hint 2 in the next release, then 3, and so on. AUv2 hosts that index parameters by position (Logic, GarageBand) need this to recall automation.
+- **Updating**: raise `project(... VERSION ...)` in `CMakeLists.txt` and rerun the installer. It upgrades in place.
+
+### 2.12 First implementation of the channel modules (what is in, what is postponed)
+
+Bus layouts: mono → mono, mono → stereo (the input is processed as dual mono, so the sends' stereo returns stay stereo), and stereo → stereo.
+
+Reported latency:
+- Tune's fixed 96 samples at 48 kHz, always reported, also with Tune off.
+- Plus the Compression lookahead and the De-ess lookahead.
+- Changes are reported to the host from the message thread.
+
+| Module | Implemented | Postponed |
+| --- | --- | --- |
+| Tune | YIN pitch detection on a decimated copy, nearest note of key/scale (or the 12 note switches when Scale = Custom) with hysteresis, Retune Speed, Humanize on held notes, period-locked delay-line shifter around a fixed 96-sample delay | formant handling, measured delay statistics per range (Phase 6), lower base latency trials |
+| EQ | 8 bands, 9 shapes, cut slopes 6–48 dB/oct, smoothed coefficients, output gain, interactive graph | dynamic EQ, per-band stereo placement, auto gain, gain scale, natural/linear phase, analyzer, EQ Match, piano scale |
+| Multiband | 1–6 bands, compress/expand, downward/upward range, per-band gain and solo, 6/12/24 dB/oct band filters, peak/smooth detector | lookahead, oversampling, free trigger range, sidechain, linear phase |
+| Compression | 5 styles, threshold, ratio, attack, release, auto release, knee, range, hold, lookahead, peak/smooth detector, mix 0–200 %, dry, wet gain, side-chain level, stereo link, auto gain (`lv_auto_gain`, new ID), output | 8-band detector EQ, external sidechain, oversampling, audition |
+| De-ess | threshold, range, detection range, Voice Focus / Full Band, Split Band / Wideband, Single Vocal / Allround, lookahead, stereo link, Stereo/Mid/Side, detector listen, audition | oversampling, external sidechain |
+| Resonance | Soft/Hard, Depth, Detail, Attack, Release, Mix, Out Gain, Delta, Bypass, Quality (band density), L/R and M/S, Link, Focus, the six tilts, Max Cut, Wet Trim, 8 depth-curve bands, reduction graph | non-low-latency and linear-phase modes, sidechain, band focus/listen |
+
+CPU: the whole chain with every module and send on (Resonance at Ultra) uses about 8 % of one 2.1 GHz Xeon core at 48 kHz. Measure again on the target Intel Mac.
 
 ---
 

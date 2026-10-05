@@ -4,6 +4,10 @@
 #include "params/Params.h"
 #include "HostTempo.h"
 #include "state/PresetManager.h"
+#include "dsp/Eq.h"
+#include "dsp/Dynamics.h"
+#include "dsp/Resonance.h"
+#include "dsp/Tune.h"
 
 // Kaminari Vocal processor.
 //
@@ -12,15 +16,24 @@
 //   each send: tap * send level -> effect (100 % wet) -> return guard -> summed with the dry out
 //
 // The dry signal is never processed by a send: the output is the dry signal plus the three returns.
-// The channel modules (Tune, EQ, Multiband, Compression, De-ess, Resonance) are specified in DESIGN.md and are
-// not part of this build yet; the pre-fader tap sits where they will end.
-class KaminariVocalProcessor : public juce::AudioProcessor
+// Channel modules, in order: Tune -> EQ -> Multiband -> Compression -> De-ess -> Resonance.
+// Layouts: mono -> mono, mono -> stereo, stereo -> stereo. A mono input is processed as dual mono, so the
+// sends' stereo returns stay stereo on a mono-in/stereo-out track.
+class KaminariVocalProcessor : public juce::AudioProcessor,
+                               private juce::AsyncUpdater
 {
 public:
     enum SendIndex { Reverb, Delay, Widener, numSends };
+    enum ModuleIndex { ModTune, ModEq, ModMultiband, ModCompression, ModDeEss, ModResonance, numModules };
+
+    // Saved with every session; raise when a later version must convert old sessions (see DESIGN.md 2.11).
+    static constexpr int stateVersion = 2;
+    // Algorithm version per module, saved with the session so a later, improved algorithm can keep old
+    // sessions sounding the same. All modules are at version 1.
+    static constexpr int engineVersion = 1;
 
     KaminariVocalProcessor();
-    ~KaminariVocalProcessor() override = default;
+    ~KaminariVocalProcessor() override { cancelPendingUpdate(); }
 
     void prepareToPlay (double sampleRate, int samplesPerBlock) override;
     void releaseResources() override {}
@@ -56,16 +69,54 @@ public:
     // Tests read the RMS of each return over the last processed block.
     std::array<std::atomic<float>, numSends> returnRms {};
 
+    // Gain reduction per module in dB (Multiband can be negative = boost), for the GUI meters.
+    std::array<std::atomic<float>, numModules> moduleGr {};
+    std::atomic<float> compMakeup { 0.0f };
+
+    kv::Tune tune;              // GUI reads its pitch read-outs
+    kv::Resonance resonance;    // GUI reads its per-band reduction
+    kv::Equalizer eq;
+
+    // Session state read back from the last setStateInformation (tests and future migrations).
+    int loadedStateVersion = stateVersion;
+
     // Non-parameter UI state saved with the session.
     std::atomic<bool> advancedView { false };
     std::atomic<int> advancedSend { Reverb };
+    std::atomic<int> advancedTab { 0 };   // Advanced view tab: 0..5 modules, 6..8 sends
 
     // Delay times in samples from the current settings and host tempo (also used by the GUI read-out).
     float delayTimeSamples (int echo, double bpm) const;
 
+    // Total reported latency: Tune's fixed delay plus any Compression / De-ess lookahead.
+    int computeLatency() const;
+
+    // Settings for the GUI's EQ curve (same values the audio thread uses).
+    void readEqSettings (kv::EqBandSettings (&out)[kv::Equalizer::numBands]) const;
+
 private:
     using Raw = std::atomic<float>*;
+    void handleAsyncUpdate() override { setLatencySamples (pendingLatency.load()); }
+    void processModules (float* l, float* r, int n);
+    void readModuleSettings();
+
+    kv::TuneSettings tuneSettings;
+    kv::EqBandSettings eqSettings[kv::Equalizer::numBands];
+    kv::MultibandSettings mbSettings;
+    kv::CompressorSettings compSettings;
+    kv::DeEsserSettings dsSettings;
+    kv::ResonanceSettings rsSettings;
+    bool moduleOn[numModules] {};
+    float eqOutGain = 0.0f;
+
+    kv::Multiband multiband;
+    kv::Compressor compressor;
+    kv::DeEsser deesser;
+    std::array<juce::SmoothedValue<float>, numModules> moduleFade;   // 10 ms bypass crossfades (EQ, Multiband, Resonance)
+    juce::AudioBuffer<float> work, dryCopy;
+    std::atomic<int> pendingLatency { 0 };
     Raw raw (const char* id) const { return apvts.getRawParameterValue (id); }
+    Raw raw (const juce::String& id) const { return apvts.getRawParameterValue (id); }
     void publishTempo (double& bpm);
 
     kv::ReverbSettings readReverb() const;

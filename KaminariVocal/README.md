@@ -20,7 +20,26 @@ Presets:
 
 Every return is 100 % wet and is added to the unchanged dry vocal. Each send has On, a send level (Off … +6 dB) and a Pre/Post-fader tap. Latency is 0 samples.
 
-The channel modules (Tune, EQ, Multiband, Compression, De-ess, Resonance) are specified in DESIGN.md but not built yet.
+Channel modules (first versions, see DESIGN.md 2.12): Tune, 8-band EQ, Multiband (1-6 bands), Compression, De-ess and Resonance. Mono, mono-to-stereo and stereo tracks are supported. Reported latency: 96 samples at 48 kHz, plus any lookahead.
+
+## Install on your Mac
+
+```bash
+# one-time: Xcode command line tools and CMake
+xcode-select --install
+brew install cmake
+
+# from the repository folder:
+./KaminariVocal/installer/make_installer.sh        # builds dist/KaminariVocal-<version>.pkg (VST3 + AU)
+open KaminariVocal/dist/KaminariVocal-*.pkg        # run the installer
+
+# or, without an installer, build and copy to ~/Library/Audio/Plug-Ins:
+./KaminariVocal/build_mac.sh
+```
+
+Add `WITH_AAX=1` in front of either command to include AAX (Pro Tools Developer build only until PACE-signed).
+To update later: pull the new code and run the installer again. It upgrades in place.
+Uninstall: `./KaminariVocal/installer/uninstall_mac.sh`.
 
 ## Build
 
