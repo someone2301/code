@@ -515,6 +515,7 @@ SideWidener follows the user-supplied SideWidener manual:
 - **Controls with no effect are hidden**: per reverb mode, per delay mode and time unit, and per widener type.
 - Every control has an accessible name, a tooltip with a one-sentence description, and the shared editing rules from section 7.1.
 - View and open panel are saved with the session (`ui_view`, `ui_send`).
+- Preview canvas: the Basic view gets a SENDS row under the module row (ON, level knob, mode, return meter, ADV link). The Advanced view gets a SENDS tab after the module tabs, with Reverb / Delay / Widener sub-tabs. The Widener has one artboard for each type.
 
 #### 2.9.5 Tests (`KaminariVocal/Tests/Tests.cpp`)
 
@@ -603,7 +604,7 @@ Measurement method: an impulse and a 1 kHz tone burst through the full plug-in, 
 
 ## 5. Basic / Advanced UI wireframes
 
-Default size 1100 × 680 px, minimum 880 × 544, scale 75–200 % in 25 % steps plus free drag-resize at fixed aspect ratio.
+Default size 1100 × 760 px (680 px plus a 64 px send row added with the effect sends), minimum 880 × 608, scale 75–200 % in 25 % steps plus free drag-resize at fixed aspect ratio.
 
 ### 5.1 Basic view
 
