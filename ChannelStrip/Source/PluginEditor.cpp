@@ -21,6 +21,8 @@ ChannelStripEditor::ChannelStripEditor (ChannelStripProcessor& p)
     }
     phaseAtt = std::make_unique<APVTS::ButtonAttachment> (p.apvts, ids::phase, phaseBtn);
     monoAtt = std::make_unique<APVTS::ButtonAttachment> (p.apvts, ids::mono, monoBtn);
+    describeToggle (phaseBtn, juce::String::fromUTF8 ("\xc3\x98 ON"), juce::String::fromUTF8 ("\xc3\x98"), "Invert the polarity of the input");
+    describeToggle (monoBtn, "MONO ON", "MONO", "Sum the input to mono");
 
     addAndMakeVisible (inMeter);
     addAndMakeVisible (outMeter);
@@ -28,7 +30,7 @@ ChannelStripEditor::ChannelStripEditor (ChannelStripProcessor& p)
     addAndMakeVisible (eqPanel);
     addAndMakeVisible (comp);
 
-    setSize (1100, 780);
+    setSize (1100, 850);
 }
 
 ChannelStripEditor::~ChannelStripEditor()
@@ -50,20 +52,20 @@ void ChannelStripEditor::paint (juce::Graphics& g)
     g.drawText ("de-ess  >  EQ  >  compressor  >  pan  >  out", 20, 46, 340, 16, juce::Justification::centredLeft);
 
     g.setColour (juce::Colour (0xff3a4350));
-    g.drawHorizontalLine (84, 10.0f, (float) getWidth() - 10.0f);
+    g.drawHorizontalLine (156, 10.0f, (float) getWidth() - 10.0f);
 }
 
 void ChannelStripEditor::resized()
 {
-    inMeter.setBounds (400, 10, 10, 66);
-    inKnob.setBounds (416, 2, 96, 84);
-    phaseBtn.setBounds (528, 14, 50, 26);
-    monoBtn.setBounds (528, 46, 50, 26);
-    panKnob.setBounds (594, 2, 96, 84);
-    outKnob.setBounds (706, 2, 96, 84);
-    outMeter.setBounds (808, 10, 10, 66);
+    inMeter.setBounds (400, 24, 10, 120);
+    inKnob.setBounds (416, 30, 96, 96);
+    phaseBtn.setBounds (528, 40, 50, 26);
+    monoBtn.setBounds (528, 72, 50, 26);
+    panKnob.setBounds (594, 30, 96, 96);
+    outKnob.setBounds (706, 30, 96, 96);
+    outMeter.setBounds (808, 24, 10, 120);
 
-    deess.setBounds (10, 94, 240, 340);
-    eqPanel.setBounds (258, 94, 832, 340);
-    comp.setBounds (10, 442, 1080, 326);
+    deess.setBounds (10, 166, 240, 340);
+    eqPanel.setBounds (258, 166, 832, 340);
+    comp.setBounds (10, 514, 1080, 326);
 }

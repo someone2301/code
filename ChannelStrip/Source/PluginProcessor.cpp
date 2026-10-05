@@ -63,6 +63,7 @@ EqParams ChannelStripProcessor::readEq() const
 void ChannelStripProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer&)
 {
     juce::ScopedNoDenormals noDenormals;
+    publishTempo();
 
     const int ns = buffer.getNumSamples();
     for (int c = getTotalNumInputChannels(); c < getTotalNumOutputChannels(); ++c)
@@ -161,6 +162,28 @@ void ChannelStripProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce
     analyser.push (buffer);
 }
 
+void ChannelStripProcessor::publishTempo()
+{
+    TempoSnapshot t;
+    t.anchorMs = juce::Time::getMillisecondCounterHiRes();
+    if (auto* ph = getPlayHead())
+    {
+        if (const auto pos = ph->getPosition())
+        {
+            const auto bpm = pos->getBpm();
+            const auto ppq = pos->getPpqPosition();
+            t.playing = pos->getIsPlaying();
+            if (bpm.hasValue() && ppq.hasValue() && *bpm > 0.0)
+            {
+                t.valid = true;
+                t.bpm = *bpm;
+                t.ppq = *ppq;
+            }
+        }
+    }
+    hostTempo.publish (t);
+}
+
 juce::AudioProcessorEditor* ChannelStripProcessor::createEditor()
 {
     return new ChannelStripEditor (*this);
@@ -168,7 +191,10 @@ juce::AudioProcessorEditor* ChannelStripProcessor::createEditor()
 
 void ChannelStripProcessor::getStateInformation (juce::MemoryBlock& destData)
 {
-    if (auto xml = apvts.copyState().createXml())
+    auto state = apvts.copyState();
+    state.setProperty ("analyserResolution", analyserResolution.load(), nullptr);
+    state.setProperty ("analyserSpeed", analyserSpeed.load(), nullptr);
+    if (auto xml = state.createXml())
         copyXmlToBinary (*xml, destData);
 }
 
@@ -176,7 +202,12 @@ void ChannelStripProcessor::setStateInformation (const void* data, int sizeInByt
 {
     if (auto xml = getXmlFromBinary (data, sizeInBytes))
         if (xml->hasTagName (apvts.state.getType()))
-            apvts.replaceState (juce::ValueTree::fromXml (*xml));
+        {
+            auto state = juce::ValueTree::fromXml (*xml);
+            analyserResolution.store ((int) state.getProperty ("analyserResolution", (int) SpectrumProcessor::High));
+            analyserSpeed.store ((int) state.getProperty ("analyserSpeed", (int) SpectrumProcessor::Fast));
+            apvts.replaceState (state);
+        }
 }
 
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()
