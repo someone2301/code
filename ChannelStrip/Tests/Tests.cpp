@@ -235,6 +235,29 @@ int main (int argc, char** argv)
         sl.resetToDefault();
         check (std::abs (prm.getValue() - defBefore) < 1.0e-6f, "double-click resets to the parameter default");
 
+        // strikes switch on from the centre outwards, each one fully
+        {
+            const int n = sl.getNumBolts();
+            const int c = n / 2;
+            sl.setNormalised (1.0f / (float) n);
+            bool centreOnly = sl.boltLevel (c) > 0.999f;
+            for (int i = 0; i < n; ++i)
+                centreOnly = centreOnly && (i == c || sl.boltLevel (i) < 1.0e-4f);
+            sl.setNormalised (3.0f / (float) n);
+            const bool three = sl.boltLevel (c - 1) > 0.999f && sl.boltLevel (c + 1) > 0.999f && sl.boltLevel (0) < 1.0e-4f;
+            sl.setNormalised (1.0f);
+            bool all = true;
+            for (int i = 0; i < n; ++i)
+                all = all && sl.boltLevel (i) > 0.999f;
+            sl.setNormalised (0.0f);
+            bool none = true;
+            for (int i = 0; i < n; ++i)
+                none = none && sl.boltLevel (i) < 1.0e-4f;
+            check (n % 2 == 1 && n >= 3 && centreOnly && three && all && none,
+                   "strikes activate from the centre outwards (" + juce::String (n) + " strikes)");
+            sl.resetToDefault();
+        }
+
         sl.beginDrag();                         // a double-click arrives while the gesture of its second click is open
         sl.dragBy (30.0f, false);
         sl.resetToDefault();

@@ -54,13 +54,13 @@ void ChannelStripEditor::paint (juce::Graphics& g)
 
 void ChannelStripEditor::resized()
 {
-    inMeter.setBounds (400, 24, 10, 120);
-    inSlider.setBounds (416, 6, 96, 144);
-    phaseBtn.setBounds (528, 40, 50, 26);
-    monoBtn.setBounds (528, 72, 50, 26);
-    panKnob.setBounds (594, 30, 96, 84);
-    outSlider.setBounds (706, 6, 96, 144);
-    outMeter.setBounds (808, 24, 10, 120);
+    inMeter.setBounds (360, 24, 10, 120);
+    inSlider.setBounds (376, 4, 146, 148);
+    phaseBtn.setBounds (532, 40, 50, 26);
+    monoBtn.setBounds (532, 72, 50, 26);
+    panKnob.setBounds (592, 30, 96, 84);
+    outSlider.setBounds (698, 4, 146, 148);
+    outMeter.setBounds (850, 24, 10, 120);
 
     deess.setBounds (10, 166, 240, 340);
     eqPanel.setBounds (258, 166, 832, 340);

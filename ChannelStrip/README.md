@@ -14,7 +14,7 @@ The EQ can be moved after the compressor with the POST COMP button.
 | Compressor, Opto mode | LA-2A-style: peak reduction, gain, compress / limit, program-dependent two-stage release |
 | Compressor | Parallel mix, needle gain-reduction meter, GUI changes with the mode |
 | Analyser | Resolution Low / Medium / High / Maximum (1024-8192-point FFT at 48 kHz), speed Very Slow to Very Fast; default High + Fast |
-| Lightning sliders | Input, Output, De-ess threshold, FET input and Opto peak reduction. Drag down to light more of the bolt (raise the value), up to dim it. Lit branches glow in time with the host tempo; steady when the transport is stopped |
+| Lightning sliders | Input, Output, De-ess threshold, FET input and Opto peak reduction. A thunder cloud with a row of strikes: pull the grip down from the cloud to raise the value and switch on more strikes from the centre outwards. Active strikes glow in time with the host tempo; steady when the transport is stopped |
 
 The compressors are style models, not component-level emulations of the hardware.
 

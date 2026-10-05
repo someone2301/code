@@ -97,7 +97,7 @@ public:
         listenBtn.setBounds (getWidth() - 140, 10, 70, 24);
         freq.setBounds (10, 48, 108, 100);
         range.setBounds (10, 152, 108, 100);
-        thresh.setBounds (122, 44, 108, 214);
+        thresh.setBounds (118, 44, 116, 214);
         bar.setBounds (14, getHeight() - 62, getWidth() - 28, 16);
     }
 
@@ -341,7 +341,7 @@ public:
         onBtn.setBounds (w - 90, 12, 64, 28);
         meter.setBounds (20, 62, 330, 236);
 
-        fetIn.setBounds  (370, 62, 110, 236);
+        fetIn.setBounds  (366, 56, 124, 242);
         fetOut.setBounds (490, 62, 120, 112);
         fetAtk.setBounds (610, 62, 120, 112);
         fetRel.setBounds (730, 62, 120, 112);
