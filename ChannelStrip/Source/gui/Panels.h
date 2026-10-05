@@ -45,6 +45,16 @@ inline void drawPanelFrame (juce::Graphics& g, juce::Rectangle<float> b, juce::C
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
+// Toggle buttons say their state in words (not colour alone) and explain themselves on hover.
+inline void describeToggle (juce::Button& b, const juce::String& onText, const juce::String& offText, const juce::String& tip)
+{
+    b.setTooltip (tip);
+    b.setClickingTogglesState (true);
+    auto update = [&b, onText, offText] { b.setButtonText (b.getToggleState() ? onText : offText); };
+    b.onStateChange = update;
+    update();
+}
+
 class DeEsserPanel : public juce::Component
 {
 public:
@@ -68,6 +78,8 @@ public:
         }
         onAtt = std::make_unique<APVTS::ButtonAttachment> (p.apvts, ids::deessOn, onBtn);
         listenAtt = std::make_unique<APVTS::ButtonAttachment> (p.apvts, ids::deessListen, listenBtn);
+        describeToggle (onBtn, "ON", "OFF", "De-esser on or bypassed");
+        describeToggle (listenBtn, "LISTENING", "LISTEN", "Hear only the band the de-esser reacts to");
         addAndMakeVisible (bar);
     }
 
@@ -164,6 +176,8 @@ public:
 
         onAtt = std::make_unique<APVTS::ButtonAttachment> (p.apvts, ids::eqOn, onBtn);
         postAtt = std::make_unique<APVTS::ButtonAttachment> (p.apvts, ids::eqPost, postBtn);
+        describeToggle (onBtn, "EQ ON", "EQ OFF", "EQ on or bypassed");
+        describeToggle (postBtn, "POST COMP", "PRE COMP", "Place the EQ before or after the compressor");
 
         display.onSelect = [this] (int b) { bind (b); };
         bind (2);
@@ -232,6 +246,7 @@ private:
         bandOnAtt.reset();
         typeAtt.reset();
         bandOnAtt = std::make_unique<APVTS::ButtonAttachment> (apvts, cs::eqId (b, "on"), bandOnBtn);
+        describeToggle (bandOnBtn, "BAND ON", "BAND OFF", "Selected band active or removed from the curve");
         typeAtt = std::make_unique<APVTS::ComboBoxAttachment> (apvts, cs::eqId (b, "type"), typeBox);
         freq.attach (cs::eqId (b, "freq"));
         gain.attach (cs::eqId (b, "gain"));
@@ -297,6 +312,7 @@ public:
         limitBtn.onClick = [this] { limitAtt.setValueAsCompleteGesture (1.0f); };
 
         onAtt = std::make_unique<APVTS::ButtonAttachment> (p.apvts, ids::compOn, onBtn);
+        describeToggle (onBtn, "ON", "OFF", "Compressor on or bypassed");
 
         modeAtt.sendInitialUpdate();
         ratioAtt.sendInitialUpdate();

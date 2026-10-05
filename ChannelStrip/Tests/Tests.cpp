@@ -2,6 +2,7 @@
 // Build with -DCHANNELSTRIP_BUILD_TESTS=ON and run: ChannelStripTests [snapshot_dir]
 #include "PluginProcessor.h"
 #include "gui/LightningSlider.h"
+#include "gui/Panels.h"
 #include <thread>
 #include <cstdio>
 
@@ -297,6 +298,67 @@ int main (int argc, char** argv)
         check (onBeat > 0.99f && offBeat < 0.01f && std::abs (sl.getCurrentGlow() - HostTempo::steadyGlow) < 1.0e-6f,
                "slider glow follows host beats and is steady when stopped (" + juce::String (onBeat, 2) + ", "
                + juce::String (offBeat, 2) + ", " + juce::String (sl.getCurrentGlow(), 2) + ")");
+    }
+
+    // Knobs: shared editing rules
+    {
+        ChannelStripProcessor p;
+        Knob k (p.apvts, ids::outGain, "OUTPUT");
+        k.setBounds (0, 0, 96, 100);
+        auto& sl = k.slider;
+        auto& prm = *p.apvts.getParameter (ids::outGain);
+        check (sl.isDoubleClickReturnEnabled() && std::abs (sl.getDoubleClickReturnValue() - 0.0) < 1.0e-6,
+               "knob double-click returns to the parameter default (0 dB)");
+        sl.startDrag();
+        const float p0 = sl.position();
+        sl.applyDrag (20.0f, false);
+        const float p1 = sl.position();
+        sl.applyDrag (20.0f, true);
+        const float p2 = sl.position();
+        check (std::abs ((p1 - p0) - 0.1f) < 0.005f && std::abs ((p2 - p1) - 0.01f) < 0.002f, "knob drag: 200 px = full range, Shift = 10 % speed");
+        sl.keyPressed (juce::KeyPress (juce::KeyPress::upKey));
+        check (sl.position() > p2 + 0.009f, "knob Up arrow raises the value by 1 %");
+        sl.keyPressed (juce::KeyPress (juce::KeyPress::deleteKey));
+        check (std::abs (prm.getValue() - prm.getDefaultValue()) < 1.0e-4f, "knob Delete key resets to default");
+        const auto tip = sl.getTooltip();
+        check (tip.startsWith ("Output Gain: ") && tip.contains ("dB") && tip.contains ("Double-click"), "knob hover tooltip: '" + tip.upToFirstOccurrenceOf ("\n", false, false) + "'");
+        check (sl.getWantsKeyboardFocus() && sl.getTitle() == "Output Gain", "knob is focusable and named for screen readers");
+    }
+
+    // EQ graph: hover/selection helpers, keyboard, double-click semantics
+    {
+        ChannelStripProcessor p;
+        EQDisplay e (p);
+        e.setBounds (0, 0, 800, 300);
+        for (int b : { 2, 3 })
+        {
+            setParam (p, cs::eqId (b, "on").toRawUTF8(), 1.0f);
+            setParam (p, cs::eqId (b, "type").toRawUTF8(), 0.0f);
+            setParam (p, cs::eqId (b, "freq").toRawUTF8(), 1000.0f);
+            setParam (p, cs::eqId (b, "gain").toRawUTF8(), 6.0f);
+        }
+        auto gain = [&] (int b) { return p.apvts.getRawParameterValue (cs::eqId (b, "gain"))->load(); };
+        auto freq = [&] (int b) { return p.apvts.getRawParameterValue (cs::eqId (b, "freq"))->load(); };
+        const auto pos = e.nodePosition (2);
+        const int first = e.pickAt (pos);
+        e.selectBand (first);                 // what a click does with the picked band
+        const int second = e.pickAt (pos);
+        check (e.bandsAt (pos).size() == 2 && first != second, "clicking overlapping nodes again cycles to the other band");
+
+        e.selectBand (2);
+        e.keyPressed (juce::KeyPress (juce::KeyPress::upKey));
+        check (std::abs (gain (2) - 6.5f) < 0.02f, "Up arrow raises the selected band's gain by 0.5 dB");
+        e.keyPressed (juce::KeyPress (juce::KeyPress::downKey, juce::ModifierKeys::shiftModifier, 0));
+        check (std::abs (gain (2) - 6.4f) < 0.02f, "Shift+Down lowers it by 0.1 dB");
+        e.keyPressed (juce::KeyPress (juce::KeyPress::rightKey, juce::ModifierKeys::commandModifier, 0));
+        check (std::abs (freq (2) - 1000.0f * std::pow (2.0f, 1.0f / 12.0f)) < 2.0f, "Cmd/Ctrl+Right raises the frequency by a semitone");
+        e.resetGain (2);
+        check (std::abs (gain (2)) < 0.02f && p.apvts.getRawParameterValue (cs::eqId (2, "on").toRawUTF8())->load() > 0.5f,
+               "double-click on a node sets gain to 0 dB and keeps the band");
+        e.keyPressed (juce::KeyPress (juce::KeyPress::rightKey));
+        check (e.selected == 3, "Right arrow selects the next active band");
+        e.keyPressed (juce::KeyPress (juce::KeyPress::deleteKey));
+        check (p.apvts.getRawParameterValue (cs::eqId (3, "on").toRawUTF8())->load() < 0.5f, "Delete removes the selected band");
     }
 
     // Analyser: high resolution, fast release

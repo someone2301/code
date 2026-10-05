@@ -21,6 +21,8 @@ ChannelStripEditor::ChannelStripEditor (ChannelStripProcessor& p)
     }
     phaseAtt = std::make_unique<APVTS::ButtonAttachment> (p.apvts, ids::phase, phaseBtn);
     monoAtt = std::make_unique<APVTS::ButtonAttachment> (p.apvts, ids::mono, monoBtn);
+    describeToggle (phaseBtn, juce::String::fromUTF8 ("\xc3\x98 ON"), juce::String::fromUTF8 ("\xc3\x98"), "Invert the polarity of the input");
+    describeToggle (monoBtn, "MONO ON", "MONO", "Sum the input to mono");
 
     addAndMakeVisible (inMeter);
     addAndMakeVisible (outMeter);

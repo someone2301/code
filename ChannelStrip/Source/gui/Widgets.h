@@ -6,12 +6,149 @@
 
 using APVTS = juce::AudioProcessorValueTreeState;
 
-// Rotary slider with a caption, bound to a parameter.
+// Rotary slider with the shared editing rules: vertical drag (Shift = 10 % speed), double-click resets to
+// the parameter default, mouse wheel (Shift = finer), arrow / Page / Home / End keys, right-click menu
+// (Enter Value, Reset, Copy, Paste), a hover tooltip with name, value and hints, and a focus outline.
+// Every change outside a mouse drag is wrapped in its own host gesture.
+class ParamSlider : public juce::Slider
+{
+public:
+    ParamSlider() : juce::Slider (juce::Slider::RotaryHorizontalVerticalDrag, juce::Slider::TextBoxBelow)
+    {
+        setWantsKeyboardFocus (true);
+    }
+
+    void bind (juce::RangedAudioParameter* p, const juce::String& name)
+    {
+        param = p;
+        displayName = p != nullptr ? p->getName (64) : name;
+        setTitle (p != nullptr ? p->getName (64) : name);
+        if (p != nullptr)
+            setDoubleClickReturnValue (true, p->convertFrom0to1 (p->getDefaultValue()));
+    }
+
+    // Normalised position 0..1 of the current value.
+    float position() { return (float) valueToProportionOfLength (getValue()); }
+
+    // Call at the start of a drag; applyDrag then moves from the current value.
+    void startDrag() { dragPos = position(); }
+
+    // A vertical drag of dy pixels (positive = up = more). 200 px covers the full range.
+    void applyDrag (float dy, bool fine)
+    {
+        dragPos = juce::jlimit (0.0f, 1.0f, dragPos + dy / 200.0f * (fine ? 0.1f : 1.0f));
+        setValue (proportionOfLengthToValue (dragPos), juce::sendNotificationSync);
+    }
+
+    // Moves the value by a fraction of the full range as one host gesture.
+    void nudge (float delta) { setPositionAsGesture (position() + delta); }
+
+    void setPositionAsGesture (float pos)
+    {
+        if (param != nullptr) param->beginChangeGesture();
+        setValue (proportionOfLengthToValue (juce::jlimit (0.0f, 1.0f, pos)), juce::sendNotificationSync);
+        if (param != nullptr) param->endChangeGesture();
+    }
+
+    void resetToDefault()
+    {
+        if (param != nullptr)
+            setPositionAsGesture ((float) valueToProportionOfLength (param->convertFrom0to1 (param->getDefaultValue())));
+    }
+
+    juce::String getTooltip() override
+    {
+        return displayName + ": " + getTextFromValue (getValue())
+             + "\nDrag up or down (Shift = fine). Double-click to reset. Right-click for more.";
+    }
+
+    void mouseDown (const juce::MouseEvent& e) override
+    {
+        if (e.mods.isPopupMenu())
+        {
+            showMenu();
+            return;
+        }
+        grabKeyboardFocus();
+        lastY = e.position.y;
+        startDrag();
+        juce::Slider::mouseDown (e);   // starts the host gesture
+    }
+
+    void mouseDrag (const juce::MouseEvent& e) override
+    {
+        if (e.mods.isPopupMenu() || ! isEnabled())
+            return;
+        const float dy = lastY - e.position.y;
+        lastY = e.position.y;
+        applyDrag (dy, e.mods.isShiftDown());
+    }
+
+    void mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheelDetails& w) override
+    {
+        const float d = w.isReversed ? -w.deltaY : w.deltaY;
+        nudge (d * (e.mods.isShiftDown() ? 0.02f : 0.2f));
+    }
+
+    bool keyPressed (const juce::KeyPress& key) override
+    {
+        const float step = key.getModifiers().isShiftDown() ? 0.001f : 0.01f;
+        const int code = key.getKeyCode();
+        if (code == juce::KeyPress::upKey || code == juce::KeyPress::rightKey)   { nudge (step); return true; }
+        if (code == juce::KeyPress::downKey || code == juce::KeyPress::leftKey)  { nudge (-step); return true; }
+        if (code == juce::KeyPress::pageUpKey)   { nudge (0.1f); return true; }
+        if (code == juce::KeyPress::pageDownKey) { nudge (-0.1f); return true; }
+        if (code == juce::KeyPress::homeKey) { setPositionAsGesture (0.0f); return true; }
+        if (code == juce::KeyPress::endKey)  { setPositionAsGesture (1.0f); return true; }
+        if (code == juce::KeyPress::deleteKey || code == juce::KeyPress::backspaceKey) { resetToDefault(); return true; }
+        if (code == juce::KeyPress::returnKey) { showTextBox(); return true; }
+        return juce::Slider::keyPressed (key);
+    }
+
+    void paint (juce::Graphics& g) override
+    {
+        juce::Slider::paint (g);
+        if (hasKeyboardFocus (false))
+        {
+            juce::Path ring, dashed;
+            ring.addRoundedRectangle (getLocalBounds().toFloat().reduced (1.0f), 6.0f);
+            const float dashes[] = { 4.0f, 3.0f };
+            juce::PathStrokeType (1.5f).createDashedStroke (dashed, ring, dashes, 2);
+            g.setColour (juce::Colour (0xff5ce1ff));
+            g.fillPath (dashed);
+        }
+    }
+
+    void focusGained (FocusChangeType) override { repaint(); }
+    void focusLost (FocusChangeType) override   { repaint(); }
+
+private:
+    void showMenu()
+    {
+        juce::PopupMenu m;
+        m.addItem ("Enter Value...", [this] { showTextBox(); });
+        m.addItem ("Reset to Default", [this] { resetToDefault(); });
+        m.addSeparator();
+        m.addItem ("Copy Value", [this] { juce::SystemClipboard::copyTextToClipboard (getTextFromValue (getValue())); });
+        m.addItem ("Paste Value", [this]
+        {
+            const auto v = getValueFromText (juce::SystemClipboard::getTextFromClipboard().trim());
+            setPositionAsGesture ((float) valueToProportionOfLength (juce::jlimit (getMinimum(), getMaximum(), v)));
+        });
+        m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (this));
+    }
+
+    juce::RangedAudioParameter* param = nullptr;
+    juce::String displayName;
+    float lastY = 0.0f, dragPos = 0.0f;
+};
+
+// Rotary knob with a caption, bound to a parameter.
 class Knob : public juce::Component
 {
 public:
     Knob (APVTS& state, const juce::String& paramId, const juce::String& name)
-        : apvts (state)
+        : apvts (state), caption (name)
     {
         addAndMakeVisible (slider);
         addAndMakeVisible (label);
@@ -28,6 +165,7 @@ public:
     {
         att.reset();
         att = std::make_unique<APVTS::SliderAttachment> (apvts, paramId, slider);
+        slider.bind (apvts.getParameter (paramId), caption);   // after the attachment has set the range
     }
 
     void setLNF (juce::LookAndFeel* l)
@@ -43,11 +181,12 @@ public:
         slider.setBounds (b);
     }
 
-    juce::Slider slider { juce::Slider::RotaryHorizontalVerticalDrag, juce::Slider::TextBoxBelow };
+    ParamSlider slider;
     juce::Label label;
 
 private:
     APVTS& apvts;
+    juce::String caption;
     std::unique_ptr<APVTS::SliderAttachment> att;
 };
 
