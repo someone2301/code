@@ -158,11 +158,11 @@ The FFT length doubles at 88.2/96 kHz and again at 176.4/192 kHz (cap 16384) so 
 
 Attack is immediate. When the host stops sending audio for more than 100 ms the display falls at the selected release speed.
 
-### 2.4 Level
+### 2.4 Compression (IDs keep the `lv_` prefix; the module is named Compression in the UI)
 
 | ID | Name | Type | Range | Default | Unit | Vis |
 | --- | --- | --- | --- | --- | --- | --- |
-| `lv_on` | Level On | bool | | on | | B |
+| `lv_on` | Compression On | bool | | on | | B |
 | `lv_thresh` | Threshold | float | −50 … 0 | −14 | dB | B (as Compression) |
 | `lv_ratio` | Ratio | float, skewed | 1 … 20 | 3 | :1 | A |
 | `lv_attack` | Attack | float, log | 0.1 … 100 | 8 | ms | A |
@@ -196,8 +196,8 @@ External sidechain: postponed (see section 9).
 | `ds_on` | De-Ess On | bool | | on | | B |
 | `ds_thresh` | Threshold | float | −60 … 0 | −28 | dB | B (as De-ess) |
 | `ds_range` | Range (max reduction) | float | 0 … 24 | 8 | dB | A |
-| `ds_attack` | Attack | float, log | 0.05 … 10 | 0.5 | ms | A |
-| `ds_release` | Release | float, log | 10 … 300 | 60 | ms | A |
+| `ds_lookahead` | Lookahead | float | 0 … 10 | 0 (off) | ms | A |
+| `ds_oversample` | Oversampling | choice | Off, 2x, 4x | Off | | A |
 | `ds_detect` | Detection | choice | Voice Focus, Full Band | Voice Focus | | A |
 | `ds_det_lo` | Detector Low Edge | float, log | 1000 … 16000 | 3500 | Hz | A |
 | `ds_det_hi` | Detector High Edge | float, log | 2000 … 20000 | 8600 | Hz | A |
@@ -209,31 +209,65 @@ External sidechain: postponed (see section 9).
 - Voice Focus: detector = band-pass (lo…hi, 12 dB/oct each side) and a 0.3 ms peak follower. Full Band: detector = high-pass at `ds_det_lo` only, for non-vocal sources.
 - The detector filters only feed the detector. They do not filter the audio.
 - Basic "De-ess" control = `ds_thresh` displayed as `De-ess % = −thresh / 60 × 100` (default −28 dB = 47 %). Range, attack, release, and filters stay at their own values.
+- No user attack/release: timing is automatic (0.3 ms attack, program-dependent 30–80 ms release).
+- Lookahead and oversampling are off by default; each adds latency that is reported to the host and shown in the header badge.
+- Advanced view sets the detector range with a horizontal two-handle frequency slider (1–20 kHz) over a live spectrum; dragging the band moves both edges.
 - Internal ratio is fixed at 6:1; the gain reduction is `min(range, over · (1 − 1/6))`. Documented in the tooltip.
 - Split Band: the signal is split complementarily (`high = x − LP(x)`, so `low + high = x` exactly) at `ds_split_freq`; only `high` is attenuated. Wideband: the whole signal is attenuated.
 - Stereo: detector is linked (max of channels). Unlinked mode is postponed.
 
-### 2.6 Low-Mid Dynamics
+### 2.6 Multiband (default: one low-mid band, 100–500 Hz)
+
+Global:
 
 | ID | Name | Type | Range | Default | Unit | Vis |
 | --- | --- | --- | --- | --- | --- | --- |
-| `lm_on` | Low-Mid On | bool | | off | | B |
-| `lm_lo` | Low Crossover | float, log | 40 … 400 | 100 | Hz | A |
-| `lm_hi` | High Crossover | float, log | 200 … 2000 | 500 | Hz | A |
-| `lm_slope` | Crossover Slope | choice | 6, 12, 24 | 12 | dB/oct | A |
-| `lm_thresh` | Threshold | float | −60 … 0 | −24 | dB | B |
-| `lm_ratio` | Ratio | float | 1 … 10 | 2 | :1 | A |
-| `lm_attack` | Attack | float, log | 1 … 100 | 10 | ms | A |
-| `lm_release` | Release | float, log | 20 … 1000 | 150 | ms | A |
-| `lm_knee` | Knee | float | 0 … 24 | 6 | dB | A |
-| `lm_range` | Range (max reduction) | float | 0 … 24 | 6 | dB | A |
-| `lm_detector` | Detector | choice | Peak, Smooth | Smooth | | A |
-| `lm_auto_makeup` | Auto Makeup | bool | | off | | A |
-| `lm_solo` | Band Solo | bool | | off | | A (non-auto) |
+| `mb_on` | Multiband On | bool | | off | | B |
+| `mb_count` | Bands | int | 1 … 6 | 1 | | A |
+| `mb_slope` | Crossover Slope | choice | 6, 12, 24 | 12 | dB/oct | A |
+| `mb_detector` | Detector | choice | Peak, Smooth | Smooth | | A |
+| `mb_oversample` | Oversampling | choice | Off, 2x, 4x | Off | | A |
+| `mb_lookahead` | Lookahead | choice | Off, 1, 3, 5 ms | Off | | A |
 
-The DSP enforces `lm_hi ≥ 1.5 · lm_lo` without rewriting the stored parameter. Band extraction: `band = LP_hi(HP_lo(x))`; output = `x − band · (1 − g)`. At 0 dB gain reduction the output equals the input exactly. Zero latency.
+Per band (N = 1..6; band 1 defaults shown, bands 2–6 are created on demand):
 
-### 2.7 Non-parameter state saved with the session
+| ID | Name | Type | Range | Default (band 1) | Unit | Vis |
+| --- | --- | --- | --- | --- | --- | --- |
+| `mb<N>_lo` | Low Edge | float, log | 20 … 16000 | 100 | Hz | A |
+| `mb<N>_hi` | High Edge | float, log | 40 … 20000 | 500 | Hz | A |
+| `mb<N>_thresh` | Threshold | float | −60 … 0 | −24 | dB | B (band 1) |
+| `mb<N>_ratio` | Ratio | float | 1 … 10 | 2 | :1 | A |
+| `mb<N>_attack` | Attack | float, log | 1 … 100 | 10 | ms | A |
+| `mb<N>_release` | Release | float, log | 20 … 1000 | 150 | ms | A |
+| `mb<N>_knee` | Knee | float | 0 … 24 | 6 | dB | A |
+| `mb<N>_range` | Range (max reduction) | float | 0 … 24 | 6 | dB | A |
+| `mb<N>_makeup` | Auto Makeup | bool | | off | | A |
+| `mb<N>_solo` | Band Solo | bool | | off | | A (non-auto) |
+
+Bands may not overlap; the DSP keeps each band's high edge ≥ 1.5 × its low edge without rewriting stored values. Each band is extracted as `LP_hi(HP_lo(x))` and processed as `x − band · (1 − g)`, so at 0 dB reduction the output equals the input exactly; regions outside every band pass untouched. Zero latency unless lookahead or oversampling is on. The Advanced view has no transfer-curve graph.
+
+### 2.7 Resonance (dynamic resonance suppression)
+
+| ID | Name | Type | Range | Default | Unit | Vis |
+| --- | --- | --- | --- | --- | --- | --- |
+| `rs_on` | Resonance On | bool | | off | | B |
+| `rs_depth` | Depth | float | 0 … 20 | 4 | dB | B |
+| `rs_focus` | Focus | float | 0 … 100 | 50 | % | A |
+| `rs_speed` | Speed | float | 0 … 100 | 50 | % | A |
+| `rs_mix` | Mix | float | 0 … 100 | 100 | % | A |
+| `rs_trim` | Trim | float | −12 … +12 | 0 | dB | A |
+| `rs_mode` | Mode | choice | Adaptive, Fixed | Adaptive | | A |
+| `rs_quality` | Processing | choice | Low latency, High resolution | Low latency | | A |
+| `rs_sens<K>_freq/gain/q` | Sensitivity node K (K = 1..3) | float | 20 … 20000 Hz / ±12 dB / 0.3 … 4 | 120 Hz, 3 kHz, 12 kHz / 0 dB / 1 | | A |
+| `rs_delta` | Delta (hear removed) | bool | | off | | A (non-auto) |
+
+Low latency (default) uses a bank of zero-latency dynamic IIR notches driven by a resonance detector, so it adds 0 samples (the same figure oeksound states for soothe3's low-latency mode at 44.1/48 kHz). High resolution uses an STFT and adds a fixed, reported latency (measured in its phase). This is an original design; no third-party code or tuning is copied.
+
+### 2.7b Non-parameter state added
+
+EQ: frequency scale Hz / Piano (shows note names and lets band frequencies snap to notes), EQ Match state (reference source: sidechain input or a captured spectrum, learn/apply, amount, up to 6 generated bands written as normal EQ bands).
+
+### 2.8 Non-parameter state saved with the session
 
 `ui_view` (Basic/Advanced), `ui_module` (selected module), `ui_scale` (75–200 %), analyzer settings, EQ zoom/scroll, A/B slot contents and active slot, preset name and "modified" flag.
 
@@ -242,7 +276,7 @@ The DSP enforces `lm_hi ≥ 1.5 · lm_lo` without rewriting the stored parameter
 ## 3. Signal flow
 
 ```
- Input ──► [In Gain] ──► [TUNE] ──► [EQ] ──► [LEVEL] ──► [DE-ESS] ──► [LOW-MID] ──► [Out Gain] ──► [Safety] ──► Output
+ Input ──► [In Gain] ──► [TUNE] ──► [EQ] ──► [MULTIBAND] ──► [COMPRESSION] ──► [DE-ESS] ──► [RESONANCE] ──► [Out Gain] ──► [Safety] ──► Output
    │                       │          │                                                                │
    ├─► In meter            │          ├─► analyzer tap (pre-EQ / post-EQ, copy only)                   ├─► Out meter
    │                       │          │                                                                │
@@ -254,9 +288,11 @@ The DSP enforces `lm_hi ≥ 1.5 · lm_lo` without rewriting the stored parameter
 
 Order rationale:
 1. Tune first: the detector needs the cleanest, unprocessed signal; EQ boosts and compression can bias period detection.
-2. EQ before Level: cuts and tone shaping happen before dynamics, so the leveler reacts to the corrected tone.
-3. De-ess after Level: the compressor's makeup gain and release can raise sibilance; de-essing afterwards catches it.
-4. Low-Mid last: controls body and proximity effect that remain after leveling.
+2. EQ before dynamics: cuts and tone shaping happen first, so the compressor reacts to the corrected tone.
+3. Multiband before Compression: low-mid boom and proximity effect are tamed before they drive the main compressor (the UI shows Multiband to the left of Compression).
+4. De-ess after Compression: makeup gain and release can raise sibilance; de-essing afterwards catches it.
+5. Resonance last: removes harsh, ringing resonances that remain after all gain changes.
+The UI's module order (Tune, Multiband, Compression, De-ess, Resonance) follows this order.
 
 The order is fixed in version 1. Routing is postponed.
 
@@ -271,14 +307,18 @@ Reported latency is constant in time (2.0 ms) for the Tune module and zero for a
 | Input gain, meters | 0 | **0** | 0 | 0 | 0 | |
 | Tune | 88 | **96** | 176 | 192 | 384 | fixed 2.0 ms base delay |
 | EQ | 0 | **0** | 0 | 0 | 0 | minimum-phase IIR |
-| Level | 0 | **0** | 0 | 0 | 0 | no lookahead |
-| De-ess | 0 | **0** | 0 | 0 | 0 | no lookahead, complementary split |
-| Low-Mid | 0 | **0** | 0 | 0 | 0 | subtractive band |
+| Multiband | 0 | **0** | 0 | 0 | 0 | subtractive bands; lookahead/oversampling off |
+| Compression | 0 | **0** | 0 | 0 | 0 | no lookahead |
+| De-ess | 0 | **0** | 0 | 0 | 0 | complementary split; lookahead/oversampling off |
+| Resonance (Low latency) | 0 | **0** | measured | measured | measured | IIR dynamic notches |
 | Analyzer, smoothing | 0 | **0** | 0 | 0 | 0 | analyzer reads a copy |
 | Output, Safety | 0 | **0** | 0 | 0 | 0 | |
 | **Total reported** | 88 | **96** | 176 | 192 | 384 | ceiling: 128 at 48 kHz (2.67 ms) |
 | Reserve | | **32** | | | | for Tune tuning in Phase 6 |
-| Oversampling 2x / 4x | | measured in Phase 7 | | | | off by default; labeled as adding latency |
+| Optional: De-ess / Multiband lookahead | | + lookahead time | | | | off by default; e.g. 1 ms = +48 samples |
+| Optional: oversampling 2x / 4x | | measured | | | | off by default; labeled as adding latency |
+| Optional: Resonance High resolution | | measured | | | | off by default |
+| EQ Match | 0 | **0** | 0 | 0 | 0 | generates normal minimum-phase bands |
 
 Tune variable delay: a period-based shifter repeats or drops whole pitch periods. Around the fixed 2.0 ms base, the instantaneous delay varies by up to about one pitch period (about 0–4 ms for typical vocals, similar to Waves Tune Real-Time). Phase 6 measures the average and range of this delay per vocal range and documents it. If 2.0 ms causes audible artifacts, the base may rise to at most 2.67 ms (128 samples at 48 kHz).
 
@@ -515,20 +555,24 @@ All controls expose JUCE `AccessibilityHandler` titles, values, and value ranges
 | Subtractive band processing phase | Small comb effects when GR is large | Matched filters, measured null depth; documented |
 | JUCE VST3 parameter hashing | Renaming an ID breaks automation | Golden ID list test |
 | Hosts that resend latency late | Misaligned tracks | Latency is constant and set in constructor and `prepareToPlay` |
+| Sidechain input across VST3 / AU / AAX | EQ Match reference and any external key may not reach the plug-in in some hosts | Optional second input bus; captured-spectrum reference as fallback; tested per host |
+| Resonance suppression quality at 0 latency | Smearing or missed resonances compared with STFT methods | Low-latency IIR mode is default; High resolution mode for mixing; listening tests |
 | Scope size | Delays | Phased delivery; each phase ends buildable and tested |
 
 ## 10. Postponed (not in version 1)
 
-Graph-mode pitch editing, formant controls, harmony, vibrato editing, melody extraction, gate, linear-phase and natural-phase EQ, all-pass band (unless a clear use is found), EQ match, inter-plugin spectrum features, surround, modular routing, preset marketplace, saturation and heavy modulation, external sidechain (until tested in all three formats), unlinked stereo de-essing, MIDI Learn, mid/side and L/R per-band processing (reserved IDs), dynamic EQ (reserved IDs; added only if tests pass), lookahead modes, 8x oversampling, a "Tune removed / zero-latency" variant.
+Graph-mode pitch editing, formant controls, harmony, vibrato editing, melody extraction, gate, linear-phase and natural-phase EQ, all-pass band (unless a clear use is found), inter-plugin spectrum features, surround, modular routing, preset marketplace, saturation and heavy modulation, external sidechain (until tested in all three formats), unlinked stereo de-essing, MIDI Learn, mid/side and L/R per-band processing (reserved IDs), dynamic EQ (reserved IDs; added only if tests pass), 8x oversampling, a "Tune removed / zero-latency" variant.
 
 ## 11. Phase plan (revised for the decisions above)
 
 1. Delete `ChannelStrip/`. New `KaminariVocal/` CMake project (VST3, AU, AAX), pass-through, full parameter set from section 2, state, UI shell with theme, meters, bypass, constant latency report (96 samples at 48 kHz from the start), test runner with latency and ID tests.
 2. EQ with graph and analyzer.
-3. Level.
-4. De-ess.
-5. Low-Mid.
+3. Compression (with detector EQ).
+4. De-ess (range slider, lookahead, oversampling).
+5. Multiband (1–6 bands, default one low-mid band).
 6. Tune.
+6b. Resonance (low-latency mode first, then High resolution).
+6c. EQ piano scale and EQ Match (sidechain reference).
 7. Oversampling evaluation, presets, A/B, undo, accessibility, AAX signing, installer update, DAW testing.
 
 At the end of each phase: build, run tests, DAW check, measure latency, listen to real vocals, update this document.
