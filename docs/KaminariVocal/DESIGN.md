@@ -1,6 +1,6 @@
-# White Lightning — Design Document (pre-implementation)
+# Kaminari Vocal — Design Document (pre-implementation)
 
-Status: design only. No White Lightning code exists yet. Phase 1 starts after this document is approved.
+Status: design only. No Kaminari Vocal code exists yet. Phase 1 starts after this document is approved.
 
 ## 0. Current project state and recorded decisions
 
@@ -15,7 +15,7 @@ Status: design only. No White Lightning code exists yet. Phase 1 starts after th
 | Latency | 0 samples reported (no lookahead, no oversampling, IIR only) |
 | Tests | One console executable: level checks for gain, EQ, compressors, de-esser; PNG editor snapshots |
 | Packaging | `build_mac.sh`, `.pkg` installer and uninstaller scripts |
-| Missing vs. White Lightning spec | Pitch correction, 8 bands, extra filter types, slopes, dynamic band, low-mid dynamics, Basic/Advanced views, presets, A/B, undo, tooltips/context menus/keyboard entry, AU, AAX, latency measurement tests |
+| Missing vs. Kaminari Vocal spec | Pitch correction, 8 bands, extra filter types, slopes, dynamic band, low-mid dynamics, Basic/Advanced views, presets, A/B, undo, tooltips/context menus/keyboard entry, AU, AAX, latency measurement tests |
 
 Reusable: the biquad math, the analyser FIFO pattern, the test-harness pattern, the build and installer scripts.
 Not reused: the FET/opto compressor models (they are modeled on specific hardware and are outside the product scope), all parameter IDs, all GUI code.
@@ -24,27 +24,27 @@ Not reused: the FET/opto compressor models (they are modeled on specific hardwar
 
 | Topic | Decision |
 | --- | --- |
-| Relation to old plug-in | White Lightning **replaces** Channel Strip. Phase 1 deletes `ChannelStrip/` and creates `WhiteLightning/` with a new plug-in code. Sessions saved with Channel Strip will not load White Lightning. |
+| Relation to old plug-in | Kaminari Vocal **replaces** Channel Strip. Phase 1 deletes `ChannelStrip/` and creates `KaminariVocal/` with a new plug-in code. Sessions saved with Channel Strip will not load Kaminari Vocal. |
 | Latency budget | Total reported plug-in latency of **≤ 128 samples at 48 kHz** (2.67 ms), target ~96. The earlier 74-sample figure is superseded. |
 | Pitch correction character | Classic, period-based, low-latency correction (not a modern formant-preserving mode). Best quality that fits the budget. |
 | Colors | Navy and white base, one electric ice-blue accent, amber for warnings, red only for clipping. |
 | Platform | Intel Mac (2018 hardware), macOS Sequoia. Formats: VST3, AU, AAX. Architecture x86_64 (universal optional). |
 | Host categories | EQ, Dynamics, Pitch Correction. VST3: `Fx EQ Dynamics "Pitch Shift"`. AAX: `EQ Dynamics PitchShift` (bit flags, combined). AU has no category list; Logic files it under the manufacturer name. |
 | Reported latency | 96 samples at 48 kHz for now. To be revisited in Phase 6 (see section 4). |
-| Product name | Pending: "White Lightning" or "ThundernLightnin". Plug-in code and parameter IDs do not depend on the name. |
+| Identity | Product **Kaminari Vocal**, company **Kaminari Audio**. Manufacturer code `Kmni`, plug-in code `KmVc`, bundle ID `com.kaminariaudio.kaminarivocal`. Codes are permanent after the first shared build. A name search found no audio company or plug-in using either name; no trademark search has been done. |
 
 ### 0.3 Platform facts that affect the plan
 
 - JUCE 8 ships the AAX SDK, so an AAX build needs no separate SDK download. Running AAX in retail Pro Tools requires PACE signing. Avid provides the PACE signing tools free to registered AAX developers; signing needs an iLok. The user must register with Avid (devauth@avid.com) for the Pro Tools Developer build and signing access. Until then, AAX is built and tested in the Pro Tools Developer build only, and retail Pro Tools continues to use VST3 through Blue Cat PatchWork.
 - macOS Sequoia is the last macOS release that supports 2018 Intel Macs. Pro Tools 2024.10 and later support Sequoia. Avid lists an audio-performance issue on high-core-count Intel Macs under Sonoma, Sequoia, and Tahoe.
-- Waves Tune Real-Time reports 0 samples to the host; its actual delay varies from 0 to 4 ms with the pitch period. White Lightning reports a fixed latency instead (see section 4) so that host delay compensation is correct.
+- Waves Tune Real-Time reports 0 samples to the host; its actual delay varies from 0 to 4 ms with the pitch period. Kaminari Vocal reports a fixed latency instead (see section 4) so that host delay compensation is correct.
 
 ---
 
 ## 1. Module architecture
 
 ```
-WhiteLightning/
+KaminariVocal/
   CMakeLists.txt                FORMATS VST3 AU AAX, x86_64, macOS 10.15+
   Source/
     PluginProcessor.{h,cpp}     owns APVTS, engine, presets, A/B, undo manager
@@ -269,7 +269,7 @@ Default size 1100 × 680 px, minimum 880 × 544, scale 75–200 % in 25 % steps 
 
 ```
 ┌───────────────────────────────────────────────────────────────────────────────────────────────┐
-│ ⚡ WHITE LIGHTNING   [ BASIC | Advanced ]   Preset: Vocal Track ▾  ◀ ▶  [Save]  [A|B] [A→B]     │
+│ ⚡ KAMINARI VOCAL    [ BASIC | Advanced ]   Preset: Vocal Track ▾  ◀ ▶  [Save]  [A|B] [A→B]     │
 │                                         ⚡ 96 smp · 2.0 ms   OS: Off   Undo ↶  Redo ↷   100% ▾  │
 ├────┬──────────────────────────────────────────────────────────────────────────────────────┬────┤
 │ IN │  EQ  [⏻]                                     Analyzer [Pre|Post|Off]  Zoom [−][+]    │OUT │
@@ -296,7 +296,7 @@ The header and both meter rails stay. The module tabs replace the four strips; t
 
 ```
 ┌───────────────────────────────────────────────────────────────────────────────────────────────┐
-│ ⚡ WHITE LIGHTNING   [ Basic | ADVANCED ]   Preset …   [A|B]   ⚡ 96 smp · 2.0 ms   OS: Off     │
+│ ⚡ KAMINARI VOCAL    [ Basic | ADVANCED ]   Preset …   [A|B]   ⚡ 96 smp · 2.0 ms   OS: Off     │
 ├────┬──────────────────────────────────────────────────────────────────────────────────────┬────┤
 │ IN │ [TUNE ⏻ ●] [EQ ⏻] [LEVEL ⏻ ▮▮] [DE-ESS ⏻ ⋰] [LOW-MID ⏻ ┆]     ← module tabs        │OUT │
 │    ├──────────────────────────────────────────────────────────────────────────────────────┤    │
@@ -341,7 +341,7 @@ White on navy-900 has a contrast ratio above 15:1; mist on navy-900 is above 7:1
 
 ### 6.2 Lightning elements (original artwork, drawn as vector paths)
 
-- Logo: a three-segment bolt glyph next to the wordmark "WHITE LIGHTNING" in white.
+- Logo: a three-segment bolt glyph next to the wordmark "KAMINARI VOCAL" in white.
 - Power/bypass buttons: a bolt icon; enabled = filled bolt in `bolt`; bypassed = outlined bolt in `mist` with a slash and the word "OFF".
 - Knob pointer: a short zig-zag notch; value arc in `bolt`.
 - Meters: segmented "charge" bars with 2 px gaps.
@@ -484,7 +484,7 @@ Graph-mode pitch editing, formant controls, harmony, vibrato editing, melody ext
 
 ## 11. Phase plan (revised for the decisions above)
 
-1. Delete `ChannelStrip/`. New `WhiteLightning/` CMake project (VST3, AU, AAX), pass-through, full parameter set from section 2, state, UI shell with theme, meters, bypass, constant latency report (96 samples at 48 kHz from the start), test runner with latency and ID tests.
+1. Delete `ChannelStrip/`. New `KaminariVocal/` CMake project (VST3, AU, AAX), pass-through, full parameter set from section 2, state, UI shell with theme, meters, bypass, constant latency report (96 samples at 48 kHz from the start), test runner with latency and ID tests.
 2. EQ with graph and analyzer.
 3. Level.
 4. De-ess.
