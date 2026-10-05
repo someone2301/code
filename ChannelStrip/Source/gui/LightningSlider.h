@@ -7,8 +7,8 @@
 
 // Vertical slider drawn as a thunder cloud with a row of lightning strikes below it.
 //
-// The user pulls a grip straight down from the centre of the cloud. Pulling down raises the parameter
-// value and switches on more strikes across the width, from the centre outwards; pushing up switches them
+// A brass fader sits to the right of the cloud. Pulling it down raises the parameter value and switches
+// on more strikes across the width, from the centre outwards (grey strikes turn white); pushing up switches them
 // off in reverse order. An active strike always glows over its full length. The drawing is driven only by
 // the parameter's value (through a ParameterAttachment), so automation, preset loads and host changes move
 // it exactly like a mouse drag does.
@@ -29,6 +29,9 @@ public:
         juce::Colour text       { 0xfff4f7fc };
         juce::Colour subText    { 0xffa9b8d6 };
         juce::Colour editBack   { 0xff0b1a33 };
+        juce::Colour brassLight { 0xfff3dc9a };
+        juce::Colour brassMid   { 0xffc9a253 };
+        juce::Colour brassDark  { 0xff7a5a22 };
     };
 
     LightningSlider (juce::RangedAudioParameter& p, const HostTempo& tempoSource, const juce::String& captionText)
@@ -40,7 +43,7 @@ public:
     {
         setWantsKeyboardFocus (true);
         setTitle (param.getName (64));
-        setDescription ("Vertical slider. Pull down from the cloud to increase, push up to decrease.");
+        setDescription ("Vertical fader. Pull down to increase, push up to decrease.");
         setHelpText ("Shift-drag for fine control. Double-click to reset. Double-click the value to type it.");
 
         valueLabel.setJustificationType (juce::Justification::centred);
@@ -189,21 +192,41 @@ public:
         g.setColour (colours.cloudLight.withAlpha (0.35f));
         g.strokePath (cloudPath, juce::PathStrokeType (0.8f));
 
-        // pull grip hanging from the centre of the cloud
-        const float gy = gripY();
-        const float cx = cloud.getCentreX();
-        g.setColour (colours.core.withAlpha (enabled ? 0.55f : 0.25f));
-        g.drawLine (cx, cloud.getBottom() - 2.0f, cx, gy, 1.2f);
-        const auto grip = juce::Rectangle<float> (gripWidth(), 6.0f).withCentre ({ cx, gy });
-        g.setColour (colours.bolt.withAlpha ((enabled ? 0.35f : 0.1f) * pulse));
-        g.fillRoundedRectangle (grip.expanded (3.0f), 5.0f);
-        g.setColour (enabled ? colours.core : colours.subText);
-        g.fillRoundedRectangle (grip, 3.0f);
+        // brass fader to the right of the cloud: slot, ticks, cap
+        const auto fader = faderArea();
+        g.setColour (juce::Colour (0xff05080f));
+        g.fillRoundedRectangle (juce::Rectangle<float> (4.0f, fader.getHeight()).withCentre (fader.getCentre()), 2.0f);
+        g.setColour (colours.subText.withAlpha (0.45f));
+        for (int t = 0; t <= 10; ++t)
+        {
+            const float ty = faderTop() + faderRange() * (float) t / 10.0f;
+            const float len = (t % 5 == 0) ? 5.0f : 3.0f;
+            g.drawHorizontalLine ((int) ty, fader.getX(), fader.getX() + len);
+            g.drawHorizontalLine ((int) ty, fader.getRight() - len, fader.getRight());
+        }
+        const auto grip = capBounds();
+        g.setColour (juce::Colours::black.withAlpha (0.45f));
+        g.fillRoundedRectangle (grip.translated (0.0f, 1.5f), 2.5f);
+        juce::ColourGradient brass (colours.brassLight, grip.getX(), grip.getY(), colours.brassDark, grip.getX(), grip.getBottom(), false);
+        brass.addColour (0.45, colours.brassMid);
+        g.setGradientFill (brass);
+        g.fillRoundedRectangle (grip, 2.5f);
+        g.setColour (colours.brassDark.darker (0.4f));
+        g.drawRoundedRectangle (grip, 2.5f, 0.8f);
+        g.setColour (colours.brassDark.darker (0.6f).withAlpha (0.8f));   // centre line and grip ridges
+        g.drawHorizontalLine ((int) grip.getCentreY(), grip.getX() + 2.0f, grip.getRight() - 2.0f);
+        g.setColour (colours.brassLight.withAlpha (0.7f));
+        g.drawHorizontalLine ((int) grip.getY() + 2, grip.getX() + 3.0f, grip.getRight() - 3.0f);
+        if (! enabled)
+        {
+            g.setColour (juce::Colours::black.withAlpha (0.4f));
+            g.fillRoundedRectangle (grip, 2.5f);
+        }
 
         if (hasKeyboardFocus (false))
         {
             juce::Path ring, dashed;
-            ring.addRoundedRectangle (grip.expanded (6.0f), 7.0f);
+            ring.addRoundedRectangle (grip.expanded (4.0f), 5.0f);
             const float dashes[] = { 3.0f, 2.5f };
             juce::PathStrokeType (1.5f).createDashedStroke (dashed, ring, dashes, 2);
             g.setColour (colours.bolt);
@@ -339,23 +362,39 @@ private:
         return b;
     }
 
+    // Cloud and strikes on the left, brass fader column on the right.
+    juce::Rectangle<float> faderArea() const
+    {
+        auto a = artArea();
+        return a.removeFromRight (juce::jlimit (16.0f, 24.0f, a.getWidth() * 0.18f));
+    }
+
+    juce::Rectangle<float> stormArea() const
+    {
+        auto a = artArea();
+        a.removeFromRight (faderArea().getWidth() + 4.0f);
+        return a;
+    }
+
+    static constexpr float capHeight = 12.0f;
+    float faderTop() const   { return faderArea().getY() + capHeight * 0.5f + 1.0f; }
+    float faderRange() const { return juce::jmax (1.0f, faderArea().getHeight() - capHeight - 2.0f); }
+
+    juce::Rectangle<float> capBounds() const
+    {
+        const auto f = faderArea();
+        return juce::Rectangle<float> (f.getWidth() - 2.0f, capHeight).withCentre ({ f.getCentreX(), faderTop() + norm * faderRange() });
+    }
+
     juce::Rectangle<float> cloudArea() const
     {
-        const auto a = artArea();
+        const auto a = stormArea();
         return a.withHeight (juce::jlimit (18.0f, 64.0f, a.getHeight() * 0.30f)).withTrimmedTop (2.0f);
     }
 
-    float gripWidth() const { return juce::jlimit (14.0f, 28.0f, artArea().getWidth() * 0.22f); }
+    float pullRange() const { return faderRange(); }
 
-    float pullRange() const
-    {
-        const auto a = artArea();
-        return juce::jmax (1.0f, a.getBottom() - 6.0f - (cloudArea().getBottom() + 6.0f));
-    }
-
-    float gripY() const { return cloudArea().getBottom() + 6.0f + norm * pullRange(); }
-
-    float strokeBase() const { return juce::jlimit (0.9f, 2.6f, artArea().getWidth() / (float) juce::jmax (1, numBolts) * 0.11f); }
+    float strokeBase() const { return juce::jlimit (0.9f, 2.6f, stormArea().getWidth() / (float) juce::jmax (1, numBolts) * 0.11f); }
 
     // Centre-out order: rank 0 is the middle strike, then alternately right and left of it.
     int rankOf (int i) const noexcept
@@ -378,7 +417,7 @@ private:
         norm = juce::jlimit (0.0f, 1.0f, param.convertTo0to1 (newValue));
         valueLabel.setText (getValueText(), juce::dontSendNotification);
         setTooltip (param.getName (64) + ": " + getValueText()
-                    + "\nPull down from the cloud to increase, Shift for fine, double-click to reset.");
+                    + "\nPull the fader down to increase, Shift for fine, double-click to reset.");
         if (auto* h = getAccessibilityHandler())
             h->notifyAccessibilityEvent (juce::AccessibilityEvent::valueChanged);
         repaint();
@@ -429,7 +468,7 @@ private:
     // Deterministic per parameter and size: strike count follows the width (odd, 3..9).
     void rebuildGeometry()
     {
-        const auto art = artArea();
+        const auto art = stormArea();
         const auto cloud = cloudArea();
 
         int n = juce::jlimit (3, 9, juce::roundToInt (art.getWidth() / 16.0f));
