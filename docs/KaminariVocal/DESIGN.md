@@ -117,10 +117,11 @@ Host bypass uses JUCE's `getBypassParameter` with a crossfaded bypass (not a sep
 | `tn_key` | Key | choice | C, C♯/D♭ … B | C | | B |
 | `tn_scale` | Scale | choice | Chromatic, Major, Natural Minor, Harmonic Minor, Melodic Minor, Major Pentatonic, Minor Pentatonic, Blues, Dorian, Mixolydian, Custom | Chromatic | | B |
 | `tn_range` | Vocal Range | choice | High (175–1100 Hz), Middle (110–700 Hz), Low (80–520 Hz), Deep (60–350 Hz) | Middle | | B |
-| `tn_strength` | Strength | float | 0 … 100 | 70 | % | B |
-| `tn_speed` | Response | float | 0 … 400 | 40 | ms | A |
-| `tn_natural` | Sustain Natural | float | 0 … 100 | 0 | % | A |
+| `tn_speed` | Retune Speed | float, skewed | 0 … 400 | 40 | ms | B (lightning slider, inverted: more strikes = faster) |
+| `tn_humanize` | Humanize | float | 0 … 100 | 20 | % | A |
 | `tn_note_0` … `tn_note_11` | Note C … B | bool | | per scale | | A |
+
+Retune Speed is how quickly a note is pulled to the target (0 ms = instant, hard-tuned sound). Humanize slows correction only on held notes, so sustained notes keep natural movement while short notes are still corrected.
 
 Scale behavior: choosing a named scale writes the 12 `tn_note_*` values. If the user edits a note afterwards, `tn_scale` is set to Custom. The note map is saved with presets and sessions.
 
@@ -170,18 +171,18 @@ Attack is immediate. When the host stops sending audio for more than 100 ms the 
 | `lv_knee` | Knee | float | 0 … 24 | 8 | dB | A |
 | `lv_range` | Range (max reduction) | float | 0 … 40 | 15 | dB | A |
 | `lv_detector` | Detector | choice | Peak, Smooth (RMS 10 ms) | Smooth | | A |
-| `lv_sc_hpf` | Detector High-Pass | float, log | 20 … 500 | 100 | Hz | A |
-| `lv_auto_makeup` | Auto Makeup | bool | | on | | A |
-| `lv_sc_lpf` | Detector Low-Pass | float, log | 2000 … 20000 | 16000 | Hz | A |
-| `lv_sc_eq_type` | Detector Filter Type | choice | Bell, Low Shelf, High Shelf, Band Pass, Notch, Tilt | Bell | | A |
-| `lv_sc_eq_freq` | Detector Filter Freq | float, log | 40 … 16000 | 5000 | Hz | A |
-| `lv_sc_eq_gain` | Detector Filter Gain | float | −18 … +18 | 0 | dB | A |
-| `lv_sc_eq_q` | Detector Filter Q | float, log | 0.3 … 8 | 1.0 | | A |
+| `lv_mix` | Mix (parallel) | float | 0 … 100 | 100 | % | A |
+| `lv_wet_gain` | Wet Gain | float | −12 … +12 | 0 | dB | A |
+| `lv_sc<N>_used/on/type/freq/gain/q/slope` | Detector EQ band N (N = 1..8) | same types and ranges as the main EQ bands | | band 1 Low Cut 100 Hz, others unused | | A |
 | `lv_sc_listen` | Detector Audition | bool | | off | | A (non-auto) |
 
-Detector EQ: high-pass (`lv_sc_hpf`), low-pass (`lv_sc_lpf`) and one adjustable filter shape only the signal the leveler reacts to; the vocal is not filtered. Audition plays the detector signal (latched, amber "AUDITION" tag, Escape exits).
+Detector EQ: 8 bands with the same filter types, ranges and graph as the main EQ, plus the same analyzer. The analyzer can show the detector signal before the detector EQ (Pre) and after it (Post); each view is switched on or off separately. It shapes only the signal the compressor reacts to; the vocal is not filtered.
 
-Advanced Level display: a scrolling level view (input level as a translucent area, output level as a brighter area, gain reduction as a line hanging from the top, threshold as a draggable dashed line), a small knee/transfer-curve inset, and IN / GR / OUT meters on the right. No separate gain-reduction history graph.
+Parallel compression: `lv_mix` blends the compressed (wet) signal with the uncompressed (dry) signal; dry and wet stay time-aligned because the compressor has no latency. `lv_wet_gain` sets the wet level before the blend.
+
+Compressor type: a clean digital feed-forward compressor (VCA-style behavior; not an opto or FET model). Soft knee, peak or smooth (RMS) detection, user attack and release, fixed (not program-dependent) timing. The Basic one-fader control works like the single compression fader of Waves R-Vox: one control sets how hard it works, with bounded automatic makeup gain. Audition plays the detector signal (latched, amber "AUDITION" tag, Escape exits).
+
+Advanced Compression display: a scrolling level view (input level as a translucent area, output level as a brighter area, gain reduction as a line hanging from the top, threshold as a draggable dashed line), a small knee/transfer-curve inset, and IN / GR / OUT meters on the right. No separate gain-reduction history graph.
 
 Basic "Compression" control = `lv_thresh` displayed as `Compression % = −thresh / 50 × 100` (default −14 dB = 28 %). The readout shows both: "28 % (−14.0 dB)".
 
@@ -251,17 +252,23 @@ Bands may not overlap; the DSP keeps each band's high edge ≥ 1.5 × its low ed
 | ID | Name | Type | Range | Default | Unit | Vis |
 | --- | --- | --- | --- | --- | --- | --- |
 | `rs_on` | Resonance On | bool | | off | | B |
-| `rs_depth` | Depth | float | 0 … 20 | 4 | dB | B |
-| `rs_focus` | Focus | float | 0 … 100 | 50 | % | A |
-| `rs_speed` | Speed | float | 0 … 100 | 50 | % | A |
+| `rs_depth` | Depth | float | 0 … 20 | 4 | | B (lightning slider) |
+| `rs_detail` | Detail | float | 0 … 100 | 50 | % | A |
+| `rs_attack` | Attack | float, log | 0.5 … 50 | 5 | ms | A |
+| `rs_release` | Release | float, log | 5 … 500 | 100 | ms | A |
+| `rs_maxcut` | Max Cut | float | 0 … 24 (0 = off) | 8 | dB | A |
 | `rs_mix` | Mix | float | 0 … 100 | 100 | % | A |
 | `rs_trim` | Trim | float | −12 … +12 | 0 | dB | A |
-| `rs_mode` | Mode | choice | Adaptive, Fixed | Adaptive | | A |
-| `rs_quality` | Processing | choice | Low latency, High resolution | Low latency | | A |
-| `rs_sens<K>_freq/gain/q` | Sensitivity node K (K = 1..3) | float | 20 … 20000 Hz / ±12 dB / 0.3 … 4 | 120 Hz, 3 kHz, 12 kHz / 0 dB / 1 | | A |
+| `rs_mode` | Mode | choice | Soft (adaptive threshold), Hard (fixed threshold) | Soft | | A |
+| `rs_quality` | Processing | choice | Low latency, Standard, Linear phase | Low latency | | A |
+| `rs_detail_tilt` / `rs_attack_tilt` / `rs_release_tilt` | Tilt (side panel) | float | −100 … +100 | 0 | % | A |
+| `rs_chan` | Channel mode | choice | Stereo, Mid/Side, Left/Right | Stereo | | A |
+| `rs_link` | Link | float | 0 … 100 | 100 | % | A |
+| `rs_sidechain` | External sidechain | bool | | off | | A |
+| `rs_node<K>_on/shape/freq/gain/q` | Sensitivity node K (K = 1..8) | shapes: Low cut, Low shelf, Bell, Band pass, Band reject, High shelf, High cut, Tilt | | 3 nodes: Low shelf 120 Hz, Bell 3 kHz, High shelf 12 kHz, 0 dB | | A |
 | `rs_delta` | Delta (hear removed) | bool | | off | | A (non-auto) |
 
-Low latency (default) uses a bank of zero-latency dynamic IIR notches driven by a resonance detector, so it adds 0 samples (the same figure oeksound states for soothe3's low-latency mode at 44.1/48 kHz). High resolution uses an STFT and adds a fixed, reported latency (measured in its phase). This is an original design; no third-party code or tuning is copied.
+The parameter set follows soothe3 as described in its manual and reviews (Depth, Detail, Attack, Release, Max Cut, Mix, Trim, Soft/Hard mode, Delta, frequency tilt for Detail/Attack/Release, eight node shapes, low-latency and linear-phase processing). The implementation, names of IDs, ranges and artwork are original. Low latency (default) uses a bank of zero-latency dynamic IIR notches driven by a resonance detector, so it adds 0 samples at 44.1/48 kHz (the figure oeksound states for soothe3's low-latency mode). Standard and Linear phase use an STFT and add a fixed, reported latency (measured in their phase). This is an original design; no third-party code or tuning is copied.
 
 ### 2.7b Non-parameter state added
 
@@ -441,7 +448,8 @@ Meters: Level GR = solid white bars, De-ess GR = bolt bars with diagonal hatch, 
 Used for Tune Strength, Level Compression, De-ess, and Low-Mid (Basic view). Input and Output are plain circular knobs beside their always-visible meters. Advanced detail controls stay plain knobs (no bolt pointer).
 
 - No box or track. A dark thunder cloud (shaded billows) sits at the top; a row of full-length lightning strikes hangs below it, each with a jagged trunk, side branches, and fine filaments. Strike count follows the width of the storm area (odd, 3–9).
-- A brass fader (dark slot, scale ticks, brass cap with a centre line) sits to the right of the cloud. **Pulling the fader down raises the value**; pushing up lowers it. Mouse wheel and arrow keys follow the same direction (Down/PageDown = more). The whole control is the drag area.
+- A brass fader in the R-Vox style (long dark slot, wide brass cap with three grip ridges) sits to the right of the cloud. Scale marks beside the slot are shown on every lightning slider except Compression.
+- Parameters where a lower value means more effect (Retune Speed, thresholds) use an inverted mapping, so more strikes always means more effect. **Pulling the fader down raises the value**; pushing up lowers it. Mouse wheel and arrow keys follow the same direction (Down/PageDown = more). The whole control is the drag area.
 - The value adds strikes **across the width, from the centre outwards** (centre, then right, left, right, …). A strike that is on glows over its full length; the next strike fades in as the value approaches it. Strikes that are off are grey; they turn white (with glow) as they switch on. The cloud is always visible. The underside of the cloud lights up with the number of active strikes.
 - The drawing is driven only by the parameter value through a `ParameterAttachment`, so automation, preset loads, A/B, undo, and host changes update it exactly like a drag. Range, default, and automation behavior are the parameter's own.
 - Glow: active strikes pulse with the host's beat. The audio thread publishes tempo, ppq position, and play state once per block (sequence-locked, no allocation); the GUI extrapolates from that block's anchor only (≤ 250 ms), so it is re-synchronized on every block and cannot drift. Pulse peaks on the beat (cosine, no hard edges); above 144 BPM it pulses every 2 beats so it stays ≤ 2.4 Hz. No tempo, stopped transport, or no recent block → steady glow.

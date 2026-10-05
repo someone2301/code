@@ -60,6 +60,9 @@ public:
         attachment.sendInitialUpdate();
     }
 
+    // Scale marks beside the fader slot (off for the compression control).
+    void setShowScale (bool shouldShow) { showScale = shouldShow; repaint(); }
+
     void setColours (const Colours& c)
     {
         colours = c;
@@ -197,7 +200,7 @@ public:
         g.setColour (juce::Colour (0xff05080f));
         g.fillRoundedRectangle (juce::Rectangle<float> (4.0f, fader.getHeight()).withCentre (fader.getCentre()), 2.0f);
         g.setColour (colours.subText.withAlpha (0.45f));
-        for (int t = 0; t <= 10; ++t)
+        for (int t = 0; showScale && t <= 10; ++t)
         {
             const float ty = faderTop() + faderRange() * (float) t / 10.0f;
             const float len = (t % 5 == 0) ? 5.0f : 3.0f;
@@ -213,10 +216,11 @@ public:
         g.fillRoundedRectangle (grip, 2.5f);
         g.setColour (colours.brassDark.darker (0.4f));
         g.drawRoundedRectangle (grip, 2.5f, 0.8f);
-        g.setColour (colours.brassDark.darker (0.6f).withAlpha (0.8f));   // centre line and grip ridges
-        g.drawHorizontalLine ((int) grip.getCentreY(), grip.getX() + 2.0f, grip.getRight() - 2.0f);
+        g.setColour (colours.brassDark.darker (0.6f).withAlpha (0.85f));  // three grip ridges
+        for (int r = 1; r <= 3; ++r)
+            g.drawHorizontalLine ((int) (grip.getY() + grip.getHeight() * (float) r / 4.0f), grip.getX() + 3.0f, grip.getRight() - 3.0f);
         g.setColour (colours.brassLight.withAlpha (0.7f));
-        g.drawHorizontalLine ((int) grip.getY() + 2, grip.getX() + 3.0f, grip.getRight() - 3.0f);
+        g.drawHorizontalLine ((int) grip.getY() + 1, grip.getX() + 3.0f, grip.getRight() - 3.0f);
         if (! enabled)
         {
             g.setColour (juce::Colours::black.withAlpha (0.4f));
@@ -366,7 +370,7 @@ private:
     juce::Rectangle<float> faderArea() const
     {
         auto a = artArea();
-        return a.removeFromRight (juce::jlimit (16.0f, 24.0f, a.getWidth() * 0.18f));
+        return a.removeFromRight (juce::jlimit (20.0f, 28.0f, a.getWidth() * 0.2f));
     }
 
     juce::Rectangle<float> stormArea() const
@@ -376,7 +380,7 @@ private:
         return a;
     }
 
-    static constexpr float capHeight = 12.0f;
+    static constexpr float capHeight = 16.0f;
     float faderTop() const   { return faderArea().getY() + capHeight * 0.5f + 1.0f; }
     float faderRange() const { return juce::jmax (1.0f, faderArea().getHeight() - capHeight - 2.0f); }
 
@@ -528,7 +532,7 @@ private:
     int numBolts = 0;
 
     float norm = 0.0f, dragNorm = 0.0f, lastY = 0.0f, glow = HostTempo::steadyGlow;
-    bool dragging = false;
+    bool dragging = false, showScale = true;
 
     juce::VBlankAttachment vblank { this, std::function<void()> ([this] { updateGlow (juce::Time::getMillisecondCounterHiRes()); }) };
 

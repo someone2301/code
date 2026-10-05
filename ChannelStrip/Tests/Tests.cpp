@@ -207,7 +207,7 @@ int main (int argc, char** argv)
         const float defBefore = prm.getDefaultValue();
 
         LightningSlider sl (prm, p.hostTempo, "INPUT");
-        sl.setBounds (0, 0, 96, 236);
+        sl.setBounds (0, 0, 130, 236);   // wide enough for 5 strikes
 
         prm.setValueNotifyingHost (prm.convertTo0to1 (12.0f));   // host automation on the message thread
         check (std::abs (sl.getLitFraction() - prm.convertTo0to1 (12.0f)) < 1.0e-6f, "slider follows host automation");

@@ -280,6 +280,8 @@ public:
         optoText.text = juce::Colour (0xff1b1c1f);
         optoText.subText = juce::Colour (0xff2a2c30);
         laPeak.setColours (optoText);
+        fetIn.setShowScale (false);    // compression faders have no scale lines
+        laPeak.setShowScale (false);
         for (auto* b : { &onBtn, &modeFetBtn, &modeOptoBtn, &compressBtn, &limitBtn })
             addAndMakeVisible (*b);
 
