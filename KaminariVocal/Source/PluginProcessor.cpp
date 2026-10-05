@@ -1,15 +1,20 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
+#include <BinaryData.h>
 
 KaminariVocalProcessor::KaminariVocalProcessor()
     : AudioProcessor (BusesProperties()
                           .withInput  ("Input",  juce::AudioChannelSet::stereo(), true)
                           .withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
-      apvts (*this, nullptr, "KAMINARI_VOCAL", kvp::createLayout())
+      apvts (*this, nullptr, "KAMINARI_VOCAL", kvp::createLayout()),
+      presets (apvts, juce::String::fromUTF8 (BinaryData::factory_json, BinaryData::factory_jsonSize))
 {
     sendPtrs[Reverb]  = { raw (kvid::rvOn), raw (kvid::rvSend), raw (kvid::rvTap) };
     sendPtrs[Delay]   = { raw (kvid::dlOn), raw (kvid::dlSend), raw (kvid::dlTap) };
     sendPtrs[Widener] = { raw (kvid::wdOn), raw (kvid::wdSend), raw (kvid::wdTap) };
+
+    // A new instance starts on the "Default" chain preset (a saved session replaces it in setStateInformation).
+    presets.loadChainPreset ("Default");
 }
 
 bool KaminariVocalProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
@@ -311,6 +316,7 @@ void KaminariVocalProcessor::getStateInformation (juce::MemoryBlock& destData)
     auto state = apvts.copyState();
     state.setProperty ("ui_view", advancedView.load() ? "advanced" : "basic", nullptr);
     state.setProperty ("ui_send", advancedSend.load(), nullptr);
+    presets.writeState (state);
     if (auto xml = state.createXml())
         copyXmlToBinary (*xml, destData);
 }
@@ -324,6 +330,7 @@ void KaminariVocalProcessor::setStateInformation (const void* data, int sizeInBy
             advancedView.store (state.getProperty ("ui_view", "basic").toString() == "advanced");
             advancedSend.store (juce::jlimit (0, (int) numSends - 1, (int) state.getProperty ("ui_send", 0)));
             apvts.replaceState (state);
+            presets.readState (state);
         }
 }
 

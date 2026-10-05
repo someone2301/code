@@ -24,6 +24,7 @@ public:
     kvui::WidenerPanel& widenerPanel() { return widener; }
     juce::TextButton& viewButton (bool advanced) { return advanced ? advancedButton : basicButton; }
     juce::TextButton& sendTab (int s) { return tabs[(size_t) s]; }
+    PresetBar& chainPresets() { return chain; }
 
 private:
     void updateView();
@@ -33,6 +34,7 @@ private:
     juce::TooltipWindow tooltips { this, 350 };
 
     juce::TextButton basicButton { "Basic" }, advancedButton { "Advanced" };
+    PresetBar chain;
     Knob inGain, outGain;
     LevelMeter inMeter, outMeter;
 

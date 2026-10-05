@@ -491,6 +491,109 @@ int main (int argc, char** argv)
         check (b.advancedView.load() && b.advancedSend.load() == 2, "Basic/Advanced view and the open send panel are saved with the session");
     }
 
+
+    // ---- presets --------------------------------------------------------------------------------------------------
+    {
+        KaminariVocalProcessor p;
+        auto& pm = p.presets;
+        const auto problems = pm.validateFactoryData();
+        for (auto& pr : problems) std::printf ("  %s\n", pr.toRawUTF8());
+        check (problems.isEmpty(), "factory preset data is valid (names, IDs, choice names and ranges)");
+        check (pm.currentChainPreset() == "Default" && ! pm.isChainModified(), "a new instance starts on the Default chain preset");
+
+        int moduleCount = 0, presetCount = 0;
+        for (auto& m : pm.getModules()) { ++moduleCount; presetCount += (int) m.factory.size(); }
+        check (moduleCount == 9 && presetCount >= 54 && pm.getFactoryChains().size() >= 10,
+               "factory presets for all 9 modules (" + juce::String (presetCount) + " module presets) and "
+               + juce::String ((int) pm.getFactoryChains().size()) + " chain presets");
+
+        setParam (p, kvid::rvOn, 1.0f);
+        setParam (p, kvid::rvSend, -3.0f);
+        setParam (p, kvid::rvModRate, 3.0f);
+        setParam (p, kvid::dlFeedback, 77.0f);
+        check (pm.loadModulePreset ("reverb", "Vocal Plate"), "load reverb module preset 'Vocal Plate'");
+        check (juce::roundToInt (getParam (p, kvid::rvMode)) == 2 && std::abs (getParam (p, kvid::rvDecay) - 1.8f) < 0.01f
+               && std::abs (getParam (p, kvid::rvPreDelay) - 30.0f) < 0.05f,
+               "module preset sets its listed values (Plate, 1.8 s, 30 ms)");
+        check (std::abs (getParam (p, kvid::rvModRate) - 0.6f) < 0.01f, "module preset returns unlisted module values to their defaults");
+        check (getParam (p, kvid::rvOn) > 0.5f && std::abs (getParam (p, kvid::rvSend) + 3.0f) < 0.01f,
+               "module preset leaves the send's On switch and level alone");
+        check (std::abs (getParam (p, kvid::dlFeedback) - 77.0f) < 0.05f, "reverb preset does not touch the delay");
+        check (! pm.isModuleModified ("reverb") && pm.currentModulePreset ("reverb") == "Vocal Plate", "freshly loaded preset is not marked modified");
+        setParam (p, kvid::rvSize, 90.0f);
+        check (pm.isModuleModified ("reverb"), "changing a reverb control marks the reverb preset modified");
+        check (! pm.isModuleModified ("widener"), "untouched modules are not marked modified");
+
+        check (pm.loadChainPreset ("Pop Lead"), "load chain preset 'Pop Lead'");
+        check (getParam (p, kvid::rvOn) > 0.5f && std::abs (getParam (p, kvid::rvSend) + 14.0f) < 0.01f
+               && juce::roundToInt (getParam (p, kvid::rvMode)) == 2
+               && juce::roundToInt (getParam (p, kvid::dlT1Note)) == 2 && std::abs (getParam (p, kvid::msFocus) - 2000.0f) < 1.0f
+               && std::abs (getParam (p, kvid::dlFeedback) - 35.0f) < 0.05f,
+               "chain preset loads each module preset and its send overrides");
+        check (pm.currentChainPreset() == "Pop Lead" && pm.currentModulePreset ("delay") == "1/8 Throw"
+               && pm.currentModulePreset ("tune") == "Tight Pop", "chain preset records the module presets it used (built or not)");
+        pm.loadChainPreset ("Default");
+        check (getParam (p, kvid::rvOn) < 0.5f && getParam (p, kvid::dlOn) < 0.5f && getParam (p, kvid::wdOn) < 0.5f,
+               "chain preset 'Default' switches the sends off");
+
+        // every factory preset of the built modules loads and plays without problems
+        bool allOk = true;
+        prepare (p);
+        for (auto key : { "reverb", "delay", "widener" })
+            for (auto& pr : pm.findModule (key)->factory)
+            {
+                allOk = pm.loadModulePreset (key, pr) && allOk;
+                setParam (p, kvid::rvOn, 1.0f); setParam (p, kvid::dlOn, 1.0f); setParam (p, kvid::wdOn, 1.0f);
+                setParam (p, kvid::rvSend, 0.0f); setParam (p, kvid::dlSend, 0.0f); setParam (p, kvid::wdSend, 0.0f);
+                const auto r = render (p, 0.3, vocal);
+                for (int i = 0; i < r.out.getNumSamples(); ++i)
+                    allOk = allOk && std::isfinite (r.out.getSample (0, i)) && std::abs (r.out.getSample (0, i)) < 4.0f;
+            }
+        check (allOk, "every reverb, delay and widener factory preset loads and plays (finite, bounded)");
+        for (auto& c : pm.getFactoryChains())
+            allOk = pm.loadChainPreset (c) && allOk;
+        check (allOk, "every chain preset loads");
+
+        // user presets
+        auto tmp = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("kv-preset-test-" + juce::String (juce::Random::getSystemRandom().nextInt()));
+        pm.setUserFolder (tmp);
+        pm.loadModulePreset ("delay", "Worn Tape Echo");
+        setParam (p, kvid::dlFeedback, 62.0f);
+        check (pm.saveModulePreset ("delay", "My Echo / test"), "save a user delay preset");
+        bool listed = false;
+        for (auto& pr : pm.listModulePresets ("delay"))
+            listed = listed || (! pr.factory && pr.name == PresetManager::sanitiseName ("My Echo / test"));
+        check (listed && tmp.getChildFile ("Delay").getNumberOfChildFiles (juce::File::findFiles) == 1,
+               "user preset is listed after the factory presets and stored in the Delay folder");
+        pm.loadModulePreset ("delay", "Slapback");
+        check (pm.loadModulePreset ("delay", PresetManager::sanitiseName ("My Echo / test"))
+               && std::abs (getParam (p, kvid::dlFeedback) - 62.0f) < 0.05f && juce::roundToInt (getParam (p, kvid::dlStyle)) == 2,
+               "user preset restores its values (feedback 62 %, Worn Tape)");
+        setParam (p, kvid::wdSend, -7.0f);
+        check (pm.saveChainPreset ("My Chain"), "save a user chain preset");
+        pm.loadChainPreset ("Default");
+        check (pm.loadChainPreset ("My Chain") && std::abs (getParam (p, kvid::wdSend) + 7.0f) < 0.01f
+               && std::abs (getParam (p, kvid::dlFeedback) - 62.0f) < 0.05f, "user chain preset restores every parameter");
+        for (auto& pr : pm.listModulePresets ("delay"))
+            if (! pr.factory) pm.deleteUserPreset (pr);
+        check (tmp.getChildFile ("Delay").getNumberOfChildFiles (juce::File::findFiles) == 0, "user preset can be deleted");
+        tmp.deleteRecursively();
+
+        // stepping and session state
+        pm.loadModulePreset ("widener", "MicroShift Classic");
+        pm.stepModulePreset ("widener", 1);
+        const auto afterNext = pm.currentModulePreset ("widener");
+        pm.stepModulePreset ("widener", -1);
+        check (afterNext == "Subtle Doubler" && pm.currentModulePreset ("widener") == "MicroShift Classic", "next / previous step through the list");
+        pm.loadChainPreset ("R&B Smooth");
+        juce::MemoryBlock state;
+        p.getStateInformation (state);
+        KaminariVocalProcessor q;
+        q.setStateInformation (state.getData(), (int) state.getSize());
+        check (q.presets.currentChainPreset() == "R&B Smooth" && q.presets.currentModulePreset ("reverb") == "Big Ballad Hall"
+               && ! q.presets.isChainModified(), "preset names are saved with the session");
+    }
+
     // ---- editor ---------------------------------------------------------------------------------------------------
     {
         KaminariVocalProcessor p;
@@ -531,6 +634,14 @@ int main (int argc, char** argv)
         setParam (p, kvid::wdType, 0.0f);
         juce::MessageManager::getInstance()->runDispatchLoopUntil (50);
         check (wd.msDetune.isVisible() && wd.msFocus.isVisible() && ! wd.swWidth.isVisible(), "widener MicroShift: only MicroShift controls");
+
+        p.presets.loadChainPreset ("Pop Lead");
+        ed->chainPresets().onLoaded();
+        check (ed->chainPresets().displayText() == "Pop Lead" && rv.header.preset.displayText() == "Vocal Plate",
+               "header shows the chain preset; the reverb panel shows its module preset");
+        setParam (p, kvid::rvDecay, 5.0f);
+        check (rv.header.preset.displayText() == "Vocal Plate *" && ed->chainPresets().displayText() == "Pop Lead *",
+               "editing a control marks the module and chain presets modified");
 
         check (rv.header.level.slider.getTitle() == "Reverb Send" && wd.msFocus.slider.getTooltip().contains ("Crossover"),
                "controls carry accessible names and tooltips");

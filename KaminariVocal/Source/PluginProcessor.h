@@ -3,6 +3,7 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 #include "params/Params.h"
 #include "HostTempo.h"
+#include "state/PresetManager.h"
 
 // Kaminari Vocal processor.
 //
@@ -45,6 +46,7 @@ public:
     void setStateInformation (const void* data, int sizeInBytes) override;
 
     juce::AudioProcessorValueTreeState apvts;
+    PresetManager presets;   // factory and user presets, module and chain level (message thread only)
     HostTempo hostTempo;
 
     // Meters for the GUI (peak, linear).

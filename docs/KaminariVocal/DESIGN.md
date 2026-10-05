@@ -515,7 +515,7 @@ SideWidener follows the user-supplied SideWidener manual:
 - **Controls with no effect are hidden**: per reverb mode, per delay mode and time unit, and per widener type.
 - Every control has an accessible name, a tooltip with a one-sentence description, and the shared editing rules from section 7.1.
 - View and open panel are saved with the session (`ui_view`, `ui_send`).
-- Preview canvas: the Basic view gets a SENDS row under the module row (ON, level knob, mode, return meter, ADV link). The Advanced view gets a SENDS tab after the module tabs, with Reverb / Delay / Widener sub-tabs. The Widener has one artboard for each type.
+- Preview canvas: the header has the chain preset menu, and each Advanced module and send panel has its own preset menu (section 2.10). The Basic view gets a SENDS row under the module row (ON, level knob, mode, return meter, ADV link). The Advanced view gets a SENDS tab after the module tabs, with Reverb / Delay / Widener sub-tabs. The Widener has one artboard for each type.
 
 #### 2.9.5 Tests (`KaminariVocal/Tests/Tests.cpp`)
 
@@ -539,6 +539,60 @@ SideWidener follows the user-supplied SideWidener manual:
   - Switching type replaces the algorithm rather than layering.
 - **Persistence**: parameter and UI-state round trip.
 - **Editor**: views, Advanced buttons, hidden controls per mode, accessible names and tooltips.
+
+### 2.10 Presets (implemented for the sends; data for every module)
+
+Two levels, both with factory and user presets:
+
+- **Module presets**:
+  - Each Advanced module panel, including each send panel, has its own preset bar: previous, name menu, next, Save.
+  - A module preset sets only that module's sound parameters. Anything it does not list returns to its default.
+  - It never changes the module's On switch, a send's On, level or tap, or Tune's Key, Scale, Range and note map, because those belong to the song or the routing.
+- **Chain presets**:
+  - The header holds a chain preset bar, visible in both Basic and Advanced view. It is how the Basic view gets factory presets.
+  - A chain preset picks one module preset per module. It then sets its overrides (module and send On switches, send levels), and every other global parameter returns to its default.
+  - A new instance starts on the "Default" chain preset.
+- **Modified flag**: a name shows `*` when any parameter in its scope differs from the values right after loading.
+- **Storage**:
+  - Factory data lives in `KaminariVocal/Presets/factory.json`, embedded in the plug-in.
+  - User presets are `.kvpreset` XML files in `~/Library/Audio/Presets/Kaminari Audio/Kaminari Vocal/<Module>/` and `.../Chains/` on macOS.
+  - Choice values are stored by name, so reordering a choice list does not break presets.
+  - The loaded preset names are saved with the session.
+- **Unbuilt modules**: parameters of modules that are not built yet are skipped when loading. Their presets are already defined, so they work as soon as each module exists.
+
+**Tune** (6): Natural (Gentle correction that keeps the singer's movement); Subtle Polish (Slow, almost invisible correction for good takes); Tight Pop (Fast correction for modern pop leads); Hard Tune (Instant pitch snapping, the classic hard-tuned effect); Melodic Rap (Very fast with a little humanize on held notes); Slow Glide (Audible, smooth glides between notes).
+
+**EQ** (9): Flat (No bands); Vocal Clean-up (Low cut plus a small dip in the low mids); Presence (Low cut and a broad lift around 3 kHz); Air (High shelf for breath and sheen); De-mud (Cuts boxiness and boom in the low mids); Warmth (Gentle low shelf lift and slightly softer top); Bright Pop (Clean-up, presence and air together); Podcast Voice (Clear speech: low cut, de-mud, presence and a little air); Telephone (Narrow band-limited effect voice).
+
+**Multiband** (6): Low-Mid Control (The default: one band, 100-500 Hz); Proximity Tamer (Controls bass build-up from singing close to the mic); Box Remover (Dynamic cut of boxy 300-700 Hz only when it builds up); Harshness Control (Tames 2.5-6 kHz on loud, edgy notes); Even Vocal 3-Band (Low-mid, harshness and top-end control together); Upward Air (Brings up quiet breath and detail above 8 kHz).
+
+**Compression** (7): Clean Vocal (Transparent leveling, the default); Smooth Leveler (Slow, soft, opto-like riding of the level); Upfront Pop (Holds a pop lead firmly in front of the mix); Rap Punch (Fast, punchy control that keeps consonants clear); Parallel Crush (Heavy compression blended with the dry vocal); Gentle Glue (Light, wide-knee compression); Broadcast (Dense, consistent level for speech; uses lookahead).
+
+**De-ess** (7): Standard (The default for most voices); Gentle (Light touch for already smooth recordings); Bright Singer (Strong reduction for very sibilant voices); Higher Voice (Detection range shifted up for high voices); Lower Voice (Detection range shifted down for low voices); Wideband Soft (Turns the whole vocal down slightly on esses); Harsh S Fix (Deep, focused reduction for piercing esses).
+
+**Resonance** (6): Gentle Smooth (Light, general smoothing (low latency)); Vocal Harshness (Targets ringing in the upper mids); Boxy Room (Reduces room and box resonances around 400 Hz); Mic Ringing (Hard mode with high detail for narrow, steady rings); Airy Polish (Smooths the top end, more above 2 kHz); Transparent (Subtle smoothing, blended at 70 %).
+
+**Reverb** (11): Vocal Plate (Classic bright plate for lead vocals); Short Room (Small, natural room to place the voice in a space); Big Ballad Hall (Large, lush hall with a long pre-delay); Air Ambience (Felt more than heard: subtle space and air); Smooth Plate (Clear, polished plate); Vintage Hall (Gritty, warm vintage-digital hall); Gated Vocal (Short gated burst); Reverse Swell (Rising, reverse-style envelope); Animated Wash (Long, moving chaotic hall that still sits in a mix); Cathedral Pad (Huge, open space with a very long decay); Palace Room (Realistic small-to-medium room character).
+
+**Delay** (9): Slapback (Single 110 ms tape slap, no repeats); 1/8 Throw (Tempo-synced eighth-note echoes); 1/4 Dotted (Dotted quarter echoes that fill gaps between phrases); Ping-Pong 1/8 (Eighth notes bouncing left and right); Wide Doubler (Two short, different echo times for width); Worn Tape Echo (Wobbly, dark tape repeats); Lo-Fi Radio Echo (Narrow, crunchy eighth-note echoes); Ambient Diffuse (Smeared, reverb-like quarter-note echoes); Swing 1/8 (Eighth-note echoes with a swing feel).
+
+**Widener** (7): MicroShift Classic (Style I at its own amounts); Subtle Doubler (Light Style II thickening that keeps the low end tight); Huge Width (Style III, more detune and delay); Vocal Air (Widens only the presence and air above 2 kHz); Side Subtle (SideWidener Mode 1, midrange-focused, mono safe); Side Wide (SideWidener Mode 2, full range); Side Room (SideWidener Mode 3: widest, with a room-like smear).
+
+**Chain presets** (11):
+
+| Chain | Description | Module presets (Tune / EQ / Multiband / Compression / De-ess / Resonance / Reverb / Delay / Widener) | Sends on |
+| --- | --- | --- | --- |
+| Default | Neutral starting point. Sends off. | Natural / Vocal Clean-up / Low-Mid Control / Clean Vocal / Standard / Gentle Smooth / Vocal Plate / 1/8 Throw / MicroShift Classic | none |
+| Pop Lead | Bright, tight, upfront lead with plate and eighth-note throws. | Tight Pop / Bright Pop / Low-Mid Control / Upfront Pop / Bright Singer / Vocal Harshness / Vocal Plate / 1/8 Throw / Vocal Air | Reverb -14 dB, Delay -20 dB, Widener -16 dB |
+| R&B Smooth | Warm, smooth leveling with a lush hall. | Natural / Warmth / Proximity Tamer / Smooth Leveler / Standard / Gentle Smooth / Big Ballad Hall / 1/4 Dotted / Subtle Doubler | Reverb -15 dB, Delay -22 dB |
+| Rap Vocal | Punchy and dry with a short room. | Melodic Rap / Presence / Proximity Tamer / Rap Punch / Standard / Gentle Smooth / Short Room / Slapback / Subtle Doubler | Reverb -22 dB, Delay -24 dB |
+| Melodic Rap | Fast tuning, punchy compression, ping-pong throws. | Melodic Rap / Bright Pop / Low-Mid Control / Rap Punch / Standard / Vocal Harshness / Smooth Plate / Ping-Pong 1/8 / Vocal Air | Reverb -18 dB, Delay -20 dB, Widener -18 dB |
+| Hard Tune | Instant pitch snapping with a wide plate. | Hard Tune / Bright Pop / Low-Mid Control / Upfront Pop / Standard / Gentle Smooth / Smooth Plate / 1/4 Dotted / MicroShift Classic | Reverb -16 dB, Delay -22 dB, Widener -18 dB |
+| Rock Grit | Mid-forward with tape echo and a vintage hall. | Subtle Polish / Presence / Harshness Control / Parallel Crush / Gentle / Vocal Harshness / Vintage Hall / Worn Tape Echo / Huge Width | Reverb -18 dB, Delay -20 dB |
+| Ballad Air | Open and breathy with a long hall. | Natural / Air / Upward Air / Smooth Leveler / Bright Singer / Airy Polish / Big Ballad Hall / 1/4 Dotted / Side Subtle | Reverb -12 dB, Delay -24 dB, Widener -14 dB |
+| Podcast Voice | Clear, even speech. No tuning or sends. | Natural / Podcast Voice / Proximity Tamer / Broadcast / Standard / Boxy Room / Air Ambience / Slapback / Side Subtle | none |
+| Backing Vocals Wide | Tucked-back, wide stacks. | Tight Pop / Vocal Clean-up / Even Vocal 3-Band / Gentle Glue / Harsh S Fix / Transparent / Smooth Plate / Wide Doubler / Huge Width | Reverb -14 dB, Delay -18 dB, Widener -10 dB |
+| Lo-Fi Phone | Telephone tone with crunchy echoes. | Natural / Telephone / Low-Mid Control / Parallel Crush / Gentle / Gentle Smooth / Short Room / Lo-Fi Radio Echo / Side Subtle | Reverb -20 dB, Delay -16 dB |
 
 ---
 

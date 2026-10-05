@@ -7,6 +7,7 @@ namespace
 
 KaminariVocalEditor::KaminariVocalEditor (KaminariVocalProcessor& p)
     : AudioProcessorEditor (&p), proc (p),
+      chain (p.presets, {}, "chain"),
       inGain (p.apvts, kvid::inGain, "IN", "Input gain before the channel and the sends."),
       outGain (p.apvts, kvid::outGain, "OUT", "Output gain of the dry vocal. Post-fader sends follow it."),
       inMeter (p.inPeak), outMeter (p.outPeak),
@@ -50,8 +51,15 @@ KaminariVocalEditor::KaminariVocalEditor (KaminariVocalProcessor& p)
     basicButton.onClick = [this] { if (basicButton.getToggleState()) showAdvanced (false, currentSend()); };
     advancedButton.onClick = [this] { if (advancedButton.getToggleState()) showAdvanced (true, currentSend()); };
 
-    for (auto* c : std::initializer_list<juce::Component*> { &inGain, &outGain, &inMeter, &outMeter })
+    for (auto* c : std::initializer_list<juce::Component*> { &inGain, &outGain, &inMeter, &outMeter, &chain })
         addAndMakeVisible (c);
+    chain.name.setTooltip ("Chain presets set every module and send at once.");
+    chain.onLoaded = [this]
+    {
+        chain.refresh();
+        for (auto* bar : { &reverb.header.preset, &delay.header.preset, &widener.header.preset })
+            bar->refresh();
+    };
 
     setSize (1040, 640);
     updateView();
@@ -113,8 +121,7 @@ void KaminariVocalEditor::paint (juce::Graphics& g)
 
     g.setColour (mist);
     g.setFont (uiFont (12.0f));
-    g.drawText ("Sends: returns are 100 % wet and added to the unchanged dry vocal  |  0 smp latency",
-                getLocalBounds().removeFromTop (52).withTrimmedLeft (480).withTrimmedRight (16), juce::Justification::centredRight);
+    g.drawText ("0 smp latency", getLocalBounds().removeFromTop (52).withTrimmedRight (16), juce::Justification::centredRight);
 
     if (! proc.advancedView.load())
     {
@@ -131,6 +138,7 @@ void KaminariVocalEditor::resized()
     auto views = header.withTrimmedLeft (300).removeFromLeft (180).withSizeKeepingCentre (180, 28);
     basicButton.setBounds (views.removeFromLeft (90));
     advancedButton.setBounds (views);
+    chain.setBounds (header.withTrimmedLeft (500).removeFromLeft (360).withSizeKeepingCentre (360, 28));
 
     auto left = b.removeFromLeft (96).reduced (8);
     auto right = b.removeFromRight (96).reduced (8);

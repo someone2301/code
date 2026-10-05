@@ -50,7 +50,11 @@ juce_add_plugin(KaminariVocal
 
 set(KV_SOURCES
     Source/PluginProcessor.cpp
-    Source/PluginEditor.cpp)
+    Source/PluginEditor.cpp
+    Source/state/PresetManager.cpp)
+
+# factory presets, embedded as BinaryData::factory_json
+juce_add_binary_data(KaminariVocalData SOURCES Presets/factory.json)
 
 target_sources(KaminariVocal PRIVATE ${KV_SOURCES})
 
@@ -64,6 +68,7 @@ target_compile_definitions(KaminariVocal PUBLIC ${KV_DEFINITIONS})
 
 target_link_libraries(KaminariVocal
     PRIVATE
+        KaminariVocalData
         juce::juce_audio_utils
         juce::juce_dsp
     PUBLIC
@@ -79,6 +84,6 @@ if(KV_BUILD_TESTS)
         JUCE_STANDALONE_APPLICATION=1
         JUCE_MODAL_LOOPS_PERMITTED=1)
     target_link_libraries(KaminariVocalTests
-        PRIVATE juce::juce_audio_utils juce::juce_dsp
+        PRIVATE KaminariVocalData juce::juce_audio_utils juce::juce_dsp
         PUBLIC  juce::juce_recommended_config_flags juce::juce_recommended_warning_flags)
 endif()

@@ -2,6 +2,7 @@
 
 #include "../PluginProcessor.h"
 #include "Widgets.h"
+#include "PresetBar.h"
 
 namespace kvui
 {
@@ -157,8 +158,10 @@ namespace kvui
     class SendHeader : public juce::Component
     {
     public:
-        SendHeader (KaminariVocalProcessor& p, int send, const char* onId, const char* levelId, const char* tapId, const juce::String& name)
-            : power (p.apvts, onId, name + " ON", name + " OFF", "Switches the " + name.toLowerCase() + " send and its return on or off. Off fades the return out."),
+        SendHeader (KaminariVocalProcessor& p, int send, const char* onId, const char* levelId, const char* tapId, const juce::String& name,
+                    const juce::String& moduleKey)
+            : preset (p.presets, moduleKey, name.toLowerCase()),
+              power (p.apvts, onId, name + " ON", name + " OFF", "Switches the " + name.toLowerCase() + " send and its return on or off. Off fades the return out."),
               level (p.apvts, levelId, "Send", "Level sent to the " + name.toLowerCase() + ". Off sends nothing; the dry vocal is unchanged."),
               tap (p.apvts, tapId, "Tap point", "Post-fader follows Output Gain. Pre-fader taps the vocal before Output Gain."),
               meter (p.returnPeak[(size_t) send])
@@ -167,6 +170,10 @@ namespace kvui
             addAndMakeVisible (level);
             addAndMakeVisible (tap);
             addAndMakeVisible (meter);
+            addAndMakeVisible (preset);
+            presetCaption.setText (name.toUpperCase() + " PRESET", juce::dontSendNotification);
+            styleText (presetCaption, 11.0f, colours::mist, true);
+            addAndMakeVisible (presetCaption);
             meterCaption.setText ("Return", juce::dontSendNotification);
             styleText (meterCaption, 11.0f, colours::mist, true);
             addAndMakeVisible (meterCaption);
@@ -181,11 +188,17 @@ namespace kvui
             b.removeFromLeft (8);
             tap.setBounds (b.removeFromLeft (140).withSizeKeepingCentre (140, 44));
             b.removeFromLeft (16);
-            auto m = b.removeFromLeft (220).withSizeKeepingCentre (220, 34);
+            auto m = b.removeFromLeft (160).withSizeKeepingCentre (160, 34);
             meterCaption.setBounds (m.removeFromTop (16));
             meter.setBounds (m.removeFromTop (12));
+            b.removeFromLeft (16);
+            auto pr = b.withSizeKeepingCentre (b.getWidth(), 46);
+            presetCaption.setBounds (pr.removeFromTop (16));
+            preset.setBounds (pr.removeFromTop (28));
         }
 
+        PresetBar preset;
+        juce::Label presetCaption;
         ToggleBox power;
         Knob level;
         ChoiceBox tap;
@@ -198,7 +211,7 @@ namespace kvui
     {
     public:
         explicit ReverbPanel (KaminariVocalProcessor& p)
-            : header (p, KaminariVocalProcessor::Reverb, kvid::rvOn, kvid::rvSend, kvid::rvTap, "Reverb"),
+            : header (p, KaminariVocalProcessor::Reverb, kvid::rvOn, kvid::rvSend, kvid::rvTap, "Reverb", "reverb"),
               mode (p.apvts, kvid::rvMode, "Mode", "Reverb algorithm. Each mode is a different algorithm, not a preset.",
                     [] (juce::ComboBox& box)
                     {
@@ -282,7 +295,7 @@ namespace kvui
     {
     public:
         explicit DelayPanel (KaminariVocalProcessor& p)
-            : header (p, KaminariVocalProcessor::Delay, kvid::dlOn, kvid::dlSend, kvid::dlTap, "Delay"),
+            : header (p, KaminariVocalProcessor::Delay, kvid::dlOn, kvid::dlSend, kvid::dlTap, "Delay", "delay"),
               mode (p.apvts, kvid::dlMode, "Mode", "Single: one echo time. Dual: independent left and right echoes. Ping-Pong: echoes alternate left and right (input summed to mono)."),
               style (p.apvts, kvid::dlStyle, "Style", "Tone and saturation character of the repeats."),
               unit1 (p.apvts, kvid::dlT1Unit, "Echo 1", "Time in milliseconds, or a note value (straight, dotted or triplet) synced to the host tempo."),
@@ -415,7 +428,7 @@ namespace kvui
     {
     public:
         explicit WidenerPanel (KaminariVocalProcessor& p)
-            : header (p, KaminariVocalProcessor::Widener, kvid::wdOn, kvid::wdSend, kvid::wdTap, "Widener"),
+            : header (p, KaminariVocalProcessor::Widener, kvid::wdOn, kvid::wdSend, kvid::wdTap, "Widener", "widener"),
               type (p.apvts, kvid::wdType, "Widener", "MicroShift and SideWidener are separate algorithms. Only the selected one runs."),
               msStyle (p.apvts, kvid::msStyle, "Style", "I, II and III differ in pitch and delay variation, tone, saturation and de-glitching."),
               msDetune (p.apvts, kvid::msDetune, "Detune", "Amount of continuously varying micro pitch shift. 100 % = the style's own amount."),

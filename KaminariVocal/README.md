@@ -13,6 +13,11 @@ The three effect sends from DESIGN.md section 2.9, with In/Out gain and meters:
   - Feedback, cuts, saturation, width, L/R offset, accent, groove, feel, prime numbers, wobble and diffusion.
 - **Widener send**: MicroShift (Style I/II/III, Detune, Delay, Focus) or SideWidener (Width, Mode 1–3, Tone, Output). Only the selected one runs.
 
+Presets:
+- Each send panel has its own module preset menu, and the header has chain presets for the whole plug-in.
+- `Presets/factory.json` holds 68 module presets for all nine modules and 11 chain presets.
+- User presets save to `~/Library/Audio/Presets/Kaminari Audio/Kaminari Vocal/`.
+
 Every return is 100 % wet and is added to the unchanged dry vocal. Each send has On, a send level (Off … +6 dB) and a Pre/Post-fader tap. Latency is 0 samples.
 
 The channel modules (Tune, EQ, Multiband, Compression, De-ess, Resonance) are specified in DESIGN.md but not built yet.
