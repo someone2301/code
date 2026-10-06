@@ -12,6 +12,7 @@
 #   CODESIGN_IDENTITY        "Developer ID Application: ..." to sign the plug-ins (default: ad-hoc)
 #   INSTALLER_SIGN_IDENTITY  "Developer ID Installer: ..." to sign the .pkg
 #   NOTARY_PROFILE           notarytool keychain profile; submits and staples the signed .pkg
+#   ARCHS                    "x86_64", "arm64" or "x86_64;arm64" (universal); default: x86_64 (Intel; also runs on Apple Silicon under Rosetta)
 set -euo pipefail
 
 [ "$(uname)" = "Darwin" ] || { echo "This script must run on macOS."; exit 1; }
@@ -32,8 +33,11 @@ AAX_FLAG=OFF
 rm -rf "$WORK" "$OUT"
 mkdir -p "$WORK" "$OUT"
 
-echo "==> Building Kaminari Vocal $VERSION (x86_64, Release)"
-cmake -S "$ROOT" -B "$WORK/build" -G "Unix Makefiles" -DCMAKE_BUILD_TYPE=Release -DKV_COPY_AFTER_BUILD=OFF -DKV_BUILD_AAX="$AAX_FLAG"
+# ARCHS: CPU architectures to build, e.g. "x86_64;arm64" for a universal build (default: x86_64)
+ARCHS="${ARCHS:-x86_64}"
+echo "==> Building Kaminari Vocal $VERSION ($ARCHS, Release)"
+cmake -S "$ROOT" -B "$WORK/build" -G "Unix Makefiles" -DCMAKE_BUILD_TYPE=Release -DKV_COPY_AFTER_BUILD=OFF -DKV_BUILD_AAX="$AAX_FLAG" \
+      -DCMAKE_OSX_ARCHITECTURES="$ARCHS" -DCMAKE_OSX_DEPLOYMENT_TARGET=10.15
 cmake --build "$WORK/build" --config Release -j "$(sysctl -n hw.ncpu)"
 ART="$WORK/build/KaminariVocal_artefacts/Release"
 
