@@ -409,15 +409,17 @@ namespace kvui
             g.drawRoundedRectangle (b, 6.0f, 1.0f);
             g.setColour (white);
             g.setFont (font (18.0f, 3, 0.1f));
-            g.drawText (title.toUpperCase(), 48, 10, getWidth() - 56, 28, juce::Justification::centredLeft);
+            const int noteW = getWidth() >= 170 ? 66 : 40;
+            g.drawFittedText (title.toUpperCase(), 46, 10, getWidth() - (module == KaminariVocalProcessor::ModTune ? 50 + noteW : 54), 28,
+                              juce::Justification::centredLeft, 1, 0.7f);
             if (module == KaminariVocalProcessor::ModTune && noteText.isNotEmpty())
             {
-                const auto r = juce::Rectangle<int> (getWidth() - 74, 14, 64, 20);
+                const auto r = juce::Rectangle<int> (getWidth() - noteW, 14, noteW - 8, 20);
                 g.setColour (accent);
                 g.fillEllipse ((float) r.getX(), r.getCentreY() - 3.5f, 7, 7);
                 g.setColour (mist);
                 g.setFont (font (12.0f, 0));
-                g.drawText (noteText, r.withTrimmedLeft (11), juce::Justification::centredLeft);
+                g.drawText (getWidth() >= 170 ? noteText : noteText.upToFirstOccurrenceOf (" ", false, false), r.withTrimmedLeft (11), juce::Justification::centredLeft);
             }
             auto info = infoArea;
             g.setColour (mist);
@@ -431,18 +433,20 @@ namespace kvui
                 auto row = grArea;
                 g.setColour (mist);
                 g.setFont (font (12.0f, 0));
-                g.drawText ("GR", row.removeFromLeft (26), juce::Justification::centredLeft);
-                auto val = row.removeFromRight (56);
+                const bool sat = module == KaminariVocalProcessor::ModDistortion;
+                g.drawText (sat ? "SAT" : "GR", row.removeFromLeft (sat ? 30 : 24), juce::Justification::centredLeft);
+                auto val = row.removeFromRight (52);
                 g.setColour (white);
                 g.drawText (grText, val, juce::Justification::centredRight);
                 auto bar = row.reduced (4, 4).toFloat();
                 g.setColour (navy800);
                 g.fillRoundedRectangle (bar, 2.0f);
-                const float frac = juce::jlimit (0.0f, 1.0f, std::abs (gr) / 12.0f);
-                g.setColour (gr >= 0 ? accent : amber);
-                g.fillRoundedRectangle (bar.removeFromRight (juce::jmax (frac > 0.001f ? 4.0f : 0.0f, bar.getWidth() * frac)), 2.0f);
+                const float frac = juce::jlimit (0.0f, 1.0f, std::abs (gr) / (sat ? 24.0f : 12.0f));
+                g.setColour (sat ? amber : (gr >= 0 ? accent : amber));
+                const float fw = juce::jmax (frac > 0.001f ? 4.0f : 0.0f, bar.getWidth() * frac);
+                g.fillRoundedRectangle (sat ? bar.removeFromLeft (fw) : bar.removeFromRight (fw), 2.0f);
                 g.setColour (mist);
-                g.drawText (footer, footerArea, juce::Justification::centredLeft);
+                g.drawFittedText (footer, footerArea, juce::Justification::centredLeft, 1, 0.8f);
             }
             else
             {
@@ -523,6 +527,13 @@ namespace kvui
                                                    : juce::String ("Full band");
                     break;
                 }
+                case KaminariVocalProcessor::ModDistortion:
+                {
+                    static const char* styles[] = { "Tape", "Tube", "Warm", "Fuzz", "Clip", "Lo-Fi" };
+                    foot = juce::String (styles[juce::jlimit (0, 5, juce::roundToInt (v ("dt_style")))]) + dot() + "mix "
+                         + juce::String (juce::roundToInt (v ("dt_mix"))) + " %";
+                    break;
+                }
                 case KaminariVocalProcessor::ModResonance:
                 {
                     static const char* q[] = { "Normal", "High", "Ultra" };
@@ -532,8 +543,10 @@ namespace kvui
                 default: break;
             }
             gr = proc.moduleGr[(size_t) module].load();
-            const auto g = (gr > 0.05f ? juce::String (juce::CharPointer_UTF8 ("\xe2\x88\x92")) : (gr < -0.05f ? "+" : ""))
-                         + juce::String (std::abs (gr), 1) + " dB";
+            const auto g = module == KaminariVocalProcessor::ModDistortion
+                               ? juce::String (gr, 1) + " dB"
+                               : (gr > 0.05f ? juce::String (juce::CharPointer_UTF8 ("\xe2\x88\x92")) : (gr < -0.05f ? "+" : ""))
+                                     + juce::String (std::abs (gr), 1) + " dB";
             if (val != valueText || foot != footer || g != grText) { valueText = val; footer = foot; grText = g; repaint(); }
             else if (module == KaminariVocalProcessor::ModTune) repaint (getWidth() - 80, 10, 80, 30);
         }
@@ -581,15 +594,30 @@ namespace kvui
             g.setColour (navy600);
             g.drawRoundedRectangle (b, 6.0f, 1.0f);
             g.setColour (white);
-            g.setFont (font (16.0f, 3, 0.1f));
-            g.drawText (title.toUpperCase(), 12, 6, 90, 22, juce::Justification::centredLeft);
+            g.setFont (font (compact ? 14.5f : 16.0f, 3, 0.1f));
+            g.drawText (title.toUpperCase(), titleArea, juce::Justification::centredLeft);
             auto t = textArea;
-            g.setFont (font (14.0f, 1));
-            g.drawText (levelText, t.removeFromTop (18), juce::Justification::centredLeft);
-            g.setColour (mist);
-            g.setFont (font (11.5f, 0));
-            g.drawText (detail, t.removeFromTop (16), juce::Justification::centredLeft, true);
-            auto bar = t.removeFromTop (10).reduced (0, 2).toFloat();
+            if (compact)
+            {
+                // one line: level, then mode and tap point; meter underneath
+                auto line = t.removeFromTop (16);
+                g.setFont (font (13.0f, 1));
+                const int lw = (int) juce::GlyphArrangement::getStringWidth (font (13.0f, 1), levelText) + 6;
+                g.drawText (levelText, line.removeFromLeft (lw), juce::Justification::centredLeft);
+                g.setColour (mist);
+                g.setFont (font (11.0f, 0));
+                g.drawText (detail, line, juce::Justification::centredLeft, true);
+                t.removeFromTop (3);
+            }
+            else
+            {
+                g.setFont (font (14.0f, 1));
+                g.drawText (levelText, t.removeFromTop (18), juce::Justification::centredLeft);
+                g.setColour (mist);
+                g.setFont (font (11.5f, 0));
+                g.drawText (detail, t.removeFromTop (16), juce::Justification::centredLeft, true);
+            }
+            auto bar = t.removeFromTop (compact ? 8 : 10).reduced (0, compact ? 1 : 2).toFloat();
             g.setColour (navy950);
             g.fillRoundedRectangle (bar, 2.0f);
             g.setColour (navy600);
@@ -601,7 +629,22 @@ namespace kvui
 
         void resized() override
         {
-            auto b = getLocalBounds().reduced (12, 6);
+            auto b = getLocalBounds().reduced (10, 6);
+            compact = getWidth() < 260;
+            if (compact)
+            {
+                // narrow card: knob on the left; title, ON and ADV on top; level, detail and meter below
+                level.setBounds (b.removeFromLeft (46).withSizeKeepingCentre (44, 44));
+                b.removeFromLeft (6);
+                auto top = b.removeFromTop (22);
+                open.setBounds (top.removeFromRight (40).withSizeKeepingCentre (40, 20));
+                top.removeFromRight (4);
+                power.setBounds (top.removeFromRight (38).withSizeKeepingCentre (38, 20));
+                titleArea = top;
+                textArea = b.withTrimmedTop (2).withHeight (b.getHeight());
+                return;
+            }
+            titleArea = { 12, 6, 90, 22 };
             auto left = b.removeFromLeft (84);
             power.setBounds (left.withTrimmedTop (28).withHeight (24).withWidth (52));
             level.setBounds (b.removeFromLeft (52).withSizeKeepingCentre (48, 48));
@@ -618,7 +661,7 @@ namespace kvui
     private:
         void timerCallback() override
         {
-            const auto lv = proc.apvts.getParameter (sendIndex == 0 ? kvid::rvSend : sendIndex == 1 ? kvid::dlSend : kvid::wdSend)->getCurrentValueAsText();
+            const auto lv = proc.apvts.getParameter (sendIndex == 0 ? kvid::rvSend : sendIndex == 1 ? kvid::dlSend : sendIndex == 2 ? kvid::wdSend : kvid::flSend)->getCurrentValueAsText();
             const auto d = modeText (juce::roundToInt (modeParam.convertFrom0to1 (modeParam.getValue()))) + dot()
                          + (tapParam.getValue() > 0.5f ? "pre-fader" : "post-fader");
             const float m = proc.returnPeak[(size_t) sendIndex].load();
@@ -633,7 +676,8 @@ namespace kvui
         juce::RangedAudioParameter& modeParam;
         juce::RangedAudioParameter& tapParam;
         std::function<juce::String (int)> modeText;
-        juce::Rectangle<int> textArea;
+        juce::Rectangle<int> textArea, titleArea;
         float meter = 0;
+        bool compact = false;
     };
 }

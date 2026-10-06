@@ -217,4 +217,108 @@ namespace kvui
         std::unique_ptr<PowerButton> power;
         PresetBar preset;
     };
+
+    //==================================================================================================================
+    // Shared by the Advanced pages: plain values, titled groups and the group layout.
+    using namespace kvtheme;
+
+    inline float plainValue (juce::RangedAudioParameter& p) { return p.convertFrom0to1 (p.getValue()); }
+    inline float plainValue (APVTS& s, const char* id) { return plainValue (*s.getParameter (id)); }
+
+    // Titled group box used on the send pages.
+    inline void drawTitledGroup (juce::Graphics& g, juce::Rectangle<int> r, const juce::String& title)
+    {
+        drawGroup (g, r, navy950.interpolatedWith (navy900, 0.5f));
+        g.setColour (mist);
+        g.setFont (font (11.0f, 2, 0.12f));
+        g.drawText (title, r.getX() + 12, r.getY() + 6, r.getWidth() - 24, 16, juce::Justification::centredLeft);
+    }
+
+    // Small upper-case caption above a control.
+    inline void drawCaption (juce::Graphics& g, const juce::Component& c, const juce::String& text)
+    {
+        if (! c.isVisible()) return;
+        g.setColour (mist);
+        g.setFont (font (11.0f, 1, 0.1f));
+        g.drawText (text, c.getX(), c.getY() - 17, juce::jmax (c.getWidth(), 160), 14, juce::Justification::centredLeft);
+    }
+
+    // Lays knobs out in a row of equal cells inside a group (skips hidden ones). Returns the used width.
+    inline void layoutRow (juce::Rectangle<int> r, std::initializer_list<juce::Component*> items, int cell)
+    {
+        for (auto* c : items)
+        {
+            if (c == nullptr || ! c->isVisible()) continue;
+            c->setBounds (r.removeFromLeft (cell));
+        }
+    }
+
+    inline int visibleCount (std::initializer_list<juce::Component*> items)
+    {
+        int n = 0;
+        for (auto* c : items) if (c != nullptr && c->isVisible()) ++n;
+        return n;
+    }
+
+    // A titled group of knobs (plus an optional extra control on the right) on the send pages.
+    struct SendGroup
+    {
+        SendGroup (juce::String t, std::vector<juce::Component*> k, juce::Component* b = nullptr, int be = 0,
+                   juce::Component* e = nullptr, int ew = 0, int eh = 28, int edy = 0)
+            : title (std::move (t)), knobs (std::move (k)), big (b), bigExtra (be), extra (e), extraW (ew), extraH (eh), extraDy (edy) {}
+
+        juce::String title;
+        std::vector<juce::Component*> knobs;
+        juce::Component* big = nullptr;       // knob drawn larger (gets bigExtra more width and the full height)
+        int bigExtra = 0;
+        juce::Component* extra = nullptr;     // e.g. a combo, toggle or segmented control
+        int extraW = 0, extraH = 28, extraDy = 0;
+        juce::Rectangle<int> area;
+
+        int visibleKnobs() const { int n = 0; for (auto* k : knobs) if (k->isVisible()) ++n; return n; }
+        bool used() const { return visibleKnobs() > 0 || extra != nullptr; }
+        int extraWidth() const { return (extra != nullptr ? extraW : 0) + (big != nullptr && big->isVisible() ? bigExtra : 0); }
+    };
+
+    // Lays the used groups out across the full row: equal knob cells (at most maxCell wide), spare width shared out.
+    inline void layoutGroups (juce::Rectangle<int> row, std::initializer_list<SendGroup*> groups, int maxCell, int smallTrim = 0)
+    {
+        constexpr int pad = 10, gap = 10, titleH = 24;
+        int count = 0, knobs = 0, extras = 0;
+        for (auto* g : groups)
+        {
+            g->area = {};
+            if (! g->used()) continue;
+            ++count; knobs += g->visibleKnobs(); extras += g->extraWidth();
+        }
+        if (count == 0) return;
+        const int fixed = count * 2 * pad + (count - 1) * gap + extras;
+        const int cell = knobs > 0 ? juce::jmin (maxCell, (row.getWidth() - fixed) / knobs) : 0;
+        const int spare = (row.getWidth() - fixed - knobs * cell) / count;
+        for (auto* g : groups)
+        {
+            if (! g->used()) continue;
+            const int content = g->visibleKnobs() * cell + g->extraWidth();
+            g->area = row.removeFromLeft (content + 2 * pad + spare);
+            row.removeFromLeft (gap);
+            auto inner = g->area.reduced (pad, 0).withTrimmedTop (titleH).withTrimmedBottom (6);
+            inner = inner.withSizeKeepingCentre (content, inner.getHeight());
+            for (auto* k : g->knobs)
+            {
+                if (! k->isVisible()) continue;
+                // keep each ring at least 18 px narrower than its cell so neighbouring range labels stay apart
+                // (a RangeKnob's ring is its height minus 39 px of labels); rows stay bottom-aligned
+                const int w = k == g->big ? cell + g->bigExtra : cell;
+                auto r = inner.removeFromLeft (w);
+                if (k != g->big) r = r.withTrimmedTop (smallTrim);
+                k->setBounds (r.withTop (juce::jmax (r.getY(), r.getBottom() - (w - 18 + 39))));
+            }
+            if (g->extra != nullptr)
+            {
+                auto e = inner.removeFromLeft (g->extraW).reduced (4, 0);
+                g->extra->setBounds (e.withSizeKeepingCentre (e.getWidth(), g->extraH).translated (0, g->extraDy));
+            }
+        }
+    }
+
 }

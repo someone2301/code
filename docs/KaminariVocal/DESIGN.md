@@ -1,6 +1,6 @@
 # Kaminari Vocal — Design Document (pre-implementation)
 
-Status: implemented in `KaminariVocal/`: all six channel modules (first versions, section 2.12), the three sends (2.9), presets (2.10), session versioning (2.11), mono/stereo layouts, and the Mac build script and installer. The GUI is functional. The preview's full artwork (Pro-Q-style analyzer, Pro-C-style displays, etc.) is not built yet.
+Status: implemented in `KaminariVocal/`: all seven channel modules (first versions, section 2.12; Distortion 2.13), Tune's vibrato and tremolo (2.2.1), the four sends (2.9; Flanger 2.14), presets (2.10), session versioning (2.11), mono/stereo layouts, and the Mac build script and installer. The GUI follows the preview; the Distortion and Flanger pages and the Tune vibrato/tremolo groups were added after the preview and follow its style.
 
 ## 0. Current project state and recorded decisions
 
@@ -337,7 +337,7 @@ EQ: frequency scale Hz / Piano (shows note names and lets band frequencies snap 
 
 ### 2.9 Effect sends (implemented)
 
-Three sends: Reverb, Delay, Widener. They are sends, not inserts. Each one taps the vocal, scales the tap by its send level, runs a 100 % wet effect, and adds the return to the dry vocal on the main output. The dry vocal is never processed by a send. No send has a dry/wet Mix control, because a send level already sets the blend.
+Four sends: Reverb, Delay, Widener, Flanger (2.14). They are sends, not inserts. Each one taps the vocal, scales the tap by its send level, runs a 100 % wet effect, and adds the return to the dry vocal on the main output. The dry vocal is never processed by a send. No send has a dry/wet Mix control, because a send level already sets the blend.
 
 Routing (decided with the user: returns are summed into the plug-in's own output; a single plug-in has no host aux buses):
 
@@ -631,10 +631,70 @@ CPU: the whole chain with every module and send on (Resonance at Ultra) uses abo
 
 ---
 
+### 2.13 Distortion (implemented)
+
+Inline channel module between Compression and De-ess (index `ModDistortion`; IDs `dt_*`). Off by default; while off it is skipped entirely and adds no latency.
+
+| ID | Name | Range / choices | Default |
+|---|---|---|---|
+| `dt_on` | Distortion On | bool | off |
+| `dt_style` | Style | Tape, Tube, Warm, Fuzz, Clip, Lo-Fi | Tape |
+| `dt_drive` | Drive | 0 … 36 dB | 9 dB |
+| `dt_tone` | Tone (tilt around 1 kHz, ±6 dB) | −100 … +100 | 0 |
+| `dt_bias` | Bias (asymmetry, even harmonics) | 0 … 100 % | 0 % |
+| `dt_lowcut` | Low Cut before the curve | Off (20 Hz) … 1 kHz | Off |
+| `dt_crush` | Crush (Lo-Fi only: 16 → 4 bits, 1 → 16 sample hold) | 0 … 100 % | 40 % |
+| `dt_mix` | Mix (dry is latency-aligned) | 0 … 100 % | 100 % |
+| `dt_out` | Output | −24 … +12 dB | 0 dB |
+| `dt_auto_gain` | Auto Gain (output RMS follows input RMS, ~400 ms, −24 … +12 dB) | bool | on |
+| `dt_os` | Oversampling (linear-phase half-band FIR, integer latency) | Off, 2x, 4x | 2x |
+
+Latency while on: 49 samples at 48 kHz for 2x (measured by the tests), more for 4x, 0 for Off. The Basic card's hammer sets Drive (up = more) and shows "SAT": how far the driven peak goes above the curve's knee.
+
+### 2.2.1 Tune: vibrato and tremolo (implemented)
+
+Part of Tune (needs Tune on). `tn_correct` (Correct Pitch, default on) switches retuning off while keeping vibrato and tremolo; Retune Speed and Humanize are hidden while it is off.
+
+| ID | Name | Range / choices | Default |
+|---|---|---|---|
+| `tn_vib_on` | Vibrato On | bool | off |
+| `tn_vib_depth` | Depth (peak, cents) | 0 … 100 | 30 |
+| `tn_vib_rate` | Rate | 1 … 12 Hz | 5.5 Hz |
+| `tn_vib_delay` | Onset Delay after each new note | 0 … 1500 ms | 250 ms |
+| `tn_vib_rise` | Onset Rise to full depth | 0 … 1500 ms | 300 ms |
+| `tn_vib_variation` | Variation (rate ±25 %, depth ±40 % wander) | 0 … 100 % | 20 % |
+| `tn_trem_on` | Tremolo On | bool | off |
+| `tn_trem_depth` | Depth (100 % = to silence at the trough) | 0 … 100 % | 40 % |
+| `tn_trem_rate` | Rate (Sync = Free) | 0.5 … 20 Hz | 5 Hz |
+| `tn_trem_sync` | Sync | Free, 1/2, 1/4, 1/4 dot, 1/4 trip, 1/8, 1/8 dot, 1/8 trip, 1/16, 1/16 trip | Free |
+| `tn_trem_shape` | Shape | Sine, Triangle, Square (rounded) | Sine |
+| `tn_trem_stereo` | Stereo phase (180° = auto-pan) | 0 … 180° | 0° |
+| `tn_trem_onset` | Tremolo follows the note onset | bool | off |
+
+Vibrato is added to the correction on voiced notes only and goes through the same period-jump shifter, so it adds no latency. A new note (target change or a gap in voicing) restarts the onset. Synced tremolo locks its phase to the host's beat position while the transport runs.
+
+### 2.14 Flanger send (implemented)
+
+Fourth send (`fl_*`), same routing as the others (2.9): 100 % wet return, pre/post-fader tap, return guard, idle detection. The comb forms where the return meets the dry vocal, so it is deepest with the send near 0 dB (default send level −6 dB).
+
+| ID | Name | Range / choices | Default |
+|---|---|---|---|
+| `fl_on`, `fl_send`, `fl_tap` | On, Send, Tap | as the other sends | off, −6 dB, post |
+| `fl_rate` | Rate (Sync = Free) | 0.02 … 10 Hz | 0.3 Hz |
+| `fl_sync` | Sync | Free, 4 bars, 2 bars, 1 bar, 1/2, 1/4, 1/8 | Free |
+| `fl_depth` | Depth (sweep up to +6 ms above Delay) | 0 … 100 % | 60 % |
+| `fl_delay` | Delay (shortest delay of the sweep) | 0.1 … 10 ms | 1.5 ms |
+| `fl_feedback` | Feedback (soft-limited in the loop) | −95 … +95 % | 40 % |
+| `fl_stereo` | Stereo phase between L and R sweeps | 0 … 180° | 90° |
+| `fl_shape` | Shape | Sine, Triangle | Triangle |
+| `fl_hicut` | High Cut on the repeats | 1 … 20 kHz | 12 kHz |
+
+Session state version 3: the Advanced tab index moved because the Distortion tab sits before De-ess; older sessions are converted on load.
+
 ## 3. Signal flow
 
 ```
- Input ──► [In Gain] ──► [TUNE] ──► [EQ] ──► [MULTIBAND] ──► [COMPRESSION] ──► [DE-ESS] ──► [RESONANCE] ──► [Out Gain] ──► [Safety] ──► Output
+ Input ──► [In Gain] ──► [TUNE] ──► [EQ] ──► [MULTIBAND] ──► [COMPRESSION] ──► [DISTORTION] ──► [DE-ESS] ──► [RESONANCE] ──► [Out Gain] ──► [Safety] ──► Output
    │                       │          │                                                                │
    ├─► In meter            │          ├─► analyzer tap (pre-EQ / post-EQ, copy only)                   ├─► Out meter
    │                       │          │                                                                │
@@ -648,15 +708,16 @@ Order rationale:
 1. Tune first: the detector needs the cleanest, unprocessed signal; EQ boosts and compression can bias period detection.
 2. EQ before dynamics: cuts and tone shaping happen first, so the compressor reacts to the corrected tone.
 3. Multiband before Compression: low-mid boom and proximity effect are tamed before they drive the main compressor (the UI shows Multiband to the left of Compression).
-4. De-ess after Compression: makeup gain and release can raise sibilance; de-essing afterwards catches it.
-5. Resonance last: removes harsh, ringing resonances that remain after all gain changes.
-The UI's module order (Tune, Multiband, Compression, De-ess, Resonance) follows this order.
+4. Distortion after Compression: the compressor evens the level, so the saturation is consistent from word to word.
+5. De-ess after Compression and Distortion: makeup gain, release and saturation can all raise sibilance; de-essing afterwards catches it.
+6. Resonance last: removes harsh, ringing resonances that remain after all gain changes.
+The UI's module order (Tune, Multiband, Compression, Distortion, De-ess, Resonance) follows this order.
 
 The order is fixed in version 1. Routing is postponed.
 
 ### 3.1 Effect sends
 
-After the channel modules: pre-fader tap → Out Gain → post-fader tap → dry output. Each of the three sends (Reverb, Delay, Widener) taps pre- or post-fader, runs its effect 100 % wet, and its return is added to the dry output (section 2.9).
+After the channel modules: pre-fader tap → Out Gain → post-fader tap → dry output. Each of the four sends (Reverb, Delay, Widener, Flanger) taps pre- or post-fader, runs its effect 100 % wet, and its return is added to the dry output (section 2.9).
 
 ---
 

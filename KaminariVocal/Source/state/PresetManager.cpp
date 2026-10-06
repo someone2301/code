@@ -15,15 +15,17 @@ namespace
     const std::vector<Scope>& scopes()
     {
         static const std::vector<Scope> s = {
-            { "tune", "Tune", {}, { "tn_speed", "tn_humanize" }, {}, {} },
+            { "tune", "Tune", { "tn_vib_", "tn_trem_" }, { "tn_speed", "tn_humanize", "tn_correct" }, {}, {} },
             { "eq", "EQ", { "eq" }, {}, { "eq_on" }, {} },
             { "multiband", "Multiband", { "mb" }, {}, { "mb_on" }, { "_solo" } },
             { "compression", "Compression", { "lv_" }, {}, { "lv_on", "lv_sc_listen", "lv_sc_source" }, {} },
+            { "distortion", "Distortion", { "dt_" }, {}, { "dt_on" }, {} },
             { "deess", "De-ess", { "ds_" }, {}, { "ds_on", "ds_listen", "ds_audition_trigger", "ds_sc_source" }, {} },
             { "resonance", "Resonance", { "rs_" }, {}, { "rs_on", "rs_bypass", "rs_sc", "rs_sc_listen", "rs_delta" }, { "_listen" } },
             { "reverb", "Reverb", { "rv_" }, {}, { "rv_on", "rv_send", "rv_tap" }, {} },
             { "delay", "Delay", { "dl_" }, {}, { "dl_on", "dl_send", "dl_tap" }, {} },
             { "widener", "Widener", { "wd_" }, {}, { "wd_on", "wd_send", "wd_tap" }, {} },
+            { "flanger", "Flanger", { "fl_" }, {}, { "fl_on", "fl_send", "fl_tap" }, {} },
         };
         return s;
     }

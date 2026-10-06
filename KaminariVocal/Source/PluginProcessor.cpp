@@ -12,6 +12,7 @@ KaminariVocalProcessor::KaminariVocalProcessor()
     sendPtrs[Reverb]  = { raw (kvid::rvOn), raw (kvid::rvSend), raw (kvid::rvTap) };
     sendPtrs[Delay]   = { raw (kvid::dlOn), raw (kvid::dlSend), raw (kvid::dlTap) };
     sendPtrs[Widener] = { raw (kvid::wdOn), raw (kvid::wdSend), raw (kvid::wdTap) };
+    sendPtrs[Flanger] = { raw (kvid::flOn), raw (kvid::flSend), raw (kvid::flTap) };
 
     // A new instance starts on the "Default" chain preset (a saved session replaces it in setStateInformation).
     presets.loadChainPreset ("Default");
@@ -46,6 +47,8 @@ void KaminariVocalProcessor::prepareToPlay (double sampleRate, int samplesPerBlo
     compressor.prepare (sampleRate);
     deesser.prepare (sampleRate);
     resonance.prepare (sampleRate);
+    distortion.prepare (sampleRate, block);
+    distortionIdle = true;
     readModuleSettings();
     for (int m = 0; m < numModules; ++m)
     {
@@ -57,6 +60,7 @@ void KaminariVocalProcessor::prepareToPlay (double sampleRate, int samplesPerBlo
     reverb.prepare (sampleRate, block);
     delay.prepare (sampleRate, block);
     widener.prepare (sampleRate, block);
+    flanger.prepare (sampleRate, block);
 
     inGainSmooth.reset (sampleRate, 0.02);
     outGainSmooth.reset (sampleRate, 0.02);
@@ -83,7 +87,9 @@ int KaminariVocalProcessor::computeLatency() const
     const double fs = sampleRateHz;
     const int la = (int) std::lround (raw ("lv_lookahead")->load() * 0.001 * fs)
                  + (int) std::lround (raw ("ds_lookahead")->load() * 0.001 * fs);
-    return kv::Tune::latencyFor (fs) + la;
+    // Distortion's oversampling filters add latency only while the module is on
+    const int os = raw ("dt_on")->load() > 0.5f ? distortion.latencyFor (juce::roundToInt (raw ("dt_os")->load())) : 0;
+    return kv::Tune::latencyFor (fs) + la + os;
 }
 
 void KaminariVocalProcessor::readEqSettings (kv::EqBandSettings (&out)[kv::Equalizer::numBands]) const
@@ -114,6 +120,7 @@ void KaminariVocalProcessor::readModuleSettings()
     moduleOn[ModCompression] = b ("lv_on");
     moduleOn[ModDeEss] = b ("ds_on");
     moduleOn[ModResonance] = b ("rs_on");
+    moduleOn[ModDistortion] = b ("dt_on");
 
     // Tune: a named scale decides the notes; Custom uses the 12 note switches
     auto& t = tuneSettings;
@@ -126,6 +133,20 @@ void KaminariVocalProcessor::readModuleSettings()
     t.range = i ("tn_range");
     t.speedMs = f ("tn_speed");
     t.humanize = f ("tn_humanize") / 100.0f;
+    t.correct = b ("tn_correct");
+    t.vibOn = b ("tn_vib_on");
+    t.vibCents = f ("tn_vib_depth"); t.vibRateHz = f ("tn_vib_rate");
+    t.vibDelayMs = f ("tn_vib_delay"); t.vibRiseMs = f ("tn_vib_rise"); t.vibVariation = f ("tn_vib_variation") / 100.0f;
+    t.tremOn = b ("tn_trem_on");
+    t.tremDepth = f ("tn_trem_depth") / 100.0f; t.tremRateHz = f ("tn_trem_rate");
+    t.tremBeats = kvp::tremoloSyncBeats (i ("tn_trem_sync"));
+    t.tremShape = i ("tn_trem_shape"); t.tremStereo = f ("tn_trem_stereo") / 180.0f; t.tremOnset = b ("tn_trem_onset");
+
+    auto& dt = dtSettings;
+    dt.on = moduleOn[ModDistortion];
+    dt.style = i ("dt_style"); dt.driveDb = f ("dt_drive"); dt.tone = f ("dt_tone") / 100.0f; dt.bias = f ("dt_bias") / 100.0f;
+    dt.lowCutHz = f ("dt_lowcut"); dt.crush = f ("dt_crush") / 100.0f; dt.mix = f ("dt_mix") / 100.0f; dt.outDb = f ("dt_out");
+    dt.autoGain = b ("dt_auto_gain"); dt.oversampling = i ("dt_os");
 
     readEqSettings (eqSettings);
     eqOutGain = f ("eq_out_gain");
@@ -192,6 +213,9 @@ void KaminariVocalProcessor::readModuleSettings()
 
 void KaminariVocalProcessor::processModules (float* l, float* r, int n)
 {
+    tuneSettings.playing = chunkPlaying;
+    tuneSettings.ppq = chunkPpq;
+    tuneSettings.bpm = chunkBpm;
     tune.process (l, r, n, tuneSettings);   // always runs: its fixed delay is part of the reported latency
     analyserPre.push (l, r, n);
 
@@ -235,6 +259,14 @@ void KaminariVocalProcessor::processModules (float* l, float* r, int n)
     moduleGr[ModCompression].store (compressor.process (l, r, n, compSettings));
     compMakeup.store (compressor.currentMakeup());
     compHistory.push (dryCopy.getReadPointer (0), dryCopy.getReadPointer (1), l, r, n);
+    // Distortion: skipped entirely while off (no latency); restarts from a clean state
+    {
+        auto& fade = moduleFade[ModDistortion];
+        const bool active = moduleOn[ModDistortion] || fade.isSmoothing() || fade.getCurrentValue() > 0.0f;
+        if (active && distortionIdle) distortion.reset();
+        distortionIdle = ! active;
+        crossfaded (ModDistortion, [&] { distortion.process (l, r, n, dtSettings); moduleGr[ModDistortion].store (distortion.peakOver.load()); });
+    }
     dryCopy.copyFrom (0, 0, l, n);
     dryCopy.copyFrom (1, 0, r, n);
     moduleGr[ModDeEss].store (deesser.process (l, r, n, dsSettings));
@@ -247,6 +279,7 @@ void KaminariVocalProcessor::resetSend (int s)
     if (s == Reverb)  reverb.reset();
     if (s == Delay)   delay.reset();
     if (s == Widener) widener.reset();
+    if (s == Flanger) flanger.reset();
 }
 
 float KaminariVocalProcessor::delayTimeSamples (int echo, double bpm) const
@@ -307,6 +340,21 @@ kv::DelaySettings KaminariVocalProcessor::readDelay (double bpm) const
     return s;
 }
 
+kv::FlangerSettings KaminariVocalProcessor::readFlanger (double bpm) const
+{
+    kv::FlangerSettings s;
+    s.rateHz = raw (kvid::flRate)->load();
+    s.syncBeats = kvp::flangerSyncBeats (juce::roundToInt (raw (kvid::flSync)->load()));
+    s.depth = raw (kvid::flDepth)->load() / 100.0f;
+    s.delayMs = raw (kvid::flDelay)->load();
+    s.feedback = raw (kvid::flFeedback)->load() / 100.0f;
+    s.stereo = raw (kvid::flStereo)->load() / 180.0f;
+    s.shape = juce::roundToInt (raw (kvid::flShape)->load());
+    s.hiCutHz = raw (kvid::flHiCut)->load();
+    s.bpm = bpm;
+    return s;
+}
+
 kv::WidenerSettings KaminariVocalProcessor::readWidener() const
 {
     kv::WidenerSettings s;
@@ -327,6 +375,7 @@ void KaminariVocalProcessor::processBlock (juce::AudioBuffer<float>& buffer, juc
     juce::ScopedNoDenormals noDenormals;
     double bpm = 120.0;
     publishTempo (bpm);
+    const auto transport = hostTempo.read();
 
     const int total = buffer.getNumSamples();
     const int numIn = getTotalNumInputChannels(), numOut = getTotalNumOutputChannels();
@@ -355,6 +404,7 @@ void KaminariVocalProcessor::processBlock (juce::AudioBuffer<float>& buffer, juc
     const auto rvSettings = readReverb();
     const auto dlSettings = readDelay (bpm);
     const auto wdSettings = readWidener();
+    auto flSettings = readFlanger (bpm);
     inGainSmooth.setTargetValue (juce::Decibels::decibelsToGain (raw (kvid::inGain)->load()));
     outGainSmooth.setTargetValue (juce::Decibels::decibelsToGain (raw (kvid::outGain)->load()));
 
@@ -375,6 +425,11 @@ void KaminariVocalProcessor::processBlock (juce::AudioBuffer<float>& buffer, juc
     for (int start = 0; start < total; start += capacity)
     {
         const int n = juce::jmin (capacity, total - start);
+        chunkBpm = bpm;
+        chunkPlaying = transport.valid && transport.playing;
+        chunkPpq = transport.ppq + (double) start * bpm / 60.0 / sampleRateHz;
+        flSettings.playing = chunkPlaying;
+        flSettings.ppq = chunkPpq;
         float* out2[2] = { buffer.getWritePointer (0, start), buffer.getWritePointer (chs > 1 ? 1 : 0, start) };
         float* io[2] = { work.getWritePointer (0), work.getWritePointer (1) };
 
@@ -439,6 +494,7 @@ void KaminariVocalProcessor::processBlock (juce::AudioBuffer<float>& buffer, juc
             if (s == Reverb)  reverb.process (in[0], in[1], out[0], out[1], n, rvSettings);
             if (s == Delay)   delay.process (in[0], in[1], out[0], out[1], n, dlSettings);
             if (s == Widener) widener.process (in[0], in[1], out[0], out[1], n, wdSettings);
+            if (s == Flanger) flanger.process (in[0], in[1], out[0], out[1], n, flSettings);
 
             float blockPeak = 0.0f;
             for (int i = 0; i < n; ++i)
@@ -541,7 +597,7 @@ void KaminariVocalProcessor::getStateInformation (juce::MemoryBlock& destData)
     state.setProperty ("analyser_resolution", analyserResolution.load(), nullptr);
     state.setProperty ("analyser_speed", analyserSpeed.load(), nullptr);
     state.setProperty ("state_version", stateVersion, nullptr);
-    for (auto* m : { "tune", "eq", "multiband", "compression", "deess", "resonance", "reverb", "delay", "widener" })
+    for (auto* m : { "tune", "eq", "multiband", "compression", "distortion", "deess", "resonance", "reverb", "delay", "widener", "flanger" })
         state.setProperty (juce::String ("engine_") + m, engineVersion, nullptr);
     presets.writeState (state);
     if (auto xml = state.createXml())
@@ -558,7 +614,10 @@ void KaminariVocalProcessor::setStateInformation (const void* data, int sizeInBy
             loadedStateVersion = (int) state.getProperty ("state_version", 1);
             advancedView.store (state.getProperty ("ui_view", "basic").toString() == "advanced");
             advancedSend.store (juce::jlimit (0, (int) numSends - 1, (int) state.getProperty ("ui_send", 0)));
-            advancedTab.store (juce::jlimit (0, 8, (int) state.getProperty ("ui_tab", 6 + advancedSend.load())));
+            int tab = (int) state.getProperty ("ui_tab", 7);
+            if (loadedStateVersion < 3 && tab >= 4)
+                tab = tab >= 6 ? 7 : tab + 1;   // Distortion tab inserted before De-ess; sends were 6..8
+            advancedTab.store (juce::jlimit (0, 7, tab));
             uiScale.store (juce::jlimit (0.75f, 2.0f, (float) state.getProperty ("ui_scale", 1.0f)));
             analyserMode.store (juce::jlimit (0, 2, (int) state.getProperty ("analyser_mode", 1)));
             analyserResolution.store (juce::jlimit (0, 3, (int) state.getProperty ("analyser_resolution", (int) SpectrumProcessor::High)));

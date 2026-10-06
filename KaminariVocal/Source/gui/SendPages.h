@@ -2,33 +2,12 @@
 
 #include "AdvWidgets.h"
 
-// Advanced send pages (Reverb, Delay, Widener), laid out after the GUI preview artboards AdvReverb, AdvDelay,
+// Advanced send pages (Reverb, Delay, Widener, Flanger), laid out after the GUI preview artboards AdvReverb, AdvDelay,
 // AdvWidener and AdvWidenerSide: a shared send header, then titled control groups with range-labelled knobs and a
 // small display of what the send does. Only controls that change the sound in the current mode are shown.
 namespace kvui
 {
     using namespace kvtheme;
-
-    inline float plainValue (juce::RangedAudioParameter& p) { return p.convertFrom0to1 (p.getValue()); }
-    inline float plainValue (APVTS& s, const char* id) { return plainValue (*s.getParameter (id)); }
-
-    // Titled group box used on the send pages.
-    inline void drawTitledGroup (juce::Graphics& g, juce::Rectangle<int> r, const juce::String& title)
-    {
-        drawGroup (g, r, navy950.interpolatedWith (navy900, 0.5f));
-        g.setColour (mist);
-        g.setFont (font (11.0f, 2, 0.12f));
-        g.drawText (title, r.getX() + 12, r.getY() + 6, r.getWidth() - 24, 16, juce::Justification::centredLeft);
-    }
-
-    // Small upper-case caption above a control.
-    inline void drawCaption (juce::Graphics& g, const juce::Component& c, const juce::String& text)
-    {
-        if (! c.isVisible()) return;
-        g.setColour (mist);
-        g.setFont (font (11.0f, 1, 0.1f));
-        g.drawText (text, c.getX(), c.getY() - 17, juce::jmax (c.getWidth(), 160), 14, juce::Justification::centredLeft);
-    }
 
     //==================================================================================================================
     // ON / OFF button with the bolt icon, bound to a bool parameter.
@@ -140,84 +119,6 @@ namespace kvui
         juce::Rectangle<int> meterArea;
         float meter = 0;
     };
-
-    // Lays knobs out in a row of equal cells inside a group (skips hidden ones). Returns the used width.
-    inline void layoutRow (juce::Rectangle<int> r, std::initializer_list<juce::Component*> items, int cell)
-    {
-        for (auto* c : items)
-        {
-            if (c == nullptr || ! c->isVisible()) continue;
-            c->setBounds (r.removeFromLeft (cell));
-        }
-    }
-
-    inline int visibleCount (std::initializer_list<juce::Component*> items)
-    {
-        int n = 0;
-        for (auto* c : items) if (c != nullptr && c->isVisible()) ++n;
-        return n;
-    }
-
-    // A titled group of knobs (plus an optional extra control on the right) on the send pages.
-    struct SendGroup
-    {
-        SendGroup (juce::String t, std::vector<juce::Component*> k, juce::Component* b = nullptr, int be = 0,
-                   juce::Component* e = nullptr, int ew = 0, int eh = 28, int edy = 0)
-            : title (std::move (t)), knobs (std::move (k)), big (b), bigExtra (be), extra (e), extraW (ew), extraH (eh), extraDy (edy) {}
-
-        juce::String title;
-        std::vector<juce::Component*> knobs;
-        juce::Component* big = nullptr;       // knob drawn larger (gets bigExtra more width and the full height)
-        int bigExtra = 0;
-        juce::Component* extra = nullptr;     // e.g. a combo, toggle or segmented control
-        int extraW = 0, extraH = 28, extraDy = 0;
-        juce::Rectangle<int> area;
-
-        int visibleKnobs() const { int n = 0; for (auto* k : knobs) if (k->isVisible()) ++n; return n; }
-        bool used() const { return visibleKnobs() > 0 || extra != nullptr; }
-        int extraWidth() const { return (extra != nullptr ? extraW : 0) + (big != nullptr && big->isVisible() ? bigExtra : 0); }
-    };
-
-    // Lays the used groups out across the full row: equal knob cells (at most maxCell wide), spare width shared out.
-    inline void layoutGroups (juce::Rectangle<int> row, std::initializer_list<SendGroup*> groups, int maxCell, int smallTrim = 0)
-    {
-        constexpr int pad = 10, gap = 10, titleH = 24;
-        int count = 0, knobs = 0, extras = 0;
-        for (auto* g : groups)
-        {
-            g->area = {};
-            if (! g->used()) continue;
-            ++count; knobs += g->visibleKnobs(); extras += g->extraWidth();
-        }
-        if (count == 0) return;
-        const int fixed = count * 2 * pad + (count - 1) * gap + extras;
-        const int cell = knobs > 0 ? juce::jmin (maxCell, (row.getWidth() - fixed) / knobs) : 0;
-        const int spare = (row.getWidth() - fixed - knobs * cell) / count;
-        for (auto* g : groups)
-        {
-            if (! g->used()) continue;
-            const int content = g->visibleKnobs() * cell + g->extraWidth();
-            g->area = row.removeFromLeft (content + 2 * pad + spare);
-            row.removeFromLeft (gap);
-            auto inner = g->area.reduced (pad, 0).withTrimmedTop (titleH).withTrimmedBottom (6);
-            inner = inner.withSizeKeepingCentre (content, inner.getHeight());
-            for (auto* k : g->knobs)
-            {
-                if (! k->isVisible()) continue;
-                // keep each ring at least 18 px narrower than its cell so neighbouring range labels stay apart
-                // (a RangeKnob's ring is its height minus 39 px of labels); rows stay bottom-aligned
-                const int w = k == g->big ? cell + g->bigExtra : cell;
-                auto r = inner.removeFromLeft (w);
-                if (k != g->big) r = r.withTrimmedTop (smallTrim);
-                k->setBounds (r.withTop (juce::jmax (r.getY(), r.getBottom() - (w - 18 + 39))));
-            }
-            if (g->extra != nullptr)
-            {
-                auto e = inner.removeFromLeft (g->extraW).reduced (4, 0);
-                g->extra->setBounds (e.withSizeKeepingCentre (e.getWidth(), g->extraH).translated (0, g->extraDy));
-            }
-        }
-    }
 
     //==================================================================================================================
     // REVERB
@@ -1062,6 +963,172 @@ namespace kvui
     };
 
     //==================================================================================================================
+    // FLANGER
+    // Delay time of the left (accent) and right (amber) sweep over two LFO cycles, with the current position.
+    class SweepDisplay : public juce::Component, private juce::Timer
+    {
+    public:
+        explicit SweepDisplay (KaminariVocalProcessor& p) : proc (p), state (p.apvts) { setTitle ("Flanger sweep"); startTimerHz (30); }
+        ~SweepDisplay() override { stopTimer(); }
+        void paint (juce::Graphics& g) override
+        {
+            auto b = getLocalBounds().toFloat();
+            g.setColour (navy950);
+            g.fillRoundedRectangle (b, 5.0f);
+            g.setColour (navy600);
+            g.drawRoundedRectangle (b.reduced (0.5f), 5.0f, 1.0f);
+            const float base = plainValue (state, kvid::flDelay), depth = plainValue (state, kvid::flDepth) * 0.01f;
+            const float stereo = plainValue (state, kvid::flStereo) / 180.0f;
+            const int shape = juce::roundToInt (plainValue (state, kvid::flShape));
+            const float top = base + kv::FlangerSend::maxSweepMs * depth;
+            const float yMax = juce::jmax (2.0f, top * 1.15f);
+            auto plot = b.reduced (12.0f, 10.0f).withTrimmedTop (14.0f).withTrimmedBottom (12.0f);
+            g.setColour (navy800);
+            for (int k = 1; k < 4; ++k) g.drawVerticalLine (juce::roundToInt (plot.getX() + plot.getWidth() * (float) k / 4.0f), plot.getY(), plot.getBottom());
+            for (int c = 1; c >= 0; --c)
+            {
+                juce::Path path;
+                const int n = (int) plot.getWidth();
+                for (int i = 0; i <= n; ++i)
+                {
+                    const float ph = 2.0f * (float) i / (float) n + (c == 1 ? 0.5f * stereo : 0.0f);
+                    const float lfo = 0.5f + 0.5f * kv::lfoShape (shape, ph - 0.25f);
+                    const float d = base + kv::FlangerSend::maxSweepMs * depth * lfo;
+                    const float x = plot.getX() + (float) i, y = plot.getBottom() - plot.getHeight() * d / yMax;
+                    if (i == 0) path.startNewSubPath (x, y); else path.lineTo (x, y);
+                }
+                g.setColour (c == 0 ? accent : amber.withAlpha (0.85f));
+                g.strokePath (path, juce::PathStrokeType (c == 0 ? 2.0f : 1.4f));
+            }
+            // current LFO position (left channel), on both drawn cycles
+            const bool on = choiceIndex (state, kvid::flOn) != 0;
+            if (on)
+                for (int k = 0; k < 2; ++k)
+                {
+                    const float ph = pos + (float) k;
+                    const float lfo = 0.5f + 0.5f * kv::lfoShape (shape, ph - 0.25f);
+                    const float d = base + kv::FlangerSend::maxSweepMs * depth * lfo;
+                    const float x = plot.getX() + plot.getWidth() * ph / 2.0f, y = plot.getBottom() - plot.getHeight() * d / yMax;
+                    g.setColour (white);
+                    g.fillEllipse (x - 3.5f, y - 3.5f, 7.0f, 7.0f);
+                }
+            g.setFont (font (11.0f, 0));
+            g.setColour (mist);
+            const float notchLo = 500.0f / top, notchHi = 500.0f / base;   // first comb notch in Hz: 1 / (2 d), d in ms
+            g.drawText ("delay " + juce::String (base, 2) + juce::String (juce::CharPointer_UTF8 ("\xe2\x80\x93")) + juce::String (top, 2) + " ms"
+                        + dot() + "first notch " + kvp::freqText (notchLo) + juce::String (juce::CharPointer_UTF8 ("\xe2\x80\x93")) + kvp::freqText (notchHi),
+                        b.reduced (12.0f, 4.0f).removeFromTop (14.0f), juce::Justification::centredLeft);
+            g.setFont (font (10.0f, 1, 0.08f));
+            g.setColour (accent);
+            g.drawText ("LEFT", b.reduced (12.0f, 4.0f).removeFromBottom (12.0f), juce::Justification::centredLeft);
+            g.setColour (amber);
+            g.drawText ("RIGHT", b.reduced (12.0f, 4.0f).removeFromBottom (12.0f).withTrimmedLeft (34.0f), juce::Justification::centredLeft);
+            g.setColour (mist);
+            g.drawText ("2 cycles", b.reduced (12.0f, 4.0f).removeFromBottom (12.0f), juce::Justification::centredRight);
+        }
+    private:
+        void timerCallback() override { pos = proc.flanger.lfoNow.load(); repaint(); }
+        KaminariVocalProcessor& proc;
+        APVTS& state;
+        float pos = 0;
+    };
+
+    class FlangerOptions : public juce::Component
+    {
+    public:
+        explicit FlangerOptions (APVTS& s)
+            : sync (s, kvid::flSync, "SYNC", "Free rate, or one sweep per bar or note value, locked to the host tempo."),
+              shape (s, kvid::flShape, { "SINE", "TRIANGLE" }, "Waveform of the sweep. Triangle sweeps evenly; sine lingers at the ends.")
+        {
+            addAndMakeVisible (sync);
+            addAndMakeVisible (shape);
+        }
+        void resized() override
+        {
+            auto b = getLocalBounds();
+            sync.setBounds (b.removeFromTop (42));
+            b.removeFromTop (8);
+            shape.setBounds (b.removeFromTop (26));
+        }
+        ChoiceBox sync;
+        SegParam shape;
+    };
+
+    class FlangerPanel : public juce::Component
+    {
+    public:
+        explicit FlangerPanel (KaminariVocalProcessor& p)
+            : header (p, KaminariVocalProcessor::Flanger, kvid::flOn, kvid::flSend, kvid::flTap, "Flanger", "flanger"),
+              sweep (p),
+              rate (p.apvts, kvid::flRate, "Rate", "SLOW", "FAST", "Sweep speed when Sync is Free."),
+              depth (p.apvts, kvid::flDepth, "Depth", "MIN", "MAX", "How far the delay sweeps (up to 6 ms above Delay)."),
+              delay (p.apvts, kvid::flDelay, "Delay", "0.1", "10 MS", "Shortest delay of the sweep. Short = high, metallic notches; long = chorus-like."),
+              feedback (p.apvts, kvid::flFeedback, "Feedback", "-95", "+95", "Resonance of the sweep. Negative values give a hollow tone."),
+              stereo (p.apvts, kvid::flStereo, "Stereo", "0", "180", "Phase between the left and right sweeps. 0 = mono sweep."),
+              hiCut (p.apvts, kvid::flHiCut, "High Cut", "DARK", "OPEN", "Darkens the flanged signal and its feedback."),
+              options (p.apvts),
+              state (p.apvts),
+              syncAtt (*p.apvts.getParameter (kvid::flSync), [this] (float) { update(); })
+        {
+            for (auto* c : std::initializer_list<juce::Component*> { &header, &sweep, &options })
+                addAndMakeVisible (c);
+            for (auto* k : knobs())
+            {
+                addAndMakeVisible (k);
+                k->setLNF (&lnf);
+                k->setLabelOverhang (2);
+            }
+            syncAtt.sendInitialUpdate();
+        }
+        ~FlangerPanel() override { for (auto* k : knobs()) k->setLNF (nullptr); }
+        std::vector<RangeKnob*> knobs() { return { &rate, &depth, &delay, &feedback, &stereo, &hiCut }; }
+
+        void update()
+        {
+            rate.setVisible (choiceIndex (state, kvid::flSync) == 0);
+            if (! getBounds().isEmpty()) resized();
+            repaint();
+        }
+
+        void paint (juce::Graphics& g) override
+        {
+            for (auto* grp : { &sweepGrp, &delayGrp, &stereoGrp, &toneGrp })
+                if (! grp->area.isEmpty())
+                    drawTitledGroup (g, grp->area, grp->title);
+            g.setColour (steel);
+            g.setFont (font (12.0f, 0));
+            g.drawFittedText ("The return is 100 % wet. The flanging forms where it meets the dry vocal, so it is strongest with the send near 0 dB "
+                              "and gentler at lower send levels. Feedback above about 80 % gives the resonant jet sound.",
+                              noteArea, juce::Justification::topLeft, 3, 1.0f);
+        }
+
+        void resized() override
+        {
+            auto b = getLocalBounds();
+            header.setBounds (b.removeFromTop (80));
+            b.removeFromTop (16);
+            sweep.setBounds (b.removeFromTop (170));
+            b.removeFromTop (14);
+            layoutGroups (b.removeFromTop (150), { &sweepGrp, &delayGrp, &stereoGrp, &toneGrp }, 104, 16);
+            b.removeFromTop (10);
+            noteArea = b.removeFromTop (48);
+        }
+
+        ModuleLNF lnf;
+        SendHeader header;
+        SweepDisplay sweep;
+        RangeKnob rate, depth, delay, feedback, stereo, hiCut;
+        FlangerOptions options;
+
+    private:
+        APVTS& state;
+        SendGroup sweepGrp { "SWEEP", { &rate, &depth }, nullptr, 0, &options, 140, 76, 2 }, delayGrp { "DELAY", { &delay, &feedback } },
+                  stereoGrp { "STEREO", { &stereo } }, toneGrp { "TONE", { &hiCut } };
+        juce::Rectangle<int> noteArea;
+        juce::ParameterAttachment syncAtt;
+    };
+
+    //==================================================================================================================
     // SENDS page: title, one tab per send (on light, name, send level) and the selected send's panel.
     class SendTab : public juce::Button
     {
@@ -1104,12 +1171,12 @@ namespace kvui
     class SendsPage : public juce::Component, private juce::Timer
     {
     public:
-        SendsPage (KaminariVocalProcessor& p, ReverbPanel& r, DelayPanel& d, WidenerPanel& w) : panels { &r, &d, &w }
+        SendsPage (KaminariVocalProcessor& p, ReverbPanel& r, DelayPanel& d, WidenerPanel& w, FlangerPanel& f) : panels { &r, &d, &w, &f }
         {
-            const char* names[] = { "Reverb", "Delay", "Widener" };
-            const char* on[] = { kvid::rvOn, kvid::dlOn, kvid::wdOn };
-            const char* lv[] = { kvid::rvSend, kvid::dlSend, kvid::wdSend };
-            for (int i = 0; i < 3; ++i)
+            const char* names[] = { "Reverb", "Delay", "Widener", "Flanger" };
+            const char* on[] = { kvid::rvOn, kvid::dlOn, kvid::wdOn, kvid::flOn };
+            const char* lv[] = { kvid::rvSend, kvid::dlSend, kvid::wdSend, kvid::flSend };
+            for (int i = 0; i < numPanels; ++i)
             {
                 auto* b = tabs.add (new SendTab (p, names[i], on[i], lv[i]));
                 b->onClick = [this, i] { if (tabs[i]->getToggleState()) { current = i; if (onChange) onChange (i); update(); } };
@@ -1120,7 +1187,8 @@ namespace kvui
             startTimerHz (5);
         }
         ~SendsPage() override { stopTimer(); }
-        void show (int i) { current = juce::jlimit (0, 2, i); update(); }
+        static constexpr int numPanels = 4;
+        void show (int i) { current = juce::jlimit (0, numPanels - 1, i); update(); }
         int shown() const { return current; }
         std::function<void (int)> onChange;
 
@@ -1143,7 +1211,7 @@ namespace kvui
             g.drawText ("SENDS", 54, 12, 100, 28, juce::Justification::centredLeft);
             g.setColour (mist);
             g.setFont (font (13.0f, 0));
-            g.drawText ("Reverb, delay and widener" + dot() + "returns are 100 % wet and added to the unchanged dry vocal", 128, 12, 600, 28,
+            g.drawText ("Reverb, delay, widener and flanger" + dot() + "returns are 100 % wet and added to the unchanged dry vocal", 128, 12, 640, 28,
                         juce::Justification::centredLeft);
         }
         void resized() override
@@ -1159,13 +1227,13 @@ namespace kvui
         void timerCallback() override { for (auto* t : tabs) t->repaint(); }
         void update()
         {
-            for (int i = 0; i < 3; ++i)
+            for (int i = 0; i < numPanels; ++i)
             {
                 tabs[i]->setToggleState (i == current, juce::dontSendNotification);
                 panels[(size_t) i]->setVisible (i == current);
             }
         }
-        std::array<juce::Component*, 3> panels;
+        std::array<juce::Component*, numPanels> panels;
         juce::OwnedArray<SendTab> tabs;
         int current = 0;
     };

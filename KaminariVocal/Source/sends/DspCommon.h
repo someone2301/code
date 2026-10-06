@@ -175,6 +175,18 @@ namespace kv
 
     inline float softClip (float x) noexcept { return std::tanh (x); }
 
+    // LFO waveform at phase 0..1, output -1..1. 0 sine, 1 triangle, 2 square (edges rounded to avoid clicks).
+    inline float lfoShape (int shape, float phase) noexcept
+    {
+        phase -= std::floor (phase);
+        switch (shape)
+        {
+            case 1:  { const float q = phase < 0.25f ? phase : (phase < 0.75f ? 0.5f - phase : phase - 1.0f); return 4.0f * q; }
+            case 2:  return std::tanh (6.0f * std::sin (twoPi * phase)) / std::tanh (6.0f);
+            default: return std::sin (twoPi * phase);
+        }
+    }
+
     // Smooth limiter used on every return so a send can never overload the output.
     // Transparent below 0.8 (about -2 dBFS), approaches 1.0 asymptotically above.
     inline float returnGuard (float x) noexcept

@@ -1,3 +1,4 @@
+#include <numeric>
 // Offline checks for the Kaminari Vocal sends: routing, levels, bypass, effect selection, persistence and the editor.
 // Build with -DKV_BUILD_TESTS=ON and run: KaminariVocalTests [snapshot_dir]
 #include "PluginProcessor.h"
@@ -56,7 +57,7 @@ namespace
     // Switches every channel module off, so the dry path is a pure delay of the reported latency.
     void neutral (KaminariVocalProcessor& p)
     {
-        for (auto* id : { "tn_on", "eq_on", "mb_on", "lv_on", "ds_on", "rs_on" })
+        for (auto* id : { "tn_on", "eq_on", "mb_on", "lv_on", "dt_on", "ds_on", "rs_on" })
             setParam (p, id, 0.0f);
     }
 
@@ -181,9 +182,10 @@ namespace
         return count > 0 ? sr * count / (double) (last - first) : 0.0;
     }
 
-    const char* sendOn[]    = { kvid::rvOn, kvid::dlOn, kvid::wdOn };
-    const char* sendLevel[] = { kvid::rvSend, kvid::dlSend, kvid::wdSend };
-    const char* sendName[]  = { "reverb", "delay", "widener" };
+    constexpr int numSends = KaminariVocalProcessor::numSends;
+    const char* sendOn[]    = { kvid::rvOn, kvid::dlOn, kvid::wdOn, kvid::flOn };
+    const char* sendLevel[] = { kvid::rvSend, kvid::dlSend, kvid::wdSend, kvid::flSend };
+    const char* sendName[]  = { "reverb", "delay", "widener", "flanger" };
 }
 
 int main (int argc, char** argv)
@@ -199,7 +201,7 @@ int main (int argc, char** argv)
         check (maxDiff (r) == 0.0f, "default state: all sends off, output is bit-identical to the input");
     }
 
-    for (int s = 0; s < 3; ++s)
+    for (int s = 0; s < numSends; ++s)
     {
         KaminariVocalProcessor p;
         neutral (p);
@@ -210,7 +212,7 @@ int main (int argc, char** argv)
         check (maxDiff (r) == 0.0f, juce::String (sendName[s]) + " send on at minimum level: output is bit-identical to the dry signal");
     }
 
-    for (int s = 0; s < 3; ++s)
+    for (int s = 0; s < numSends; ++s)
     {
         std::vector<double> levels;
         bool othersSilent = true, finite = true;
@@ -225,7 +227,7 @@ int main (int argc, char** argv)
             const auto r = render (p, 1.5, vocal, [&] (int)
             {
                 own = std::max (own, (double) p.returnRms[(size_t) s].load());
-                for (int o = 0; o < 3; ++o)
+                for (int o = 0; o < numSends; ++o)
                     if (o != s && p.returnRms[(size_t) o].load() != 0.0f)
                         othersSilent = false;
             });
@@ -238,7 +240,7 @@ int main (int argc, char** argv)
                + juce::String (juce::Decibels::gainToDecibels (levels[0]), 1) + " / "
                + juce::String (juce::Decibels::gainToDecibels (levels[1]), 1) + " / "
                + juce::String (juce::Decibels::gainToDecibels (levels[2]), 1) + " dB)");
-        check (othersSilent, juce::String (sendName[s]) + " send: the other two returns stay at exactly zero");
+        check (othersSilent, juce::String (sendName[s]) + " send: the other returns stay at exactly zero");
         check (finite, juce::String (sendName[s]) + " send: output is finite");
     }
 
@@ -288,7 +290,7 @@ int main (int argc, char** argv)
     }
 
     // bypass
-    for (int s = 0; s < 3; ++s)
+    for (int s = 0; s < numSends; ++s)
     {
         KaminariVocalProcessor p;
         neutral (p);
@@ -306,20 +308,21 @@ int main (int argc, char** argv)
     {
         KaminariVocalProcessor p;
         neutral (p);
-        for (int s = 0; s < 3; ++s)
+        for (int s = 0; s < numSends; ++s)
         {
             setParam (p, sendOn[s], 1.0f);
             setParam (p, sendLevel[s], 6.0f);
         }
         setParam (p, kvid::dlFeedback, 100.0f);
         setParam (p, kvid::rvDecay, 20.0f);
+        setParam (p, kvid::flFeedback, 95.0f);
         prepare (p);
-        float peak[3] = {};
+        float peak[numSends] = {};
         render (p, 4.0, [] (int c, long n) { return (float) std::sin (2 * kv::pi * 300.0 * n / sr + c); },
-                [&] (int) { for (int s = 0; s < 3; ++s) peak[s] = std::max (peak[s], p.returnPeak[(size_t) s].load()); });
-        check (peak[0] <= 1.0f && peak[1] <= 1.0f && peak[2] <= 1.0f,
+                [&] (int) { for (int s = 0; s < numSends; ++s) peak[s] = std::max (peak[s], p.returnPeak[(size_t) s].load()); });
+        check (peak[0] <= 1.0f && peak[1] <= 1.0f && peak[2] <= 1.0f && peak[3] <= 1.0f,
                "full-scale input, all sends +6 dB, 100 % feedback, 20 s decay: every return peak <= 0 dBFS ("
-               + juce::String (peak[0], 3) + ", " + juce::String (peak[1], 3) + ", " + juce::String (peak[2], 3) + ")");
+               + juce::String (peak[0], 3) + ", " + juce::String (peak[1], 3) + ", " + juce::String (peak[2], 3) + ", " + juce::String (peak[3], 3) + ")");
     }
 
     // ---- reverb ---------------------------------------------------------------------------------------------------
@@ -752,8 +755,8 @@ int main (int argc, char** argv)
 
         int moduleCount = 0, presetCount = 0;
         for (auto& m : pm.getModules()) { ++moduleCount; presetCount += (int) m.factory.size(); }
-        check (moduleCount == 9 && presetCount >= 54 && pm.getFactoryChains().size() >= 10,
-               "factory presets for all 9 modules (" + juce::String (presetCount) + " module presets) and "
+        check (moduleCount == 11 && presetCount >= 80 && pm.getFactoryChains().size() >= 12,
+               "factory presets for all 11 modules (" + juce::String (presetCount) + " module presets) and "
                + juce::String ((int) pm.getFactoryChains().size()) + " chain presets");
 
         setParam (p, kvid::rvOn, 1.0f);
@@ -843,6 +846,161 @@ int main (int argc, char** argv)
                && ! q.presets.isChainModified(), "preset names are saved with the session");
     }
 
+
+    // ---- tune: vibrato and tremolo --------------------------------------------------------------------------------
+    {
+        // pitch of a steady tone in 25 ms frames (zero crossings), in cents relative to a reference
+        auto pitchTrack = [] (const juce::AudioBuffer<float>& b, int from, int to, double ref)
+        {
+            std::vector<double> cents;
+            const int frame = (int) (0.025 * sr);
+            for (int i = from; i + frame <= to; i += frame / 2)
+            {
+                const double f = zeroCrossFreq (b, 0, i, i + frame);
+                if (f > 0) cents.push_back (1200.0 * std::log2 (f / ref));
+            }
+            return cents;
+        };
+        const double in = 440.0 * std::pow (2.0, 0.30 / 12.0);   // A4 + 30 cents
+
+        KaminariVocalProcessor p;
+        neutral (p);
+        setParam (p, "tn_on", 1.0f);
+        setParam (p, "tn_correct", 0.0f);
+        prepare (p);
+        auto r = render (p, 1.0, sine (in, -12.0f));
+        const double fOff = zeroCrossFreq (r.out, 0, 24000, 48000);
+        check (std::abs (1200.0 * std::log2 (fOff / in)) < 3.0, "Correct pitch off: the tone keeps its own pitch ("
+               + juce::String (1200.0 * std::log2 (fOff / 440.0), 1) + " cents from A4)");
+
+        setParam (p, "tn_vib_on", 1.0f);
+        setParam (p, "tn_vib_depth", 50.0f);
+        setParam (p, "tn_vib_rate", 5.0f);
+        setParam (p, "tn_vib_delay", 200.0f);
+        setParam (p, "tn_vib_rise", 0.0f);
+        setParam (p, "tn_vib_variation", 0.0f);
+        prepare (p);
+        r = render (p, 2.0, sine (in, -12.0f));
+        const auto early = pitchTrack (r.out, (int) (0.06 * sr), (int) (0.16 * sr), in);
+        const auto late = pitchTrack (r.out, (int) (0.6 * sr), (int) (1.8 * sr), in);
+        double earlySpan = 0, lo = 1e9, hi = -1e9;
+        for (double c : early) earlySpan = std::max (earlySpan, std::abs (c));
+        for (double c : late) { lo = std::min (lo, c); hi = std::max (hi, c); }
+        check (earlySpan < 8.0, "vibrato waits for its onset delay (pitch within " + juce::String (earlySpan, 1) + " cents in the first 160 ms)");
+        check (hi - lo > 60.0 && hi - lo < 130.0, "vibrato depth 50 cents swings the pitch by about 100 cents peak to peak ("
+               + juce::String (hi - lo, 0) + ")");
+
+        // tremolo: level dips by the depth at the tremolo rate
+        KaminariVocalProcessor t;
+        neutral (t);
+        setParam (t, "tn_on", 1.0f);
+        setParam (t, "tn_correct", 0.0f);
+        setParam (t, "tn_trem_on", 1.0f);
+        setParam (t, "tn_trem_depth", 50.0f);
+        setParam (t, "tn_trem_rate", 4.0f);
+        prepare (t);
+        r = render (t, 1.5, sine (300.0, -12.0f));
+        auto frameRms = [] (const juce::AudioBuffer<float>& b, int ch)
+        {
+            std::vector<float> v;
+            const int frame = (int) (0.01 * sr);
+            for (int i = (int) (0.2 * sr); i + frame <= b.getNumSamples(); i += frame)
+            {
+                double e = 0;
+                for (int k = 0; k < frame; ++k) e += (double) b.getSample (ch, i + k) * b.getSample (ch, i + k);
+                v.push_back ((float) std::sqrt (e / frame));
+            }
+            return v;
+        };
+        auto env = frameRms (r.out, 0);
+        const float mx = *std::max_element (env.begin(), env.end()), mn = *std::min_element (env.begin(), env.end());
+        check (std::abs (juce::Decibels::gainToDecibels (mn / mx) + 6.0f) < 1.5f, "tremolo depth 50 %: level dips by about 6 dB ("
+               + juce::String (juce::Decibels::gainToDecibels (mn / mx), 1) + " dB)");
+
+        setParam (t, "tn_trem_stereo", 180.0f);
+        setParam (t, "tn_trem_depth", 100.0f);
+        prepare (t);
+        r = render (t, 1.5, sine (300.0, -12.0f));
+        const auto envL = frameRms (r.out, 0), envR = frameRms (r.out, 1);
+        std::vector<float> dl, dr;
+        const float ml = std::accumulate (envL.begin(), envL.end(), 0.0f) / (float) envL.size();
+        const float mr = std::accumulate (envR.begin(), envR.end(), 0.0f) / (float) envR.size();
+        for (size_t i = 0; i < envL.size(); ++i) { dl.push_back (envL[i] - ml); dr.push_back (envR[i] - mr); }
+        check (correlation (dl, dr) < -0.8, "tremolo stereo phase 180: left and right move in opposition (auto-pan), correlation "
+               + juce::String (correlation (dl, dr), 2));
+
+        neutral (t);
+        prepare (t);
+        r = render (t, 0.5, sine (in, -12.0f));   // a tone that never lands exactly on zero (the chain flushes values below 1e-15)
+        check (maxDiff (r) == 0.0f, "Tune off: tremolo and vibrato settings have no effect");
+    }
+
+    // ---- distortion ------------------------------------------------------------------------------------------------
+    {
+        KaminariVocalProcessor p;
+        neutral (p);
+        setParam (p, "dt_os", 1.0f);
+        prepare (p);
+        const int base = p.getLatencySamples();
+        auto r = render (p, 0.5, vocal);
+        check (maxDiff (r) == 0.0f, "Distortion off: no effect and no added latency");
+
+        setParam (p, "dt_on", 1.0f);
+        setParam (p, "dt_style", 4.0f);   // Clip
+        setParam (p, "dt_drive", 18.0f);
+        prepare (p);
+        const int withOs = p.getLatencySamples();
+        check (withOs > base && withOs - base < 64, "Distortion on with 2x oversampling adds " + juce::String (withOs - base) + " samples of latency");
+        r = render (p, 1.0, sine (1000.0, -12.0f));
+        const float h1 = toneDb (r.out, 0, 1000.0, 12000, 48000), h3 = toneDb (r.out, 0, 3000.0, 12000, 48000);
+        const float h3in = toneDb (r.in, 0, 3000.0, 12000, 48000);
+        check (h3 - h1 > -30.0f && h3in < -120.0f, "Clip at 18 dB drive adds harmonics (3rd harmonic " + juce::String (h3 - h1, 1) + " dB below the fundamental)");
+        const float inDb = toneDb (r.in, 0, 1000.0, 12000, 48000);
+        check (std::abs (h1 - inDb) < 4.0f, "Auto Gain keeps the level close to the input (" + juce::String (h1 - inDb, 1) + " dB)");
+
+        // Mix 0: the output is the input, delayed by exactly the reported latency
+        setParam (p, "dt_mix", 0.0f);
+        prepare (p);
+        r = render (p, 0.5, vocal);
+        check (maxDiff (r) < 1.0e-6f, "Distortion Mix 0 %: the dry path stays aligned with the reported latency (max diff "
+               + juce::String (maxDiff (r), 7) + ")");
+
+        // every style, every oversampling setting: finite and bounded on a hot vocal
+        bool ok = true;
+        for (int st = 0; st < 6; ++st)
+            for (int os = 0; os < 3; ++os)
+            {
+                setParam (p, "dt_style", (float) st);
+                setParam (p, "dt_os", (float) os);
+                setParam (p, "dt_mix", 100.0f);
+                setParam (p, "dt_drive", 36.0f);
+                setParam (p, "dt_bias", 60.0f);
+                prepare (p);
+                r = render (p, 0.5, vocal);
+                for (int i = 0; i < r.out.getNumSamples(); ++i)
+                    ok = ok && std::isfinite (r.out.getSample (0, i)) && std::abs (r.out.getSample (0, i)) < 4.0f;
+            }
+        check (ok, "Distortion: every style and oversampling setting stays finite and bounded at full drive and bias");
+    }
+
+    // ---- flanger ---------------------------------------------------------------------------------------------------
+    {
+        // the flanged comb: dry + return at 0 dB cuts some frequencies of white noise deeply
+        KaminariVocalProcessor p;
+        neutral (p);
+        setParam (p, kvid::flOn, 1.0f);
+        setParam (p, kvid::flSend, 0.0f);
+        setParam (p, kvid::flDepth, 0.0f);       // static comb for the measurement
+        setParam (p, kvid::flDelay, 1.0f);       // 1 ms: notches at 500 Hz, 1.5 kHz, ...
+        setParam (p, kvid::flFeedback, 0.0f);
+        setParam (p, kvid::flHiCut, 20000.0f);
+        prepare (p);
+        const auto r = render (p, 1.0, [] (int, long n) { kv::Random rnd ((uint32_t) n * 2654435761u + 3u); return 0.3f * rnd.next(); });
+        const float notch = toneDb (r.out, 0, 500.0, 12000, 48000);   // dry + copy delayed 1 ms cancel at 500 Hz
+        const float peak = toneDb (r.out, 0, 1000.0, 12000, 48000);   // and add at 1 kHz
+        check (peak - notch > 12.0f, "flanger at 0 dB send: comb notch " + juce::String (peak - notch, 1) + " dB below the comb peak");
+    }
+
     // ---- editor ---------------------------------------------------------------------------------------------------
     {
         KaminariVocalProcessor p;
@@ -919,15 +1077,15 @@ int main (int argc, char** argv)
                 juce::MessageManager::getInstance()->runDispatchLoopUntil (40);
             }
             save ("basic.png");
-            const char* names[] = { "tune", "eq", "multiband", "compression", "deess", "resonance" };
+            const char* names[] = { "tune", "eq", "multiband", "compression", "distortion", "deess", "resonance" };
             for (int t = 0; t < KaminariVocalEditor::TabSends; ++t)
             {
                 ed->showTab (true, t);
                 for (int k = 0; k < 4; ++k) { render (p, 0.1, vocal); juce::MessageManager::getInstance()->runDispatchLoopUntil (40); }
                 save (juce::String ("adv_") + names[t] + ".png");
             }
-            const char* sendNames[] = { "reverb", "delay", "widener" };
-            for (int s2 = 0; s2 < 3; ++s2)
+            const char* sendNames[] = { "reverb", "delay", "widener", "flanger" };
+            for (int s2 = 0; s2 < numSends; ++s2)
             {
                 ed->showAdvanced (true, s2);
                 for (int k = 0; k < 4; ++k) { render (p, 0.1, vocal); juce::MessageManager::getInstance()->runDispatchLoopUntil (40); }

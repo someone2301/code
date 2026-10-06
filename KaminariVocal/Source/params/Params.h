@@ -4,6 +4,7 @@
 #include "../sends/Reverb.h"
 #include "../sends/Delay.h"
 #include "../sends/Widener.h"
+#include "../sends/Flanger.h"
 #include "../dsp/Eq.h"
 
 // Permanent parameter IDs (see docs/KaminariVocal/DESIGN.md, section 2.9). Never rename or reuse an ID.
@@ -17,6 +18,7 @@ namespace kvid
     inline constexpr const char* rvOn = "rv_on",  * rvSend = "rv_send",  * rvTap = "rv_tap";
     inline constexpr const char* dlOn = "dl_on",  * dlSend = "dl_send",  * dlTap = "dl_tap";
     inline constexpr const char* wdOn = "wd_on",  * wdSend = "wd_send",  * wdTap = "wd_tap";
+    inline constexpr const char* flOn = "fl_on",  * flSend = "fl_send",  * flTap = "fl_tap";
 
     // reverb
     inline constexpr const char* rvMode = "rv_mode", * rvDecay = "rv_decay", * rvSize = "rv_size",
@@ -43,6 +45,11 @@ namespace kvid
                                  * msFocus = "wd_ms_focus",
                                  * swWidth = "wd_sw_width", * swMode = "wd_sw_mode", * swTone = "wd_sw_tone",
                                  * swOutput = "wd_sw_output";
+
+    // flanger
+    inline constexpr const char* flRate = "fl_rate", * flSync = "fl_sync", * flDepth = "fl_depth", * flDelay = "fl_delay",
+                                 * flFeedback = "fl_feedback", * flStereo = "fl_stereo", * flShape = "fl_shape",
+                                 * flHiCut = "fl_hicut";
 }
 
 namespace kvp
@@ -92,6 +99,28 @@ namespace kvp
         if (unit == 2) beats *= 1.5;
         if (unit == 3) beats *= 2.0 / 3.0;
         return beats;
+    }
+
+    // Tempo-synced LFO choices (index 0 = Free). Beats per LFO cycle.
+    inline const juce::StringArray& tremoloSyncNames()
+    {
+        static const juce::StringArray n { "Free", "1/2", "1/4", "1/4 dot", "1/4 trip", "1/8", "1/8 dot", "1/8 trip", "1/16", "1/16 trip" };
+        return n;
+    }
+    inline double tremoloSyncBeats (int i)
+    {
+        static const double b[] = { 0.0, 2.0, 1.0, 1.5, 2.0 / 3.0, 0.5, 0.75, 1.0 / 3.0, 0.25, 1.0 / 6.0 };
+        return b[juce::jlimit (0, 9, i)];
+    }
+    inline const juce::StringArray& flangerSyncNames()
+    {
+        static const juce::StringArray n { "Free", "4 bars", "2 bars", "1 bar", "1/2", "1/4", "1/8" };
+        return n;
+    }
+    inline double flangerSyncBeats (int i)
+    {
+        static const double b[] = { 0.0, 16.0, 8.0, 4.0, 2.0, 1.0, 0.5 };
+        return b[juce::jlimit (0, 6, i)];
     }
 
     inline juce::StringArray reverbModeNames()
@@ -146,6 +175,20 @@ namespace kvp
         static const char* noteNames[] = { "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B" };
         for (int n = 0; n < 12; ++n)
             addBool ("tn_note_" + String (n), String ("Note ") + noteNames[n], true);
+        addBool   ("tn_correct", "Tune Correct Pitch", true);
+        addBool   ("tn_vib_on", "Vibrato On", false);
+        addFloat  ("tn_vib_depth", "Vibrato Depth", { 0.0f, 100.0f, 0.1f }, 30.0f, [] (float v, int) { return String (roundToInt (v)) + " ct"; });
+        addFloat  ("tn_vib_rate", "Vibrato Rate", { 1.0f, 12.0f, 0.01f }, 5.5f, [] (float v, int) { return String (v, 2) + " Hz"; });
+        addFloat  ("tn_vib_delay", "Vibrato Onset Delay", { 0.0f, 1500.0f, 1.0f, 0.6f }, 250.0f, [] (float v, int) { return String (roundToInt (v)) + " ms"; });
+        addFloat  ("tn_vib_rise", "Vibrato Onset Rise", { 0.0f, 1500.0f, 1.0f, 0.6f }, 300.0f, [] (float v, int) { return String (roundToInt (v)) + " ms"; });
+        addFloat  ("tn_vib_variation", "Vibrato Variation", { 0.0f, 100.0f, 0.1f }, 20.0f, pctText);
+        addBool   ("tn_trem_on", "Tremolo On", false);
+        addFloat  ("tn_trem_depth", "Tremolo Depth", { 0.0f, 100.0f, 0.1f }, 40.0f, pctText);
+        addFloat  ("tn_trem_rate", "Tremolo Rate", logRange (0.5f, 20.0f), 5.0f, [] (float v, int) { return String (v, 2) + " Hz"; });
+        addChoice ("tn_trem_sync", "Tremolo Sync", tremoloSyncNames(), 0);
+        addChoice ("tn_trem_shape", "Tremolo Shape", { "Sine", "Triangle", "Square" }, 0);
+        addFloat  ("tn_trem_stereo", "Tremolo Stereo Phase", { 0.0f, 180.0f, 1.0f }, 0.0f, [] (float v, int) { return String (roundToInt (v)) + String (CharPointer_UTF8 ("\xc2\xb0")); });
+        addBool   ("tn_trem_onset", "Tremolo Follows Onset", false);
 
         // EQ
         addBool  ("eq_on", "EQ On", true);
@@ -208,6 +251,20 @@ namespace kvp
         addFloat  ("lv_stereo_link", "Compression Stereo Link", { 0.0f, 100.0f, 0.1f }, 100.0f, pctText);
         addFloat  ("lv_out_gain", "Compression Output", { -24.0f, 24.0f, 0.01f }, 0.0f, dbText);
         addBool   ("lv_auto_gain", "Compression Auto Gain", true);
+
+        // Distortion
+        addBool   ("dt_on", "Distortion On", false);
+        addChoice ("dt_style", "Distortion Style", { "Tape", "Tube", "Warm", "Fuzz", "Clip", "Lo-Fi" }, 0);
+        addFloat  ("dt_drive", "Distortion Drive", { 0.0f, 36.0f, 0.01f }, 9.0f, dbText);
+        addFloat  ("dt_tone", "Distortion Tone", { -100.0f, 100.0f, 0.1f }, 0.0f, bip);
+        addFloat  ("dt_bias", "Distortion Bias", { 0.0f, 100.0f, 0.1f }, 0.0f, pctText);
+        addFloat  ("dt_lowcut", "Distortion Low Cut", logRange (20.0f, 1000.0f), 20.0f,
+                   [] (float v, int) { return v <= 20.5f ? String ("Off") : freqText (v); }, freqFromText);
+        addFloat  ("dt_crush", "Distortion Crush", { 0.0f, 100.0f, 0.1f }, 40.0f, pctText);
+        addFloat  ("dt_mix", "Distortion Mix", { 0.0f, 100.0f, 0.1f }, 100.0f, pctText);
+        addFloat  ("dt_out", "Distortion Output", { -24.0f, 12.0f, 0.01f }, 0.0f, dbText);
+        addBool   ("dt_auto_gain", "Distortion Auto Gain", true);
+        addChoice ("dt_os", "Distortion Oversampling", { "Off", "2x", "4x" }, 1);
 
         // De-ess
         addBool   ("ds_on", "De-Ess On", true);
@@ -363,6 +420,19 @@ namespace kvp
                    [] (float v, int) { return String (roundToInt (v)); });
         addFloat  (kvid::swOutput, "SideWidener Output", { -60.0f, 0.0f, 0.01f, 2.5f }, 0.0f,
                    [] (float v, int) { return v <= -60.0f ? String ("-inf dB") : String (v, 1) + " dB"; });
+
+        // Flanger send
+        addBool   (kvid::flOn, "Flanger Send On", false);
+        addFloat  (kvid::flSend, "Flanger Send", sendRange, -6.0f, sendText, {}, sendFromText);
+        addChoice (kvid::flTap, "Flanger Send Tap", taps, 0);
+        addFloat  (kvid::flRate, "Flanger Rate", logRange (0.02f, 10.0f), 0.3f, [] (float v, int) { return String (v, v < 1.0f ? 2 : 1) + " Hz"; });
+        addChoice (kvid::flSync, "Flanger Sync", flangerSyncNames(), 0);
+        addFloat  (kvid::flDepth, "Flanger Depth", { 0.0f, 100.0f, 0.1f }, 60.0f, pctText);
+        addFloat  (kvid::flDelay, "Flanger Delay", logRange (0.1f, 10.0f), 1.5f, [] (float v, int) { return String (v, 2) + " ms"; });
+        addFloat  (kvid::flFeedback, "Flanger Feedback", { -95.0f, 95.0f, 0.1f }, 40.0f, [] (float v, int) { return String (roundToInt (v)) + " %"; });
+        addFloat  (kvid::flStereo, "Flanger Stereo Phase", { 0.0f, 180.0f, 1.0f }, 90.0f, [] (float v, int) { return String (roundToInt (v)) + String (CharPointer_UTF8 ("\xc2\xb0")); });
+        addChoice (kvid::flShape, "Flanger Shape", { "Sine", "Triangle" }, 1);
+        addFloat  (kvid::flHiCut, "Flanger High Cut", logRange (1000.0f, 20000.0f), 12000.0f, hzText, {}, freqFromText);
 
         return layout;
     }

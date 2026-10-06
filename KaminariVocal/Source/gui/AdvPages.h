@@ -158,6 +158,32 @@ namespace kvui
         KaminariVocalProcessor& proc;
     };
 
+    // Tremolo options next to the tremolo knobs: tempo sync, waveform and onset.
+    class TremoloOptions : public juce::Component
+    {
+    public:
+        explicit TremoloOptions (APVTS& s)
+            : sync (s, "tn_trem_sync", "SYNC", "Free rate, or one cycle per note value locked to the host tempo."),
+              shape (s, "tn_trem_shape", { "SINE", "TRI", "SQR" }, "Waveform of the level change."),
+              onset (s, "tn_trem_onset", "ONSET", "ONSET", "On: the tremolo fades in with each note, using the vibrato's Onset Delay and Rise.")
+        {
+            sync.caption.setFont (font (10.5f, 1, 0.1f));
+            for (auto* c : std::initializer_list<juce::Component*> { &sync, &shape, &onset }) addAndMakeVisible (c);
+        }
+        void resized() override
+        {
+            auto b = getLocalBounds();
+            sync.setBounds (b.removeFromTop (42));
+            b.removeFromTop (6);
+            shape.setBounds (b.removeFromTop (24));
+            b.removeFromTop (6);
+            onset.setBounds (b.removeFromTop (24));
+        }
+        ChoiceBox sync;
+        SegParam shape;
+        ToggleBox onset;
+    };
+
     class TunePage : public AdvFrame, private juce::Timer
     {
     public:
@@ -169,11 +195,32 @@ namespace kvui
               speed (p.apvts, "tn_speed", "Retune Speed", {}, {}, hintFor ("tn_speed")),
               humanize (p.apvts, "tn_humanize", "Humanize", {}, {}, hintFor ("tn_humanize")),
               meter (p), piano (p),
+              correct (p.apvts, "tn_correct", "CORRECT PITCH", "CORRECT PITCH",
+                       "On: notes are pulled to the key and scale. Off: no retuning; vibrato and tremolo still work."),
+              vibPower (p.apvts, "tn_vib_on", "Vibrato"), tremPower (p.apvts, "tn_trem_on", "Tremolo"),
+              vibDepth (p.apvts, "tn_vib_depth", "Depth", "0", "100 CT", "Pitch swing above and below the note, in cents."),
+              vibRate (p.apvts, "tn_vib_rate", "Rate", "SLOW", "FAST", "Vibrato speed. Sung vibrato is usually 5 to 7 Hz."),
+              vibDelay (p.apvts, "tn_vib_delay", "Onset Delay", "0", "1.5 S", "Time after a note starts before the vibrato begins."),
+              vibRise (p.apvts, "tn_vib_rise", "Onset Rise", "0", "1.5 S", "Time the vibrato takes to reach full depth."),
+              vibVariation (p.apvts, "tn_vib_variation", "Variation", "STEADY", "HUMAN", "Lets rate and depth wander slightly, like a singer."),
+              tremDepth (p.apvts, "tn_trem_depth", "Depth", "0", "100 %", "How far the level dips at each cycle (100 % = to silence)."),
+              tremRate (p.apvts, "tn_trem_rate", "Rate", "SLOW", "FAST", "Tremolo speed when Sync is Free."),
+              tremStereo (p.apvts, "tn_trem_stereo", "Stereo", "0", "180", "Phase between left and right. 180 degrees moves the vocal side to side (auto-pan)."),
+              tremOptions (p.apvts),
               scaleAtt (*p.apvts.getParameter ("tn_scale"), [this] (float) { applyScale(); }),
-              keyAtt (*p.apvts.getParameter ("tn_key"), [this] (float) { applyScale(); })
+              keyAtt (*p.apvts.getParameter ("tn_key"), [this] (float) { applyScale(); }),
+              correctAtt (*p.apvts.getParameter ("tn_correct"), [this] (float) { updateVisibility(); }),
+              syncAtt (*p.apvts.getParameter ("tn_trem_sync"), [this] (float) { updateVisibility(); })
         {
-            for (auto* c : std::initializer_list<juce::Component*> { &range, &key, &scale, &speed, &humanize, &meter, &piano, &holdButton })
+            for (auto* c : std::initializer_list<juce::Component*> { &range, &key, &scale, &speed, &humanize, &meter, &piano, &holdButton,
+                                                                     &correct, &vibPower, &tremPower, &tremOptions })
                 addAndMakeVisible (c);
+            for (auto* k : { &vibDepth, &vibRate, &vibDelay, &vibRise, &vibVariation, &tremDepth, &tremRate, &tremStereo })
+            {
+                addAndMakeVisible (k);
+                k->setLNF (&lnf);
+                k->setLabelOverhang (2);
+            }
             for (auto* cb : { &range, &key, &scale })
             {
                 cb->caption.setFont (font (10.5f, 1, 0.1f));
@@ -183,9 +230,25 @@ namespace kvui
             holdButton.setClickingTogglesState (true);
             holdButton.setTooltip ("Freezes the pitch meter.");
             holdButton.onClick = [this] { meter.hold = holdButton.getToggleState(); };
+            correctAtt.sendInitialUpdate();
             startTimerHz (8);
         }
-        ~TunePage() override { stopTimer(); }
+        ~TunePage() override
+        {
+            stopTimer();
+            for (auto* k : { &vibDepth, &vibRate, &vibDelay, &vibRise, &vibVariation, &tremDepth, &tremRate, &tremStereo })
+                k->setLNF (nullptr);
+        }
+
+        void updateVisibility()
+        {
+            const bool on = choiceIndex (proc.apvts, "tn_correct") != 0;
+            speed.setVisible (on);
+            humanize.setVisible (on);
+            tremRate.setVisible (choiceIndex (proc.apvts, "tn_trem_sync") == 0);
+            if (! getBounds().isEmpty()) resized();
+            repaint();
+        }
 
         void paint (juce::Graphics& g) override
         {
@@ -207,8 +270,29 @@ namespace kvui
             g.drawText (voiced ? "Voiced" : "Unvoiced", strip.getRight() - 76, strip.getY() + 28, 70, 16, juce::Justification::centredLeft);
             g.setColour (mist);
             g.setFont (font (11.5f, 0));
-            g.drawText ("0 ms = instant, hard-tuned sound", speed.getBounds().translated (0, speed.getHeight() + 2).withHeight (16).expanded (30, 0), juce::Justification::centred);
-            g.drawText ("Keeps held notes natural", humanize.getBounds().translated (0, humanize.getHeight() + 2).withHeight (16).expanded (30, 0), juce::Justification::centred);
+            if (speed.isVisible())
+            {
+                g.drawText ("0 ms = instant, hard-tuned sound", speed.getBounds().translated (0, speed.getHeight() + 2).withHeight (16).expanded (30, 0), juce::Justification::centred);
+                g.drawText ("Keeps held notes natural", humanize.getBounds().translated (0, humanize.getHeight() + 2).withHeight (16).expanded (30, 0), juce::Justification::centred);
+            }
+            else
+            {
+                g.drawFittedText ("Pitch correction is off. Notes are not retuned; vibrato and tremolo still work.",
+                                  speed.getBounds().withWidth (170).translated (-10, 30), juce::Justification::centredTop, 3, 1.0f);
+            }
+
+            // vibrato and tremolo groups: power, title, live read-out
+            for (auto* grp : { &vibGrp, &tremGrp })
+            {
+                if (grp->area.isEmpty()) continue;
+                drawGroup (g, grp->area, navy950.interpolatedWith (navy900, 0.5f));
+                g.setColour (white);
+                g.setFont (font (12.0f, 2, 0.12f));
+                g.drawText (grp->title, grp->area.getX() + 40, grp->area.getY() + 7, 120, 18, juce::Justification::centredLeft);
+                g.setColour (accent);
+                g.setFont (font (11.5f, 0));
+                g.drawText (grp == &vibGrp ? vibText : tremText, grp->area.getRight() - 170, grp->area.getY() + 7, 158, 18, juce::Justification::centredRight);
+            }
             auto legend = juce::Rectangle<int> (piano.getX(), piano.getY() - 24, piano.getWidth(), 18);
             g.drawText ("Scale notes: click a key to include or exclude it" + dot() + juce::String (piano.countIncluded()) + " of 12" + dot()
                         + "editing switches Scale to Custom", legend, juce::Justification::centredLeft);
@@ -231,13 +315,21 @@ namespace kvui
             range.setBounds (s.removeFromLeft (170)); s.removeFromLeft (16);
             key.setBounds (s.removeFromLeft (80)); s.removeFromLeft (16);
             scale.setBounds (s.removeFromLeft (150));
-            piano.setBounds (b.removeFromBottom (84));
-            b.removeFromBottom (30);
-            auto mid = b.reduced (30, 10);
-            speed.setBounds (mid.removeFromLeft (150).withSizeKeepingCentre (150, 150));
-            humanize.setBounds (mid.removeFromRight (150).withSizeKeepingCentre (150, 150));
+            piano.setBounds (b.removeFromBottom (72));
+            b.removeFromBottom (28);
+            layoutGroups (b.removeFromBottom (138), { &vibGrp, &tremGrp }, 92);
+            for (auto [grp, pw] : { std::pair { &vibGrp, (juce::Component*) &vibPower }, { &tremGrp, (juce::Component*) &tremPower } })
+                pw->setBounds (grp->area.getX() + 10, grp->area.getY() + 5, 22, 22);
+            b.removeFromBottom (8);
+            auto mid = b.reduced (30, 4);
+            auto left = mid.removeFromLeft (170);
+            correct.setBounds (left.removeFromTop (26).withSizeKeepingCentre (140, 26));
+            speed.setBounds (left.withSizeKeepingCentre (130, juce::jmin (left.getHeight() - 18, 130)));
+            auto right = mid.removeFromRight (170);
+            right.removeFromTop (26);
+            humanize.setBounds (right.withSizeKeepingCentre (130, juce::jmin (right.getHeight() - 18, 130)));
             auto centre = mid.withSizeKeepingCentre (300, mid.getHeight());
-            holdButton.setBounds (centre.removeFromBottom (28).withSizeKeepingCentre (110, 26));
+            holdButton.setBounds (centre.removeFromBottom (26).withSizeKeepingCentre (110, 24));
             meter.setBounds (centre);
         }
 
@@ -246,6 +338,11 @@ namespace kvui
         {
             const bool v = proc.tune.detectedMidi.load() >= 0;
             if (v != voiced) { voiced = v; repaint (strip); }
+            const bool vibOn = choiceIndex (proc.apvts, "tn_vib_on") != 0, tremOn = choiceIndex (proc.apvts, "tn_trem_on") != 0;
+            const float vc = proc.tune.vibratoCents.load(), tg = proc.tune.tremoloGain.load();
+            const auto vt = vibOn ? (std::abs (vc) < 0.5f ? juce::String ("waiting for a note") : (vc > 0 ? "+" : "") + juce::String (juce::roundToInt (vc)) + " ct now") : juce::String ("off");
+            const auto tt = tremOn ? juce::String (juce::Decibels::gainToDecibels (tg, -60.0f), 1) + " dB now" : juce::String ("off");
+            if (vt != vibText || tt != tremText) { vibText = vt; tremText = tt; repaint (vibGrp.area.getUnion (tremGrp.area)); }
         }
 
         void applyScale()
@@ -270,9 +367,21 @@ namespace kvui
         CentsMeter meter;
         Piano piano;
         juce::TextButton holdButton;
+        ModuleLNF lnf;
+
+    public:
+        ToggleBox correct;
+        PowerButton vibPower, tremPower;
+        RangeKnob vibDepth, vibRate, vibDelay, vibRise, vibVariation, tremDepth, tremRate, tremStereo;
+        TremoloOptions tremOptions;
+
+    private:
+        SendGroup vibGrp { "VIBRATO", { &vibDepth, &vibRate, &vibDelay, &vibRise, &vibVariation } },
+                  tremGrp { "TREMOLO", { &tremDepth, &tremRate, &tremStereo }, nullptr, 0, &tremOptions, 130, 108, 4 };
+        juce::String vibText, tremText;
         juce::Rectangle<int> strip;
         bool voiced = false;
-        juce::ParameterAttachment scaleAtt, keyAtt;
+        juce::ParameterAttachment scaleAtt, keyAtt, correctAtt, syncAtt;
     };
 
     //==================================================================================================================
@@ -1377,5 +1486,218 @@ namespace kvui
         SegParam quality;
         ToggleBox bypass, delta;
         juce::Rectangle<int> col1, col2, bar;
+    };
+
+    //==================================================================================================================
+    // DISTORTION
+    // Choice parameter shown as a grid of tiles (name + short description).
+    class ChoiceTiles : public juce::Component
+    {
+    public:
+        ChoiceTiles (APVTS& s, const char* id, std::vector<std::pair<juce::String, juce::String>> items, int columns)
+            : param (*s.getParameter (id)), entries (std::move (items)), cols (columns),
+              att (param, [this] (float v) { selected = juce::roundToInt (v); repaint(); if (onChange) onChange (selected); }, nullptr)
+        {
+            setTitle (param.getName (64));
+            att.sendInitialUpdate();
+        }
+        std::function<void (int)> onChange;
+        int current() const { return selected; }
+        const juce::String& description (int i) const { return entries[(size_t) juce::jlimit (0, (int) entries.size() - 1, i)].second; }
+        void paint (juce::Graphics& g) override
+        {
+            for (int i = 0; i < (int) entries.size(); ++i)
+            {
+                const bool on = i == selected, hover = i == hovered;
+                auto r = cell (i).toFloat().reduced (on ? 1.0f : 0.5f);
+                g.setColour (on ? navy800 : (hover ? navy800.withAlpha (0.6f) : navy900));
+                g.fillRoundedRectangle (r, 5.0f);
+                g.setColour (on ? accent : navy600);
+                g.drawRoundedRectangle (r, 5.0f, on ? 1.6f : 1.0f);
+                g.setColour (on ? white : white.withAlpha (0.85f));
+                g.setFont (font (14.0f, on ? 2 : 1, 0.04f));
+                g.drawText (entries[(size_t) i].first, r.reduced (12.0f, 0.0f), juce::Justification::centredLeft);
+                if (on)
+                {
+                    g.setColour (accent);
+                    g.fillEllipse (r.getRight() - 16.0f, r.getCentreY() - 3.5f, 7.0f, 7.0f);
+                }
+            }
+        }
+        void mouseMove (const juce::MouseEvent& e) override { const int h = hit (e.getPosition()); if (h != hovered) { hovered = h; repaint(); } }
+        void mouseExit (const juce::MouseEvent&) override { hovered = -1; repaint(); }
+        void mouseDown (const juce::MouseEvent& e) override { const int h = hit (e.getPosition()); if (h >= 0) att.setValueAsCompleteGesture ((float) h); }
+    private:
+        juce::Rectangle<int> cell (int i) const
+        {
+            const int rows = ((int) entries.size() + cols - 1) / cols, gap = 6;
+            const int w = (getWidth() - (cols - 1) * gap) / cols, h = (getHeight() - (rows - 1) * gap) / rows;
+            return { (i % cols) * (w + gap), (i / cols) * (h + gap), w, h };
+        }
+        int hit (juce::Point<int> p) const { for (int i = 0; i < (int) entries.size(); ++i) if (cell (i).contains (p)) return i; return -1; }
+        juce::RangedAudioParameter& param;
+        std::vector<std::pair<juce::String, juce::String>> entries;
+        int cols, selected = 0, hovered = -1;
+        juce::ParameterAttachment att;
+    };
+
+    // Transfer curve of the selected style at the current Drive and Bias, with the latest peak marked.
+    class DistortionCurve : public juce::Component, private juce::Timer
+    {
+    public:
+        explicit DistortionCurve (KaminariVocalProcessor& p) : proc (p) { setTitle ("Distortion curve"); startTimerHz (20); }
+        ~DistortionCurve() override { stopTimer(); }
+        void paint (juce::Graphics& g) override
+        {
+            auto b = getLocalBounds().toFloat();
+            g.setColour (navy950);
+            g.fillRoundedRectangle (b, 5.0f);
+            g.setColour (navy600);
+            g.drawRoundedRectangle (b.reduced (0.5f), 5.0f, 1.0f);
+            auto plot = b.reduced (14.0f, 14.0f).withTrimmedTop (8.0f);
+            plot = plot.withSizeKeepingCentre (juce::jmin (plot.getWidth(), plot.getHeight()), juce::jmin (plot.getWidth(), plot.getHeight()));
+            g.setColour (navy800);
+            g.drawHorizontalLine (juce::roundToInt (plot.getCentreY()), plot.getX(), plot.getRight());
+            g.drawVerticalLine (juce::roundToInt (plot.getCentreX()), plot.getY(), plot.getBottom());
+            g.drawRect (plot, 1.0f);
+            // unity line
+            g.setColour (steel.withAlpha (0.6f));
+            g.drawLine (plot.getX(), plot.getBottom(), plot.getRight(), plot.getY(), 1.0f);
+
+            auto& s = proc.apvts;
+            const int style = juce::roundToInt (plainValue (s, "dt_style"));
+            const float drive = juce::Decibels::decibelsToGain (plainValue (s, "dt_drive"));
+            const float bias = plainValue (s, "dt_bias") * 0.01f;
+            juce::Path path;
+            const int n = (int) plot.getWidth();
+            for (int i = 0; i <= n; ++i)
+            {
+                const float x = -1.0f + 2.0f * (float) i / (float) n;
+                const float y = juce::jlimit (-1.2f, 1.2f, kv::Distortion::curve (x * drive, style, bias));
+                const float px = plot.getX() + (float) i, py = plot.getCentreY() - y * plot.getHeight() * 0.5f;
+                if (i == 0) path.startNewSubPath (px, py); else path.lineTo (px, py);
+            }
+            g.setColour (accent);
+            g.strokePath (path, juce::PathStrokeType (2.0f));
+
+            // latest peak into the shaper, as an input level on the curve
+            const bool on = choiceIndex (s, "dt_on") != 0;
+            if (on && peak > 1.0e-4f)
+            {
+                const float xin = juce::jlimit (0.0f, 1.0f, peak / drive);
+                const float y = juce::jlimit (-1.2f, 1.2f, kv::Distortion::curve (xin * drive, style, bias));
+                const float px = plot.getCentreX() + xin * plot.getWidth() * 0.5f, py = plot.getCentreY() - y * plot.getHeight() * 0.5f;
+                g.setColour (amber.withAlpha (0.3f));
+                g.fillEllipse (px - 8.0f, py - 8.0f, 16.0f, 16.0f);
+                g.setColour (amber);
+                g.fillEllipse (px - 4.0f, py - 4.0f, 8.0f, 8.0f);
+            }
+            g.setColour (mist);
+            g.setFont (font (11.0f, 0));
+            g.drawText ("in", plot.withY (plot.getBottom() + 1.0f).withHeight (12.0f), juce::Justification::centredRight);
+            g.drawText ("out", juce::Rectangle<float> (b.getX() + 8.0f, b.getY() + 6.0f, 40.0f, 12.0f), juce::Justification::centredLeft);
+            g.setColour (on ? accent : steel);
+            g.drawText (on ? "peak " + juce::String (overDb, 1) + " dB into the curve" : juce::String ("module off"),
+                        b.reduced (8.0f, 6.0f).removeFromTop (12.0f), juce::Justification::centredRight);
+        }
+    private:
+        void timerCallback() override
+        {
+            const float o = proc.distortion.peakOver.load();
+            overDb = o;
+            const float lin = juce::Decibels::decibelsToGain (o);
+            peak = o > 0.0f ? lin : peak * 0.8f;
+            repaint();
+        }
+        KaminariVocalProcessor& proc;
+        float peak = 0, overDb = 0;
+    };
+
+    class DistortionPage : public AdvFrame
+    {
+    public:
+        explicit DistortionPage (KaminariVocalProcessor& p)
+            : AdvFrame (p, "Distortion", "Saturation and drive" + dot() + "after Compression, before De-ess", "dt_on", "distortion"),
+              curve (p),
+              styles (p.apvts, "dt_style", { { "Tape", "Soft, symmetric saturation; highs soften as Drive rises." },
+                                             { "Tube", "Asymmetric saturation that adds even harmonics. Bias adds more." },
+                                             { "Warm", "The gentlest curve: thickens without obvious distortion." },
+                                             { "Fuzz", "High-gain clipping for aggressive, buzzy tones." },
+                                             { "Clip", "Hard clipping: bright and edgy." },
+                                             { "Lo-Fi", "Soft clip plus bit and sample-rate reduction (Crush)." } }, 3),
+              drive (p.apvts, "dt_drive", "Drive", "0 DB", "36 DB", "Gain into the saturation curve. More drive = more distortion."),
+              bias (p.apvts, "dt_bias", "Bias", "SYM", "ASYM", "Makes the curve asymmetric, adding even harmonics."),
+              crush (p.apvts, "dt_crush", "Crush", "OFF", "MAX", "Lo-Fi: fewer bits and a lower sample rate."),
+              lowCut (p.apvts, "dt_lowcut", "Low Cut", "OFF", "1K", "Removes lows before the curve so they stay clean and tight."),
+              tone (p.apvts, "dt_tone", "Tone", "DARK", "BRIGHT", "Tilts the distorted sound darker or brighter around 1 kHz."),
+              mix (p.apvts, "dt_mix", "Mix", "DRY", "WET", "Blend of distorted and clean vocal. Lower values give parallel distortion."),
+              out (p.apvts, "dt_out", "Output", "-24", "+12", "Level of the distorted signal."),
+              autoGain (p.apvts, "dt_auto_gain", "AUTO GAIN", "AUTO GAIN", "Keeps the distorted level close to the input level, so Drive changes tone, not loudness."),
+              os (p.apvts, "dt_os", { "OFF", "2X", "4X" }, "Oversampling reduces harsh aliasing at high Drive. Adds a few samples of latency while the module is on.")
+        {
+            for (auto* c : std::initializer_list<juce::Component*> { &curve, &styles, &os, &outOptions })
+                addAndMakeVisible (c);
+            outOptions.addAndMakeVisible (autoGain);
+            for (auto* k : { &drive, &bias, &crush, &lowCut, &tone, &mix, &out })
+            {
+                addAndMakeVisible (k);
+                k->setLNF (&lnf);
+                k->setLabelOverhang (2);
+            }
+            styles.onChange = [this] (int st) { crush.setVisible (st == kv::DistortionSettings::LoFi); if (! getBounds().isEmpty()) resized(); repaint(); };
+            crush.setVisible (styles.current() == kv::DistortionSettings::LoFi);
+        }
+        ~DistortionPage() override { for (auto* k : { &drive, &bias, &crush, &lowCut, &tone, &mix, &out }) k->setLNF (nullptr); }
+
+        void paint (juce::Graphics& g) override
+        {
+            AdvFrame::paint (g);
+            g.setColour (mist);
+            g.setFont (font (11.0f, 1, 0.1f));
+            g.drawText ("STYLE", styles.getX(), styles.getY() - 18, 100, 14, juce::Justification::centredLeft);
+            g.setColour (white);
+            g.setFont (font (13.0f, 0));
+            g.drawFittedText (styles.description (styles.current()), descArea, juce::Justification::topLeft, 2, 1.0f);
+            for (auto* grp : { &driveGrp, &toneGrp, &outGrp, &qualGrp })
+                if (! grp->area.isEmpty())
+                    drawTitledGroup (g, grp->area, grp->title);
+            const double sr = proc.getSampleRate() > 0 ? proc.getSampleRate() : 48000.0;
+            const int lat = proc.distortion.latencyFor (choiceIndex (proc.apvts, "dt_os"));
+            g.setColour (mist);
+            g.setFont (font (11.5f, 0));
+            g.drawFittedText ("Latency while on: " + juce::String (lat) + " smp (" + juce::String (1000.0 * lat / sr, 2) + " ms)",
+                              os.getBounds().translated (0, 34).withHeight (30).expanded (6, 0), juce::Justification::centredTop, 2, 1.0f);
+        }
+
+        void layoutContent (juce::Rectangle<int> b) override
+        {
+            auto top = b.removeFromTop (260);
+            curve.setBounds (top.removeFromLeft (320));
+            top.removeFromLeft (20);
+            top.removeFromTop (22);
+            styles.setBounds (top.removeFromTop (150));
+            top.removeFromTop (12);
+            descArea = top.removeFromTop (40);
+            b.removeFromTop (16);
+            layoutGroups (b.removeFromTop (juce::jmin (b.getHeight(), 200)), { &driveGrp, &toneGrp, &outGrp, &qualGrp }, 104, 22);
+            if (! outOptions.getBounds().isEmpty()) autoGain.setBounds (outOptions.getLocalBounds().withSizeKeepingCentre (outOptions.getWidth(), 28));
+        }
+
+    private:
+        ModuleLNF lnf;
+        DistortionCurve curve;
+        ChoiceTiles styles;
+        juce::Rectangle<int> descArea;
+
+    public:
+        RangeKnob drive, bias, crush, lowCut, tone, mix, out;
+        ToggleBox autoGain;
+        SegParam os;
+
+    private:
+        juce::Component outOptions;
+        SendGroup driveGrp { "DRIVE", { &drive, &bias, &crush }, &drive, 30 }, toneGrp { "TONE", { &lowCut, &tone } },
+                  outGrp { "OUTPUT", { &mix, &out }, nullptr, 0, &outOptions, 120, 28 },
+                  qualGrp { "OVERSAMPLING", {}, nullptr, 0, &os, 150, 28, -14 };
     };
 }

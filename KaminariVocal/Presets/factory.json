@@ -11,7 +11,19 @@
         { "name": "Tight Pop", "description": "Fast correction for modern pop leads.", "values": { "tn_speed": 18, "tn_humanize": 15 } },
         { "name": "Hard Tune", "description": "Instant pitch snapping, the classic hard-tuned effect.", "values": { "tn_speed": 0, "tn_humanize": 0 } },
         { "name": "Melodic Rap", "description": "Very fast with a little humanize on held notes.", "values": { "tn_speed": 8, "tn_humanize": 8 } },
-        { "name": "Slow Glide", "description": "Audible, smooth glides between notes.", "values": { "tn_speed": 160, "tn_humanize": 50 } }
+        { "name": "Slow Glide", "description": "Audible, smooth glides between notes.", "values": { "tn_speed": 160, "tn_humanize": 50 } },
+        { "name": "Natural Vibrato", "description": "Gentle correction with a late, singer-like vibrato on held notes.", "values": {
+            "tn_speed": 40, "tn_humanize": 30, "tn_vib_on": true, "tn_vib_depth": 25, "tn_vib_rate": 5.5, "tn_vib_delay": 300, "tn_vib_rise": 400, "tn_vib_variation": 30 } },
+        { "name": "Wide Vibrato", "description": "Deep, early vibrato for ballads and soul.", "values": {
+            "tn_speed": 30, "tn_humanize": 25, "tn_vib_on": true, "tn_vib_depth": 60, "tn_vib_rate": 5.0, "tn_vib_delay": 200, "tn_vib_rise": 300, "tn_vib_variation": 25 } },
+        { "name": "Hard Tune Vibrato", "description": "Instant snapping with a steady electronic vibrato.", "values": {
+            "tn_speed": 0, "tn_humanize": 0, "tn_vib_on": true, "tn_vib_depth": 40, "tn_vib_rate": 6.0, "tn_vib_delay": 150, "tn_vib_rise": 200, "tn_vib_variation": 10 } },
+        { "name": "Vibrato Only", "description": "No pitch correction, just an added vibrato.", "values": {
+            "tn_correct": false, "tn_vib_on": true, "tn_vib_depth": 30, "tn_vib_rate": 5.5, "tn_vib_delay": 250, "tn_vib_rise": 300, "tn_vib_variation": 20 } },
+        { "name": "Tremolo 1/8", "description": "Natural tuning with an eighth-note tremolo locked to the song.", "values": {
+            "tn_speed": 40, "tn_humanize": 30, "tn_trem_on": true, "tn_trem_depth": 50, "tn_trem_sync": "1/8", "tn_trem_shape": "Sine" } },
+        { "name": "Auto-Pan 1/4", "description": "Quarter-note movement between left and right.", "values": {
+            "tn_speed": 40, "tn_humanize": 30, "tn_trem_on": true, "tn_trem_depth": 70, "tn_trem_sync": "1/4", "tn_trem_shape": "Triangle", "tn_trem_stereo": 180 } }
       ]
     },
 
@@ -91,6 +103,19 @@
             "lv_style": "Clean", "lv_thresh": -20, "lv_ratio": 1.5, "lv_attack": 15, "lv_release": 250, "lv_auto_release": true, "lv_knee": 12 } },
         { "name": "Broadcast", "description": "Dense, consistent level for speech; uses lookahead.", "values": {
             "lv_style": "Clean", "lv_thresh": -22, "lv_ratio": 4, "lv_attack": 1, "lv_release": 200, "lv_auto_release": true, "lv_knee": 6, "lv_lookahead": 2 } }
+      ]
+    },
+
+    "distortion": {
+      "title": "Distortion",
+      "presets": [
+        { "name": "Warm Tape", "description": "Soft tape saturation that thickens without sounding distorted.", "values": { "dt_style": "Tape", "dt_drive": 8 } },
+        { "name": "Tube Edge", "description": "Asymmetric tube grit with a little extra bite.", "values": { "dt_style": "Tube", "dt_drive": 12, "dt_bias": 20, "dt_tone": 10, "dt_lowcut": 120 } },
+        { "name": "Gentle Warmth", "description": "Mild saturation blended in.", "values": { "dt_style": "Warm", "dt_drive": 6, "dt_mix": 60 } },
+        { "name": "Parallel Grit", "description": "Hard clipping mixed underneath the clean vocal.", "values": { "dt_style": "Clip", "dt_drive": 18, "dt_mix": 30, "dt_lowcut": 150 } },
+        { "name": "Fuzz Lead", "description": "Heavy fuzz for aggressive hooks.", "values": { "dt_style": "Fuzz", "dt_drive": 20, "dt_tone": -20, "dt_lowcut": 200, "dt_mix": 70 } },
+        { "name": "Lo-Fi Crunch", "description": "Crushed, aliased and dark.", "values": { "dt_style": "Lo-Fi", "dt_drive": 10, "dt_crush": 55, "dt_tone": -30, "dt_lowcut": 250 } },
+        { "name": "Megaphone", "description": "Thin, clipped and bright.", "values": { "dt_style": "Clip", "dt_drive": 24, "dt_lowcut": 600, "dt_tone": 40 } }
       ]
     },
 
@@ -197,6 +222,18 @@
         { "name": "Side Room", "description": "SideWidener Mode 3: widest, with a room-like smear.", "values": {
             "wd_type": "SideWidener", "wd_sw_mode": "Mode 3", "wd_sw_width": 70, "wd_sw_tone": 60, "wd_sw_output": -2 } }
       ]
+    },
+
+    "flanger": {
+      "title": "Flanger",
+      "presets": [
+        { "name": "Classic Sweep", "description": "Slow, wide flange.", "values": { "fl_rate": 0.3, "fl_depth": 60, "fl_delay": 1.5, "fl_feedback": 40, "fl_stereo": 90, "fl_shape": "Triangle" } },
+        { "name": "Jet", "description": "Slow, resonant jet-plane sweep.", "values": { "fl_rate": 0.12, "fl_depth": 80, "fl_delay": 0.8, "fl_feedback": 85, "fl_stereo": 90, "fl_shape": "Triangle" } },
+        { "name": "Subtle Motion", "description": "Barely-there movement on the vocal.", "values": { "fl_rate": 0.2, "fl_depth": 35, "fl_delay": 2.5, "fl_feedback": 15, "fl_stereo": 120, "fl_shape": "Sine" } },
+        { "name": "Negative Hollow", "description": "Negative feedback for a hollow, nasal sweep.", "values": { "fl_rate": 0.4, "fl_depth": 60, "fl_delay": 1.2, "fl_feedback": -70, "fl_shape": "Triangle" } },
+        { "name": "Synced 1 Bar", "description": "One sweep per bar, locked to the song.", "values": { "fl_sync": "1 bar", "fl_depth": 70, "fl_delay": 1.0, "fl_feedback": 60, "fl_shape": "Triangle" } },
+        { "name": "Chorus Flange", "description": "Longer delay, no feedback: closer to a chorus.", "values": { "fl_rate": 0.9, "fl_depth": 25, "fl_delay": 7.0, "fl_feedback": 0, "fl_stereo": 180, "fl_shape": "Sine" } }
+      ]
     }
   },
 
@@ -225,8 +262,8 @@
       "values": { "tn_on": true, "eq_on": true, "mb_on": false, "lv_on": true, "ds_on": true, "rs_on": false,
                   "rv_on": true, "rv_send": -16, "dl_on": true, "dl_send": -22, "wd_on": true, "wd_send": -18 } },
     { "name": "Rock Grit", "description": "Mid-forward with tape echo and a vintage hall.",
-      "modules": { "tune": "Subtle Polish", "eq": "Presence", "multiband": "Harshness Control", "compression": "Parallel Crush", "deess": "Gentle", "resonance": "Vocal Harshness", "reverb": "Vintage Hall", "delay": "Worn Tape Echo", "widener": "Huge Width" },
-      "values": { "tn_on": true, "eq_on": true, "mb_on": true, "lv_on": true, "ds_on": true, "rs_on": true,
+      "modules": { "tune": "Subtle Polish", "eq": "Presence", "multiband": "Harshness Control", "compression": "Parallel Crush", "deess": "Gentle", "resonance": "Vocal Harshness", "reverb": "Vintage Hall", "delay": "Worn Tape Echo", "widener": "Huge Width", "distortion": "Tube Edge" },
+      "values": { "tn_on": true, "eq_on": true, "mb_on": true, "lv_on": true, "dt_on": true, "ds_on": true, "rs_on": true,
                   "rv_on": true, "rv_send": -18, "dl_on": true, "dl_send": -20, "wd_on": false } },
     { "name": "Ballad Air", "description": "Open and breathy with a long hall.",
       "modules": { "tune": "Natural", "eq": "Air", "multiband": "Upward Air", "compression": "Smooth Leveler", "deess": "Bright Singer", "resonance": "Airy Polish", "reverb": "Big Ballad Hall", "delay": "1/4 Dotted", "widener": "Side Subtle" },
@@ -240,8 +277,16 @@
       "values": { "tn_on": true, "eq_on": true, "mb_on": true, "lv_on": true, "ds_on": true, "rs_on": true,
                   "rv_on": true, "rv_send": -14, "dl_on": true, "dl_send": -18, "wd_on": true, "wd_send": -10 } },
     { "name": "Lo-Fi Phone", "description": "Telephone tone with crunchy echoes.",
-      "modules": { "tune": "Natural", "eq": "Telephone", "multiband": "Low-Mid Control", "compression": "Parallel Crush", "deess": "Gentle", "resonance": "Gentle Smooth", "reverb": "Short Room", "delay": "Lo-Fi Radio Echo", "widener": "Side Subtle" },
-      "values": { "tn_on": false, "eq_on": true, "mb_on": false, "lv_on": true, "ds_on": true, "rs_on": false,
-                  "rv_on": true, "rv_send": -20, "dl_on": true, "dl_send": -16, "wd_on": false } }
+      "modules": { "tune": "Natural", "eq": "Telephone", "multiband": "Low-Mid Control", "compression": "Parallel Crush", "deess": "Gentle", "resonance": "Gentle Smooth", "reverb": "Short Room", "delay": "Lo-Fi Radio Echo", "widener": "Side Subtle", "distortion": "Lo-Fi Crunch" },
+      "values": { "tn_on": false, "eq_on": true, "mb_on": false, "lv_on": true, "dt_on": true, "ds_on": true, "rs_on": false,
+                  "rv_on": true, "rv_send": -20, "dl_on": true, "dl_send": -16, "wd_on": false } },
+    { "name": "Flanged Hook", "description": "Pop lead with a slow flange sweep and tape warmth.",
+      "modules": { "tune": "Tight Pop", "eq": "Bright Pop", "multiband": "Low-Mid Control", "compression": "Upfront Pop", "deess": "Bright Singer", "resonance": "Vocal Harshness", "reverb": "Vocal Plate", "delay": "1/8 Throw", "widener": "Vocal Air", "distortion": "Warm Tape", "flanger": "Classic Sweep" },
+      "values": { "tn_on": true, "eq_on": true, "mb_on": true, "lv_on": true, "dt_on": true, "ds_on": true, "rs_on": true,
+                  "rv_on": true, "rv_send": -16, "dl_on": true, "dl_send": -22, "wd_on": false, "fl_on": true, "fl_send": -6 } },
+    { "name": "Soul Vibrato", "description": "Warm lead with a natural added vibrato and a lush hall.",
+      "modules": { "tune": "Natural Vibrato", "eq": "Warmth", "multiband": "Proximity Tamer", "compression": "Smooth Leveler", "deess": "Standard", "resonance": "Gentle Smooth", "reverb": "Big Ballad Hall", "delay": "1/4 Dotted", "widener": "Subtle Doubler", "distortion": "Gentle Warmth" },
+      "values": { "tn_on": true, "eq_on": true, "mb_on": true, "lv_on": true, "dt_on": true, "ds_on": true, "rs_on": true,
+                  "rv_on": true, "rv_send": -14, "dl_on": true, "dl_send": -24, "wd_on": false } }
   ]
 }
