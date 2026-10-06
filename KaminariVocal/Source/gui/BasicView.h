@@ -366,6 +366,106 @@ namespace kvui
 
     //==================================================================================================================
     // Module card: power, title, hammer (pull down = more), caption, value, GR bar and a footer line.
+    // Tuning range view for the Basic Tune card: detected note -> target note, sharp / flat and by how much, a
+    // -50..+50 cent scale with the span being corrected shaded, and a centre mark that lights when the voice is in tune.
+    class TuneRangeView : public juce::Component, public juce::SettableTooltipClient, private juce::Timer
+    {
+    public:
+        explicit TuneRangeView (KaminariVocalProcessor& p) : proc (p)
+        {
+            setTitle ("Tuning");
+            setTooltip ("Detected note and the note it is tuned to. The bar shows how far the voice is from that note "
+                        "(left flat, right sharp) and, shaded, the part being corrected.");
+            startTimerHz (30);
+        }
+        ~TuneRangeView() override { stopTimer(); }
+
+        static juce::String name (int midi)
+        {
+            static const char* n[] = { "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B" };
+            return juce::String (n[((midi % 12) + 12) % 12]) + juce::String (midi / 12 - 1);
+        }
+
+        // Read-outs (also used by the tests)
+        bool hasPitch() const noexcept { return detected >= 0.0f; }
+        int targetNote() const noexcept { return target; }
+        float deviationCents() const noexcept { return deviation; }   // detected pitch relative to the target note
+        float correctingCents() const noexcept { return correcting; }
+        static constexpr float inTuneCents = 5.0f;
+
+        void update (float detectedMidi, float correctionCents)
+        {
+            detected = detectedMidi;
+            if (detected < 0.0f) { correcting = 0; repaint(); return; }
+            target = juce::roundToInt (detected + correctionCents / 100.0f);
+            deviation = (detected - (float) target) * 100.0f;
+            correcting = correctionCents;
+            repaint();
+        }
+
+        void paint (juce::Graphics& g) override
+        {
+            using namespace kvtheme;
+            auto b = getLocalBounds().toFloat();
+            auto text = b.removeFromTop (15.0f);
+            const bool live = hasPitch() && isEnabled();
+            g.setFont (font (12.0f, 1));
+            if (! live)
+            {
+                g.setColour (steel);
+                g.drawText ("-- no pitch", text, juce::Justification::centred);
+            }
+            else
+            {
+                const bool centred = std::abs (deviation) < inTuneCents;
+                juce::String status = centred ? juce::String ("in tune")
+                                              : (deviation > 0 ? juce::String (juce::CharPointer_UTF8 ("\xe2\x99\xaf +")) : juce::String (juce::CharPointer_UTF8 ("\xe2\x99\xad \xe2\x88\x92")))
+                                                    + juce::String (juce::roundToInt (std::abs (deviation))) + " ct";
+                const int detectedNote = juce::roundToInt (detected);
+                const juce::String notes = name (detectedNote) + (detectedNote == target ? juce::String() : juce::String (juce::CharPointer_UTF8 (" \xe2\x86\x92 ")) + name (target));
+                g.setColour (white);
+                g.drawText (notes, text, juce::Justification::centredLeft);
+                g.setColour (centred ? accent : (std::abs (deviation) > 25.0f ? amber : mist));
+                g.drawText (status, text, juce::Justification::centredRight);
+            }
+            // scale
+            b.removeFromTop (5.0f);
+            auto bar = b.removeFromTop (9.0f);
+            g.setColour (navy950);
+            g.fillRoundedRectangle (bar, 3.0f);
+            g.setColour (navy600);
+            g.drawRoundedRectangle (bar.reduced (0.5f), 3.0f, 1.0f);
+            auto xFor = [&] (float c) { return bar.getCentreX() + juce::jlimit (-50.0f, 50.0f, c) / 50.0f * (bar.getWidth() * 0.5f - 3.0f); };
+            g.setColour (navy600);
+            for (float c : { -25.0f, 25.0f }) g.drawVerticalLine ((int) xFor (c), bar.getY() + 2.0f, bar.getBottom() - 2.0f);
+            if (live)
+            {
+                // the span being corrected: from where the voice is towards the centre
+                const float x0 = xFor (deviation), x1 = xFor (deviation + correcting);
+                g.setColour (accent.withAlpha (0.35f));
+                g.fillRect (juce::Rectangle<float>::leftTopRightBottom (std::min (x0, x1), bar.getY() + 2.0f, std::max (x0, x1), bar.getBottom() - 2.0f));
+            }
+            const bool centred = live && std::abs (deviation) < inTuneCents;
+            g.setColour (centred ? accent : mist.withAlpha (0.7f));
+            g.fillRect (juce::Rectangle<float> (bar.getCentreX() - (centred ? 1.5f : 0.75f), bar.getY() - 2.0f, centred ? 3.0f : 1.5f, bar.getHeight() + 4.0f));
+            if (live)
+            {
+                const float x = xFor (deviation);
+                g.setColour (white);
+                juce::Path tri;
+                tri.addTriangle (x - 4.0f, bar.getY() - 4.0f, x + 4.0f, bar.getY() - 4.0f, x, bar.getY() + 2.0f);
+                g.fillPath (tri);
+                g.fillRect (juce::Rectangle<float> (x - 1.0f, bar.getY(), 2.0f, bar.getHeight()));
+            }
+        }
+
+    private:
+        void timerCallback() override { update (proc.tune.detectedMidi.load(), proc.tune.correctionCents.load()); }
+        KaminariVocalProcessor& proc;
+        float detected = -1.0f, deviation = 0, correcting = 0;
+        int target = 0;
+    };
+
     class ModuleCard : public juce::Component, private juce::Timer
     {
     public:
@@ -387,6 +487,8 @@ namespace kvui
             open.setTooltip ("Open " + name + " in the Advanced view.");
             if (module == KaminariVocalProcessor::ModTune)
             {
+                tuning = std::make_unique<TuneRangeView> (p);
+                addAndMakeVisible (*tuning);
                 for (auto* id : { "tn_key", "tn_scale", "tn_range" })
                 {
                     auto* cb = tuneBoxes.add (new juce::ComboBox());
@@ -425,12 +527,25 @@ namespace kvui
                 g.drawText (getWidth() >= 170 ? noteText : noteText.upToFirstOccurrenceOf (" ", false, false), r.withTrimmedLeft (11), juce::Justification::centredLeft);
             }
             auto info = infoArea;
-            g.setColour (mist);
-            g.setFont (font (12.0f, 0));
-            g.drawText (caption, info.removeFromTop (16), juce::Justification::centred);
-            g.setColour (white);
-            g.setFont (font (15.0f, 1));
-            g.drawText (valueText, info.removeFromTop (20), juce::Justification::centred);
+            if (module == KaminariVocalProcessor::ModTune)
+            {
+                // one line: "Retune Speed  18 ms" (the tuning view sits below it)
+                juce::AttributedString line;
+                line.append (caption + "  ", font (12.0f, 0), mist);
+                line.append (valueText, font (14.0f, 1), white);
+                line.setJustification (juce::Justification::centred);
+                line.setWordWrap (juce::AttributedString::none);
+                line.draw (g, info.toFloat());
+            }
+            else
+            {
+                g.setColour (mist);
+                g.setFont (font (12.0f, 0));
+                g.drawText (caption, info.removeFromTop (16), juce::Justification::centred);
+                g.setColour (white);
+                g.setFont (font (15.0f, 1));
+                g.drawText (valueText, info.removeFromTop (20), juce::Justification::centred);
+            }
             if (module != KaminariVocalProcessor::ModTune)
             {
                 auto row = grArea;
@@ -485,6 +600,11 @@ namespace kvui
                 b.removeFromBottom (16);
                 const int w = (row.getWidth() - 8) / 3;
                 for (auto* cb : tuneBoxes) { cb->setBounds (row.removeFromLeft (w).reduced (1, 0)); row.removeFromLeft (4); }
+                tuning->setBounds (b.removeFromBottom (29).reduced (2, 0));
+                b.removeFromBottom (2);
+                infoArea = b.removeFromBottom (20);
+                hammer.setBounds (b.withSizeKeepingCentre (juce::jmin (b.getWidth(), 140), b.getHeight()));
+                return;
             }
             else
             {
@@ -582,6 +702,10 @@ namespace kvui
         float gr = 0;
         juce::OwnedArray<juce::ComboBox> tuneBoxes;
         juce::OwnedArray<APVTS::ComboBoxAttachment> tuneAtts;
+        std::unique_ptr<TuneRangeView> tuning;
+
+    public:
+        TuneRangeView* tuningView() { return tuning.get(); }
     };
 
     //==================================================================================================================

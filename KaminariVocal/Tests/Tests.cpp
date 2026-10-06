@@ -1410,6 +1410,19 @@ int main (int argc, char** argv)
                        "dragging band 2 sets " + juce::String (getParam (p, "lv_sc2_freq"), 0) + " Hz / " + juce::String (getParam (p, "lv_sc2_gain"), 1) + " dB");
                 for (int i = 1; i <= 4; ++i) setParam (p, ("lv_sc" + juce::String (i) + "_used").toRawUTF8(), 0.0f);
             }
+            // Basic tuning view: detected and target note, deviation and the span being corrected
+            {
+                kvui::TuneRangeView view (p);
+                view.update (57.30f, -30.0f);   // A3 +30 ct, pulled down 30 ct
+                const bool sharp = view.targetNote() == 57 && std::abs (view.deviationCents() - 30.0f) < 0.01f;
+                view.update (58.60f, 40.0f);    // A#3 +60 ct = B3 -40 ct, pulled up 40 ct
+                const bool flat = view.targetNote() == 59 && std::abs (view.deviationCents() + 40.0f) < 0.01f;
+                view.update (60.02f, -2.0f);
+                const bool centred = view.targetNote() == 60 && std::abs (view.deviationCents()) < kvui::TuneRangeView::inTuneCents;
+                view.update (-1.0f, 0.0f);
+                check (sharp && flat && centred && ! view.hasPitch(), "Basic tuning view: A3 +30 ct reads 30 ct sharp of A3; A#3 +60 ct reads "
+                       "40 ct flat of B3; C4 +2 ct reads in tune; no pitch reads none");
+            }
             // tab lightning icons: a click switches the module on or off and leaves the page as it is
             {
                 ed->showTab (true, KaminariVocalEditor::TabEq);
