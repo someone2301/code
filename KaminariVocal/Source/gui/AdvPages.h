@@ -392,12 +392,141 @@ namespace kvui
 
     //==================================================================================================================
     // EQ
+    // Keyboard under the EQ graph, on the graph's frequency axis and drawn like the Tune page's keyboard.
+    // Click a key or drag along the keys to sweep the selected band from note to note (Shift: no snapping).
+    // The selected band's note is lit; notes holding other bands show a dot in the band's colour.
+    class EqPiano : public juce::Component, public juce::SettableTooltipClient, private juce::Timer
+    {
+    public:
+        EqPiano (KaminariVocalProcessor& p, EqCurve& c) : proc (p), curve (c)
+        {
+            setTitle ("EQ keyboard");
+            setTooltip ("Click or drag along the keys to move the selected band from note to note. Hold Shift for a free sweep.");
+            startTimerHz (10);
+        }
+        ~EqPiano() override { stopTimer(); }
+        int band = 0;
+
+        void paint (juce::Graphics& g) override
+        {
+            g.setColour (navy950);
+            g.fillRoundedRectangle (getLocalBounds().toFloat(), 4.0f);
+            g.setColour (navy600);
+            g.fillRect (0, 0, getWidth(), 3);
+            const int cur = noteOfBand (band);
+            for (int pass = 0; pass < 2; ++pass)
+                for (int m = loNote(); m <= hiNote(); ++m)
+                {
+                    if (Piano::isBlack (m) != (pass == 1)) continue;
+                    const auto r = keyRect (m);
+                    if (r.getRight() < 0 || r.getX() > getWidth()) continue;
+                    const bool black = Piano::isBlack (m);
+                    juce::Colour fill = black ? juce::Colour (0xff1a2236) : juce::Colour (0xffdce3f0);
+                    if (m == hover) fill = black ? juce::Colour (0xff2b4a82) : juce::Colour (0xffb8f3ff);
+                    if (m == cur) fill = EqCurve::bandColour (band);
+                    g.setColour (fill);
+                    g.fillRoundedRectangle (r, black ? 2.0f : 3.0f);
+                    if (black) { g.setColour (navy950); g.drawRoundedRectangle (r, 2.0f, 1.0f); }
+                    else       { g.setColour (juce::Colour (0xff6b7489)); g.drawVerticalLine (juce::roundToInt (r.getRight()), r.getY(), r.getBottom()); }
+                    if (! black && m % 12 == 0 && r.getWidth() > 9.0f)
+                    {
+                        g.setColour (m == cur ? navy950 : navy800);
+                        g.setFont (font (9.5f, 2));
+                        g.drawText ("C" + juce::String (m / 12 - 1), r.withTrimmedBottom (3.0f).removeFromBottom (11.0f).expanded (6.0f, 0.0f), juce::Justification::centred);
+                    }
+                }
+            // other bands: a dot on their key
+            for (int i = 0; i < kv::Equalizer::numBands; ++i)
+            {
+                if (i == band || ! used (i)) continue;
+                const int m = noteOfBand (i);
+                if (m < loNote() || m > hiNote()) continue;
+                const auto r = keyRect (m);
+                g.setColour (EqCurve::bandColour (i));
+                g.fillEllipse (r.getCentreX() - 3.0f, r.getY() + 6.0f, 6.0f, 6.0f);
+            }
+        }
+
+        void mouseMove (const juce::MouseEvent& e) override { const int m = noteAt (e.position); if (m != hover) { hover = m; repaint(); } }
+        void mouseExit (const juce::MouseEvent&) override { hover = -1; repaint(); }
+        void mouseDown (const juce::MouseEvent& e) override
+        {
+            if (! used (band)) return;
+            auto* p = proc.apvts.getParameter ("eq" + juce::String (band + 1) + "_freq");
+            p->beginChangeGesture();
+            sweeping = true;
+            sweepTo (e);
+        }
+        void mouseDrag (const juce::MouseEvent& e) override { if (sweeping) sweepTo (e); }
+        void mouseUp (const juce::MouseEvent&) override
+        {
+            if (! sweeping) return;
+            proc.apvts.getParameter ("eq" + juce::String (band + 1) + "_freq")->endChangeGesture();
+            sweeping = false;
+        }
+
+    private:
+        static double freqOf (double midi) { return 440.0 * std::pow (2.0, (midi - 69.0) / 12.0); }
+        int loNote() const { return juce::roundToInt (std::ceil (69.0 + 12.0 * std::log2 (20.0 / 440.0))); }
+        int hiNote() const { return juce::roundToInt (std::floor (69.0 + 12.0 * std::log2 (20000.0 / 440.0))); }
+        float xOf (double midi) const { return curve.xForFreq (freqOf (midi)); }
+
+        // White keys are contiguous; black keys sit on top, centred on their note.
+        juce::Rectangle<float> keyRect (int m) const
+        {
+            const float h = (float) getHeight() - 3.0f;
+            if (Piano::isBlack (m))
+            {
+                const float w = (xOf (m + 0.5) - xOf (m - 0.5)) * 0.85f;
+                return { xOf (m) - w * 0.5f, 3.0f, w, h * 0.58f };
+            }
+            const float l = xOf (m - (Piano::isBlack (m - 1) ? 1.0 : 0.5)), r = xOf (m + (Piano::isBlack (m + 1) ? 1.0 : 0.5));
+            return { l, 3.0f, r - l, h };
+        }
+
+        int noteAt (juce::Point<float> p) const
+        {
+            for (int pass = 1; pass >= 0; --pass)
+                for (int m = loNote(); m <= hiNote(); ++m)
+                    if (Piano::isBlack (m) == (pass == 1) && keyRect (m).contains (p))
+                        return m;
+            return -1;
+        }
+
+        bool used (int i) const { return plain (proc.apvts, "eq" + juce::String (i + 1) + "_used") > 0.5f; }
+        int noteOfBand (int i) const
+        {
+            const float f = plain (proc.apvts, "eq" + juce::String (i + 1) + "_freq");
+            return juce::roundToInt (69.0 + 12.0 * std::log2 (f / 440.0));
+        }
+
+        void sweepTo (const juce::MouseEvent& e)
+        {
+            double f = curve.freqForX (e.position.x);
+            if (! e.mods.isShiftDown())
+            {
+                const int m = noteAt ({ juce::jlimit (0.0f, (float) getWidth() - 1.0f, e.position.x), juce::jlimit (4.0f, (float) getHeight() - 2.0f, e.position.y) });
+                if (m >= 0) f = freqOf (m);
+            }
+            auto* p = proc.apvts.getParameter ("eq" + juce::String (band + 1) + "_freq");
+            p->setValueNotifyingHost (p->convertTo0to1 ((float) f));
+            hover = noteAt (e.position);
+            repaint();
+        }
+
+        void timerCallback() override { repaint(); }
+        KaminariVocalProcessor& proc;
+        EqCurve& curve;
+        int hover = -1;
+        bool sweeping = false;
+    };
+
     class EqPage : public AdvFrame, private juce::Timer
     {
     public:
         explicit EqPage (KaminariVocalProcessor& p)
-            : AdvFrame (p, "EQ", "8 bands" + dot() + "zero latency" + dot() + "drag nodes, wheel = Q, double-click = add", "eq_on", "eq"),
-              curve (p), analyser ({ "Pre", "Post", "Off" }, "Analyzer"), out (p.apvts, "eq_out_gain", "Output"),
+            : AdvFrame (p, "EQ", "8 bands" + dot() + "zero latency" + dot() + "click to add a band, drag nodes, wheel = Q", "eq_on", "eq"),
+              curve (p), piano (p, curve), analyser ({ "Pre", "Post", "Both", "Off" }, "Analyzer"), out (p.apvts, "eq_out_gain", "Output"),
               pianoToggle ("Piano")
         {
             addAndMakeVisible (curve);
@@ -407,8 +536,9 @@ namespace kvui
             addAndMakeVisible (speed);
             addAndMakeVisible (out);
             addAndMakeVisible (pianoToggle);
-            analyser.setSelected (p.analyserMode.load());
-            analyser.onChange = [this] (int i) { proc.analyserMode.store (i); };
+            addChildComponent (piano);
+            analyser.setSelected (EqCurve::segmentForMode (p.analyserMode.load()));
+            analyser.onChange = [this] (int i) { proc.analyserMode.store (EqCurve::modeForSegment (i)); };
             resolution.addItemList (SpectrumProcessor::resolutionNames(), 1);
             speed.addItemList (SpectrumProcessor::speedNames(), 1);
             resolution.setSelectedId (p.analyserResolution.load() + 1, juce::dontSendNotification);
@@ -416,8 +546,10 @@ namespace kvui
             resolution.onChange = [this] { proc.analyserResolution.store (resolution.getSelectedId() - 1); };
             speed.onChange = [this] { proc.analyserSpeed.store (speed.getSelectedId() - 1); };
             pianoToggle.setClickingTogglesState (true);
-            pianoToggle.setTooltip ("Show a keyboard under the graph: click a key to move the selected band to that note.");
-            pianoToggle.onClick = [this] { resized(); repaint(); };
+            pianoToggle.setToggleState (true, juce::dontSendNotification);
+            pianoToggle.setTooltip ("Show the keyboard under the graph: click or drag along the keys to sweep the selected band from note to note.");
+            pianoToggle.onClick = [this] { piano.setVisible (pianoToggle.getToggleState()); resized(); repaint(); };
+            piano.setVisible (true);
             curve.onSelect = [this] (int b) { select (b); };
             select (0);
             startTimerHz (6);
@@ -428,6 +560,8 @@ namespace kvui
         {
             selected = juce::jlimit (0, 7, band);
             curve.selected = selected;
+            piano.band = selected;
+            if (proc.eqSolo.load() >= 0) proc.eqSolo.store (selected);
             panel.build (proc, selected, lnf, [this] (int d) { select ((selected + d + 8) % 8); });
             resized();
         }
@@ -441,30 +575,20 @@ namespace kvui
             g.drawText ("Analyzer", analyser.getX() - 64, bar.getY(), 58, bar.getHeight(), juce::Justification::centredRight);
             g.drawText ("Resolution", resolution.getX() - 70, bar.getY(), 64, bar.getHeight(), juce::Justification::centredRight);
             g.drawText ("Speed", speed.getX() - 46, bar.getY(), 40, bar.getHeight(), juce::Justification::centredRight);
-            if (pianoToggle.getToggleState())
-                paintPiano (g);
-        }
-
-        void mouseDown (const juce::MouseEvent& e) override
-        {
-            if (! pianoToggle.getToggleState() || ! pianoArea.contains (e.getPosition())) return;
-            const double f = curve.freqForX ((float) (e.x - curve.getX()));
-            const int midi = juce::roundToInt (69.0 + 12.0 * std::log2 (f / 440.0));
-            setParamPlain (proc.apvts, "eq" + juce::String (selected + 1) + "_freq", (float) (440.0 * std::pow (2.0, (midi - 69) / 12.0)));
         }
 
         void layoutContent (juce::Rectangle<int> b) override
         {
             bar = b.removeFromBottom (34);
             b.removeFromBottom (8);
-            if (pianoToggle.getToggleState()) { pianoArea = b.removeFromBottom (24); b.removeFromBottom (2); }
+            if (pianoToggle.getToggleState()) { piano.setBounds (b.removeFromBottom (46)); b.removeFromBottom (2); }
             curve.setBounds (b);
-            panel.setBounds (b.withSizeKeepingCentre (520, 128).withY (b.getBottom() - 140));
+            panel.setBounds (b.withSizeKeepingCentre (540, 128).withY (b.getBottom() - 140));
             auto r = bar.reduced (8, 4);
             pianoToggle.setBounds (r.removeFromLeft (64));
-            r.removeFromLeft (80);
-            analyser.setBounds (r.removeFromLeft (120));
-            r.removeFromLeft (82);
+            r.removeFromLeft (76);
+            analyser.setBounds (r.removeFromLeft (160));
+            r.removeFromLeft (76);
             resolution.setBounds (r.removeFromLeft (90));
             r.removeFromLeft (56);
             speed.setBounds (r.removeFromLeft (90));
@@ -473,6 +597,7 @@ namespace kvui
 
         ModuleLNF lnf;
         EqCurve curve;
+        EqPiano piano;
 
         // Floating panel for the selected band (power, shape, slope, FREQ / GAIN / Q, band navigation, delete).
         struct BandPanel : juce::Component
@@ -506,7 +631,13 @@ namespace kvui
                 del.onClick = [&p, pre] { setParamPlain (p.apvts, pre + "used", 0.0f); };
                 use.setButtonText ("Add band");
                 use.onClick = [&p, pre] { setParamPlain (p.apvts, pre + "used", 1.0f); };
-                for (auto* c : std::initializer_list<juce::Component*> { power.get(), type.get(), slope.get(), freq.get(), gain.get(), q.get(), &prev, &next, &del, &use })
+                solo.setButtonText ("SOLO");
+                solo.setClickingTogglesState (true);
+                solo.setToggleState (p.eqSolo.load() == band, juce::dontSendNotification);
+                solo.setTooltip ("Hear only what this band works on: around a bell, below a low shelf or low cut, above a high shelf or high cut.");
+                solo.onClick = [&p, band, this] { p.eqSolo.store (solo.getToggleState() ? band : -1); };
+                proc = &p;
+                for (auto* c : std::initializer_list<juce::Component*> { power.get(), type.get(), slope.get(), freq.get(), gain.get(), q.get(), &prev, &next, &del, &use, &solo })
                     addAndMakeVisible (c);
                 usedId = pre + "used";
                 state = &p.apvts;
@@ -520,14 +651,15 @@ namespace kvui
                 g.drawRoundedRectangle (getLocalBounds().toFloat().reduced (0.5f), 8.0f, 1.0f);
                 g.setColour (white);
                 g.setFont (font (14.0f, 1));
-                g.drawText (juce::String (bandNo + 1), next.getX() - 26, next.getY(), 26, next.getHeight(), juce::Justification::centred);
+                g.drawText (juce::String (bandNo + 1), prev.getRight(), next.getY(), next.getX() - prev.getRight(), next.getHeight(), juce::Justification::centred);
             }
             void resized() override
             {
                 if (power == nullptr) return;
                 const bool used = state != nullptr && state->getRawParameterValue (usedId)->load() > 0.5f;
-                for (auto* c : std::initializer_list<juce::Component*> { power.get(), type.get(), slope.get(), freq.get(), gain.get(), q.get(), &del })
+                for (auto* c : std::initializer_list<juce::Component*> { power.get(), type.get(), slope.get(), freq.get(), gain.get(), q.get(), &del, &solo })
                     c->setVisible (used);
+                if (proc != nullptr) solo.setToggleState (proc->eqSolo.load() == bandNo, juce::dontSendNotification);
                 use.setVisible (! used);
                 auto b = getLocalBounds().reduced (12, 10);
                 auto left = b.removeFromLeft (96);
@@ -536,11 +668,14 @@ namespace kvui
                 type->setBounds (left.removeFromTop (30).withTrimmedTop (-14));
                 left.removeFromTop (6);
                 slope->setBounds (left.removeFromTop (30).withTrimmedTop (-14));
-                auto right = b.removeFromRight (96);
+                auto right = b.removeFromRight (112);
                 auto nav = right.removeFromTop (28);
                 prev.setBounds (nav.removeFromLeft (26));
                 del.setBounds (nav.removeFromRight (26));
-                next.setBounds (nav.removeFromRight (26).translated (-4, 0));
+                nav.removeFromRight (6);
+                next.setBounds (nav.removeFromRight (26));
+                right.removeFromTop (10);
+                solo.setBounds (right.removeFromTop (26));
                 use.setBounds (getLocalBounds().withSizeKeepingCentre (140, 30));
                 const int w = b.getWidth() / 3;
                 freq->setBounds (b.removeFromLeft (w));
@@ -550,35 +685,14 @@ namespace kvui
             std::unique_ptr<PowerButton> power;
             std::unique_ptr<ChoiceBox> type, slope;
             std::unique_ptr<RangeKnob> freq, gain, q;
-            juce::TextButton prev, next, del, use;
+            juce::TextButton prev, next, del, use, solo;
+            KaminariVocalProcessor* proc = nullptr;
             int bandNo = 0;
             juce::String usedId;
             APVTS* state = nullptr;
         } panel;
 
     private:
-        void paintPiano (juce::Graphics& g)
-        {
-            g.setColour (navy950);
-            g.fillRect (pianoArea);
-            for (int m = 24; m <= 120; ++m)
-            {
-                const double f = 440.0 * std::pow (2.0, (m - 69) / 12.0);
-                const float x = (float) curve.getX() + curve.xForFreq (f);
-                const float w = (float) curve.getX() + curve.xForFreq (440.0 * std::pow (2.0, (m - 68.5) / 12.0)) - x + (x - ((float) curve.getX() + curve.xForFreq (440.0 * std::pow (2.0, (m - 69.5) / 12.0))));
-                if (x < curve.getX() || x > curve.getRight()) continue;
-                const bool black = Piano::isBlack (m);
-                g.setColour (black ? navy800 : juce::Colour (0xffdce3f0));
-                g.fillRect (juce::Rectangle<float> (x - w * 0.5f, (float) pianoArea.getY(), juce::jmax (1.0f, w - 1.0f), (float) pianoArea.getHeight() * (black ? 0.6f : 1.0f)));
-                if (m % 12 == 0 && w > 6)
-                {
-                    g.setColour (navy950);
-                    g.setFont (font (9.0f, 1));
-                    g.drawText (noteName (m), juce::Rectangle<float> (x - 12, (float) pianoArea.getBottom() - 11, 24, 10), juce::Justification::centred);
-                }
-            }
-        }
-
         void timerCallback() override
         {
             panel.resized();
@@ -588,7 +702,7 @@ namespace kvui
         juce::ComboBox resolution, speed;
         Knob out;
         juce::TextButton pianoToggle;
-        juce::Rectangle<int> bar, pianoArea;
+        juce::Rectangle<int> bar;
         int selected = 0;
     };
 

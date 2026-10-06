@@ -37,6 +37,7 @@ void KaminariVocalProcessor::prepareToPlay (double sampleRate, int samplesPerBlo
     returns.setSize (2, block, false, false, true);
     work.setSize (2, block, false, false, true);
     dryCopy.setSize (2, block, false, false, true);
+    soloIn.setSize (2, block, false, false, true);
 
     tune.prepare (sampleRate);
     compHistory.setHop ((int) std::lround (sampleRate / 375.0));
@@ -242,13 +243,25 @@ void KaminariVocalProcessor::processModules (float* l, float* r, int n)
             }
     };
 
-    crossfaded (ModEq, [&] { eq.process (l, r, n, eqSettings, eqOutGain); });
     const int solo = eqSolo.load();
-    if (solo >= 0 && solo < kv::Equalizer::numBands && moduleOn[ModEq])
+    const bool soloing = solo >= 0 && solo < kv::Equalizer::numBands && moduleOn[ModEq];
+    if (soloing)
     {
-        // band audition: hear only the region of the selected band
-        for (auto& bp : soloBp) bp.set (kv::Biquad::BandPass, (float) sampleRateHz, eqSettings[solo].freq, std::max (0.3f, eqSettings[solo].q));
-        for (int i = 0; i < n; ++i) { l[i] = soloBp[0].process (l[i]); r[i] = soloBp[1].process (r[i]); }
+        soloIn.copyFrom (0, 0, l, n);   // the audition is taken from the EQ's input (a cut has removed that region after it)
+        soloIn.copyFrom (1, 0, r, n);
+    }
+    crossfaded (ModEq, [&] { eq.process (l, r, n, eqSettings, eqOutGain); });
+    if (soloing)
+    {
+        // band audition: what the band works on: around a bell / notch / band pass, below a low shelf or low cut, above a high shelf or high cut
+        const auto& bs = eqSettings[solo];
+        auto kind = kv::Biquad::BandPass;
+        float q = std::max (0.3f, bs.q);
+        if (bs.type == kv::LowShelf || bs.type == kv::LowCut)        { kind = kv::Biquad::LowPass;  q = 0.7071f; }
+        else if (bs.type == kv::HighShelf || bs.type == kv::HighCut) { kind = kv::Biquad::HighPass; q = 0.7071f; }
+        else if (bs.type == kv::TiltShelf || bs.type == kv::FlatTilt) q = 0.5f;
+        for (auto& bp : soloBp) bp.set (kind, (float) sampleRateHz, bs.freq, q);
+        for (int i = 0; i < n; ++i) { l[i] = soloBp[0].process (soloIn.getSample (0, i)); r[i] = soloBp[1].process (soloIn.getSample (1, i)); }
     }
     analyserPost.push (l, r, n);
     crossfaded (ModMultiband, [&] { moduleGr[ModMultiband].store (multiband.process (l, r, n, mbSettings)); });
@@ -629,7 +642,7 @@ void KaminariVocalProcessor::setStateInformation (const void* data, int sizeInBy
                 tab += 1;                       // v4: Flanger tab inserted before Distortion
             advancedTab.store (juce::jlimit (0, 8, tab));
             uiScale.store (juce::jlimit (0.75f, 2.0f, (float) state.getProperty ("ui_scale", 1.0f)));
-            analyserMode.store (juce::jlimit (0, 2, (int) state.getProperty ("analyser_mode", 1)));
+            analyserMode.store (juce::jlimit (0, 3, (int) state.getProperty ("analyser_mode", 3)));
             analyserResolution.store (juce::jlimit (0, 3, (int) state.getProperty ("analyser_resolution", (int) SpectrumProcessor::High)));
             analyserSpeed.store (juce::jlimit (0, 4, (int) state.getProperty ("analyser_speed", (int) SpectrumProcessor::Fast)));
             apvts.replaceState (state);

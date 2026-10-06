@@ -1003,6 +1003,30 @@ int main (int argc, char** argv)
         check (ok, "Distortion: every style and oversampling setting stays finite and bounded at full drive and bias");
     }
 
+    // ---- EQ solo: auditions what each band type works on --------------------------------------------------------------
+    {
+        auto soloLevels = [] (int type)
+        {
+            KaminariVocalProcessor p;
+            neutral (p);
+            setParam (p, "eq_on", 1.0f);
+            setParam (p, "eq1_used", 1.0f);
+            setParam (p, "eq1_type", (float) type);
+            setParam (p, "eq1_freq", 1000.0f);
+            setParam (p, "eq1_gain", 0.0f);
+            prepare (p);
+            p.eqSolo.store (0);
+            const auto lo = render (p, 0.5, sine (150.0, -12.0f)), hi = render (p, 0.5, sine (6000.0, -12.0f));
+            return std::pair { toneDb (lo.out, 0, 150.0, 4800, 24000), toneDb (hi.out, 0, 6000.0, 4800, 24000) };
+        };
+        const auto cut = soloLevels (kv::LowCut), shelf = soloLevels (kv::HighShelf), bell = soloLevels (kv::Bell);
+        check (cut.first > -14.0f && cut.second < -40.0f, "EQ solo on a 1 kHz low cut plays the lows it removes (150 Hz "
+               + juce::String (cut.first, 1) + " dB, 6 kHz " + juce::String (cut.second, 1) + " dB)");
+        check (shelf.second > -14.0f && shelf.first < -40.0f, "EQ solo on a 1 kHz high shelf plays the highs (6 kHz "
+               + juce::String (shelf.second, 1) + " dB, 150 Hz " + juce::String (shelf.first, 1) + " dB)");
+        check (bell.first < -25.0f && bell.second < -25.0f, "EQ solo on a 1 kHz bell plays only the region around 1 kHz");
+    }
+
     // ---- flanger ---------------------------------------------------------------------------------------------------
     {
         // static comb (no sweep, no feedback), Mix 50 %: dry + copy delayed 1 ms cancel at 500 Hz and add at 1 kHz
@@ -1148,6 +1172,39 @@ int main (int argc, char** argv)
                 visit (ed->panel (KaminariVocalEditor::TabSends), juce::String ("Send ") + sendName[s2]);
             }
             for (auto& line : dead) std::printf ("  no response: %s\n", line.toRawUTF8());
+            // EQ: clicking empty graph space creates a band whose type follows the frequency
+            {
+                ed->showTab (true, KaminariVocalEditor::TabEq);
+                for (int i = 1; i <= 8; ++i) setParam (p, ("eq" + juce::String (i) + "_used").toRawUTF8(), 0.0f);
+                juce::MessageManager::getInstance()->runDispatchLoopUntil (20);
+                auto& curve = ed->eqPage().curve;
+                const std::pair<double, int> clicks[] = { { 40.0, kv::LowCut }, { 100.0, kv::LowShelf }, { 1000.0, kv::Bell },
+                                                          { 10000.0, kv::HighShelf }, { 18000.0, kv::HighCut } };
+                bool typesOk = true;
+                int bandNo = 1;
+                for (auto [f, type] : clicks)
+                {
+                    const juce::Point<float> at (curve.xForFreq (f), curve.yForDb (3.0));
+                    curve.mouseDown (event (curve, at, at, false));
+                    curve.mouseUp (event (curve, at, at, false));
+                    const juce::String pre = "eq" + juce::String (bandNo++) + "_";
+                    typesOk = typesOk && getParam (p, (pre + "used").toRawUTF8()) > 0.5f
+                                      && juce::roundToInt (getParam (p, (pre + "type").toRawUTF8())) == type
+                                      && std::abs (getParam (p, (pre + "freq").toRawUTF8()) / (float) f - 1.0f) < 0.03f;
+                }
+                check (typesOk, "EQ click-to-create: 40 Hz low cut, 100 Hz low shelf, 1 kHz bell, 10 kHz high shelf, 18 kHz high cut");
+                // the keyboard sweeps the selected band to the note under the mouse
+                auto& piano = ed->eqPage().piano;
+                ed->eqPage().select (2);
+                const juce::Point<float> a4 (curve.xForFreq (440.0), (float) piano.getHeight() - 6.0f);
+                piano.mouseDown (event (piano, a4, a4, false));
+                const juce::Point<float> c5 (curve.xForFreq (523.25), (float) piano.getHeight() - 6.0f);
+                piano.mouseDrag (event (piano, c5, a4, true));
+                piano.mouseUp (event (piano, c5, a4, true));
+                check (std::abs (getParam (p, "eq3_freq") - 523.25f) < 0.5f, "EQ keyboard: dragging from A4 to C5 sweeps the selected band to "
+                       + juce::String (getParam (p, "eq3_freq"), 1) + " Hz (C5 = 523.3 Hz)");
+                for (int i = 1; i <= 8; ++i) setParam (p, ("eq" + juce::String (i) + "_used").toRawUTF8(), 0.0f);
+            }
             setParam (p, "lv_style", 1.0f);   // Vocal
             juce::MessageManager::getInstance()->runDispatchLoopUntil (20);
             const bool ratioOff = ! ed->compressionPanel().ratioKnob().isEnabled() && ed->compressionPanel().ratioKnob().value.getText() == "Auto";

@@ -74,7 +74,7 @@ public:
 
     // EQ analyzer: audio before and after the EQ; display settings are saved with the session.
     SpectrumAnalyser analyserPre, analyserPost;
-    std::atomic<int> analyserMode { 1 };   // 0 Pre, 1 Post, 2 Off
+    std::atomic<int> analyserMode { 3 };   // 0 Pre, 1 Post, 2 Off, 3 Pre and Post together
     std::atomic<int> analyserResolution { SpectrumProcessor::High }, analyserSpeed { SpectrumProcessor::Fast };
     std::atomic<int> eqSolo { -1 };         // band being auditioned (-1 = none); not saved
 
@@ -144,7 +144,7 @@ private:
     kv::Compressor compressor;
     kv::DeEsser deesser;
     std::array<juce::SmoothedValue<float>, numModules> moduleFade;   // 10 ms bypass crossfades (EQ, Multiband, Resonance)
-    juce::AudioBuffer<float> work, dryCopy;
+    juce::AudioBuffer<float> work, dryCopy, soloIn;
     kv::Biquad soloBp[2];
     juce::ValueTree abState[2];
     int abSlot = 0;

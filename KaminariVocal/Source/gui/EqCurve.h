@@ -4,15 +4,43 @@
 #include "../dsp/Eq.h"
 #include "../dsp/SpectrumAnalyser.h"
 
-// EQ response graph with draggable band nodes. Drag a node: frequency and gain. Mouse wheel on a node: Q.
-// Double-click empty space: add a bell there. Double-click a node: gain to 0 dB. Click: select.
+// EQ response graph with draggable band nodes (Basic view and the EQ page).
+//   - each band's own response is shaded between its curve and 0 dB, in the band's colour (as in Pro-Q)
+//   - analyzer: pre-EQ, post-EQ or both at once (pre filled dark, post as a light outline over it)
+//   - click empty space: a new band at that frequency; its type follows the frequency (see typeForFrequency)
+//     and keeping the mouse down drags it straight away
+//   - drag a node: frequency and gain; mouse wheel on a node: Q; double-click a node: gain to 0 dB
+// Curves that fall below the graph simply leave it (no line along the bottom edge).
 class EqCurve : public juce::Component, private juce::Timer
 {
 public:
+    enum AnalyserMode { Pre = 0, Post = 1, Off = 2, Both = 3 };
+    // Segmented button order is Pre, Post, Both, Off.
+    static int modeForSegment (int seg) { static const int m[] = { Pre, Post, Both, Off }; return m[juce::jlimit (0, 3, seg)]; }
+    static int segmentForMode (int mode) { static const int s[] = { 0, 1, 3, 2 }; return s[juce::jlimit (0, 3, mode)]; }
+
+    // Band type for a click at a frequency: 0-60 Hz low cut, 60-150 Hz low shelf, 150 Hz-8 kHz bell,
+    // 8-15 kHz high shelf, above 15 kHz high cut.
+    static int typeForFrequency (double f)
+    {
+        if (f <= 60.0) return kv::LowCut;
+        if (f <= 150.0) return kv::LowShelf;
+        if (f <= 8000.0) return kv::Bell;
+        if (f <= 15000.0) return kv::HighShelf;
+        return kv::HighCut;
+    }
+
+    static juce::Colour bandColour (int i)
+    {
+        static const juce::Colour c[] = { juce::Colour (0xff5ce1ff), juce::Colour (0xff8fb8ff), juce::Colour (0xffc39bff), juce::Colour (0xffff8fa3),
+                                          juce::Colour (0xffffb547), juce::Colour (0xff7ee0a1), juce::Colour (0xff4fd1c5), juce::Colour (0xfff4f7fc) };
+        return c[juce::jlimit (0, 7, i)];
+    }
+
     explicit EqCurve (KaminariVocalProcessor& p) : proc (p), state (p.apvts)
     {
         setTitle ("EQ graph");
-        setDescription ("Drag a node to change frequency and gain; mouse wheel changes Q; double-click empty space to add a band.");
+        setDescription ("Click empty space to add a band; drag a node to change frequency and gain; mouse wheel changes Q.");
         startTimerHz (30);
     }
 
@@ -34,24 +62,23 @@ public:
         auto b = getLocalBounds().toFloat();
         g.setColour (navy950);
         g.fillRoundedRectangle (b, 4.0f);
-        if (analyserVisible)
+        g.reduceClipRegion (getLocalBounds());
+
+        // analyzers: pre (dark fill) under post (light outline + faint fill)
+        const int mode = proc.analyserMode.load();
+        if (mode == Pre || mode == Both)
+            drawSpectrum (g, analyserPre, juce::Colour (0xff2b4a82).withAlpha (0.55f), juce::Colour (0xff5d6a88).withAlpha (0.8f));
+        if (mode == Post || mode == Both)
+            drawSpectrum (g, analyserPost, mist.withAlpha (mode == Both ? 0.08f : 0.16f), mist.withAlpha (0.55f));
+        if (mode == Both)
         {
-            juce::Path spec;
-            spec.startNewSubPath (0, b.getBottom());
-            for (int x = 0; x <= getWidth(); x += 2)
-            {
-                const double f0 = freqForX ((float) x), f1 = freqForX ((float) x + 2.0f);
-                const float db = analyser.columnDb (f0, f1) + 4.5f * (float) std::log2 (std::max (20.0, f0) / 1000.0);   // 4.5 dB/oct tilt
-                const float y = juce::jlimit (0.0f, b.getBottom(), (float) (b.getHeight() * (-db / 90.0)));
-                spec.lineTo ((float) x, y);
-            }
-            spec.lineTo (b.getRight(), b.getBottom());
-            spec.closeSubPath();
-            g.setColour (mist.withAlpha (0.16f));
-            g.fillPath (spec);
-            g.setColour (mist.withAlpha (0.45f));
-            g.strokePath (spec, juce::PathStrokeType (1.0f));
+            g.setFont (uiFont (10.0f, true));
+            g.setColour (juce::Colour (0xff5d6a88));
+            g.drawText ("PRE", getWidth() - 74, 6, 30, 12, juce::Justification::centredRight);
+            g.setColour (mist);
+            g.drawText ("POST", getWidth() - 40, 6, 34, 12, juce::Justification::centredRight);
         }
+
         g.setColour (navy800);
         for (double f : { 50.0, 100.0, 200.0, 500.0, 1000.0, 2000.0, 5000.0, 10000.0 })
             g.drawVerticalLine (juce::roundToInt (xForFreq (f)), 0.0f, b.getBottom());
@@ -77,7 +104,32 @@ public:
         for (int i = 0; i < kv::Equalizer::numBands; ++i)
             designs[i] = kv::EqDesign::make (s[i], fs);
         const bool on = state.getRawParameterValue ("eq_on")->load() > 0.5f;
+        const int solo = proc.eqSolo.load();
+        // keep paths just outside the graph instead of clamping to its edge, so a deep cut leaves no line at the bottom
+        auto yFor = [this] (double db) { return juce::jlimit (-20.0f, (float) getHeight() + 20.0f, yForDb (db)); };
+        const float y0 = yForDb (0.0);
 
+        // each band's own area between its curve and 0 dB
+        for (int i = 0; i < kv::Equalizer::numBands; ++i)
+        {
+            if (! s[i].used || ! s[i].on) continue;
+            juce::Path area;
+            area.startNewSubPath (0.0f, y0);
+            for (int x = 0; x <= getWidth(); x += 2)
+                area.lineTo ((float) x, yFor (designs[i].magnitudeDb (std::min (freqForX ((float) x), 0.49 * fs), fs)));
+            area.lineTo ((float) getWidth(), y0);
+            area.closeSubPath();
+            const auto col = bandColour (i);
+            g.setColour (col.withAlpha ((i == selected ? 0.26f : 0.12f) * (on ? 1.0f : 0.5f)));
+            g.fillPath (area);
+            if (i == selected)
+            {
+                g.setColour (col.withAlpha (0.55f));
+                g.strokePath (area, juce::PathStrokeType (1.0f));
+            }
+        }
+
+        // the sum of all bands
         juce::Path curve;
         for (int x = 0; x <= getWidth(); x += 2)
         {
@@ -85,8 +137,7 @@ public:
             double db = 0;
             for (int i = 0; i < kv::Equalizer::numBands; ++i)
                 if (s[i].used && s[i].on) db += designs[i].magnitudeDb (std::min (f, 0.49 * fs), fs);
-            const float y = juce::jlimit (0.0f, (float) getHeight(), yForDb (db));
-            if (x == 0) curve.startNewSubPath ((float) x, y); else curve.lineTo ((float) x, y);
+            if (x == 0) curve.startNewSubPath ((float) x, yFor (db)); else curve.lineTo ((float) x, yFor (db));
         }
         g.setColour (bolt.withAlpha (on ? 0.25f : 0.1f));
         g.strokePath (curve, juce::PathStrokeType (6.0f));
@@ -98,18 +149,25 @@ public:
             if (! s[i].used) continue;
             const auto c = nodePos (s[i]);
             const float r = i == selected ? 10.0f : 8.5f;
+            const auto col = bandColour (i);
             if (i == selected)
             {
-                g.setColour (bolt.withAlpha (0.18f));
+                g.setColour (col.withAlpha (0.18f));
                 g.fillEllipse (c.x - r - 7, c.y - r - 7, 2 * r + 14, 2 * r + 14);
             }
-            g.setColour (i == selected ? bolt : navy800);
+            g.setColour (i == selected ? col : navy800);
             g.fillEllipse (c.x - r, c.y - r, 2 * r, 2 * r);
-            g.setColour (s[i].on ? white : mist);
-            g.drawEllipse (c.x - r, c.y - r, 2 * r, 2 * r, 1.5f);
+            g.setColour (s[i].on ? col.brighter (0.3f) : mist.withAlpha (0.6f));
+            g.drawEllipse (c.x - r, c.y - r, 2 * r, 2 * r, 1.6f);
             g.setColour (i == selected ? navy950 : white);
             g.setFont (uiFont (10.0f, true));
             g.drawText (juce::String (i + 1), juce::Rectangle<float> (2 * r, 2 * r).withCentre (c), juce::Justification::centred);
+            if (i == solo)
+            {
+                g.setColour (juce::Colour (0xffffb547));
+                g.setFont (uiFont (9.5f, true));
+                g.drawText ("SOLO", juce::Rectangle<float> (40.0f, 12.0f).withCentre ({ c.x, c.y - r - 10.0f }), juce::Justification::centred);
+            }
         }
     }
 
@@ -128,9 +186,38 @@ public:
         return -1;
     }
 
+    // Adds a band at a point of the graph; returns its index or -1 when all eight are in use.
+    int addBandAt (juce::Point<float> p)
+    {
+        for (int i = 0; i < kv::Equalizer::numBands; ++i)
+            if (state.getRawParameterValue ("eq" + juce::String (i + 1) + "_used")->load() < 0.5f)
+            {
+                const double f = freqForX (p.x);
+                const int type = typeForFrequency (f);
+                const bool cut = type == kv::LowCut || type == kv::HighCut;
+                const float gain = cut ? 0.0f : (float) juce::jlimit (-30.0, 30.0, std::round (dbForY (p.y) * 10.0) / 10.0);
+                gesture (param (i, "type"), (float) type);
+                gesture (param (i, "freq"), (float) f);
+                gesture (param (i, "gain"), gain);
+                gesture (param (i, "q"), type == kv::Bell ? 1.0f : 0.71f);
+                gesture (param (i, "slope"), 1.0f);      // 12 dB/oct for the cut filters
+                gesture (param (i, "on"), 1.0f);
+                gesture (param (i, "used"), 1.0f);
+                select (i);
+                return i;
+            }
+        return -1;
+    }
+
     void mouseDown (const juce::MouseEvent& e) override
     {
         dragBand = bandAt (e.position);
+        if (dragBand < 0 && ! e.mods.isPopupMenu())
+        {
+            dragBand = addBandAt (e.position);
+            createdBand = dragBand;
+            createdMs = juce::Time::getMillisecondCounterHiRes();
+        }
         if (dragBand >= 0)
         {
             select (dragBand);
@@ -142,7 +229,9 @@ public:
     {
         if (dragBand < 0) return;
         setPlain (param (dragBand, "freq"), (float) freqForX (e.position.x));
-        setPlain (param (dragBand, "gain"), (float) juce::jlimit (-30.0, 30.0, dbForY (e.position.y)));
+        const int type = juce::roundToInt (state.getRawParameterValue ("eq" + juce::String (dragBand + 1) + "_type")->load());
+        if (type != kv::LowCut && type != kv::HighCut && type != kv::Notch && type != kv::BandPass)
+            setPlain (param (dragBand, "gain"), (float) juce::jlimit (-30.0, 30.0, dbForY (e.position.y)));
     }
 
     void mouseUp (const juce::MouseEvent&) override
@@ -155,17 +244,9 @@ public:
     void mouseDoubleClick (const juce::MouseEvent& e) override
     {
         const int b = bandAt (e.position);
-        if (b >= 0) { gesture (param (b, "gain"), 0.0f); return; }
-        for (int i = 0; i < kv::Equalizer::numBands; ++i)
-            if (state.getRawParameterValue ("eq" + juce::String (i + 1) + "_used")->load() < 0.5f)
-            {
-                gesture (param (i, "type"), 0.0f);
-                gesture (param (i, "freq"), (float) freqForX (e.position.x));
-                gesture (param (i, "gain"), (float) juce::jlimit (-30.0, 30.0, dbForY (e.position.y)));
-                gesture (param (i, "used"), 1.0f);
-                select (i);
-                return;
-            }
+        // the second click of a double-click that created this band must not reset it
+        if (b >= 0 && ! (b == createdBand && juce::Time::getMillisecondCounterHiRes() - createdMs < 800.0))
+            gesture (param (b, "gain"), 0.0f);
     }
 
     void mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheelDetails& w) override
@@ -186,36 +267,57 @@ private:
     static void setPlain (juce::RangedAudioParameter* p, float v) { p->setValueNotifyingHost (p->convertTo0to1 (v)); }
     static void gesture (juce::RangedAudioParameter* p, float v) { p->beginChangeGesture(); setPlain (p, v); p->endChangeGesture(); }
     void select (int b) { selected = b; if (onSelect) onSelect (b); repaint(); }
+
+    void drawSpectrum (juce::Graphics& g, const SpectrumProcessor& an, juce::Colour fill, juce::Colour line) const
+    {
+        const auto b = getLocalBounds().toFloat();
+        juce::Path spec;
+        spec.startNewSubPath (0, b.getBottom() + 2.0f);
+        for (int x = 0; x <= getWidth(); x += 2)
+        {
+            const double f0 = freqForX ((float) x), f1 = freqForX ((float) x + 2.0f);
+            const float db = an.columnDb (f0, f1) + 4.5f * (float) std::log2 (std::max (20.0, f0) / 1000.0);   // 4.5 dB/oct tilt
+            spec.lineTo ((float) x, juce::jlimit (0.0f, b.getBottom() + 2.0f, (float) (b.getHeight() * (-db / 90.0))));
+        }
+        spec.lineTo (b.getRight(), b.getBottom() + 2.0f);
+        spec.closeSubPath();
+        g.setColour (fill);
+        g.fillPath (spec);
+        g.setColour (line);
+        g.strokePath (spec, juce::PathStrokeType (1.0f));
+    }
+
+    void feed (SpectrumAnalyser& src, SpectrumProcessor& an, unsigned& lastWritten, double& lastAudioMs, double now, double dt)
+    {
+        an.configure (proc.analyserResolution.load(), proc.analyserSpeed.load(), proc.getSampleRate() > 0 ? proc.getSampleRate() : 48000.0);
+        if (src.samplesWritten() != lastWritten && src.copyLatest (an.inputBuffer(), an.fftSize()))
+        {
+            lastWritten = src.samplesWritten();
+            lastAudioMs = now;
+            an.process (dt);
+        }
+        else if (now - lastAudioMs > 100.0)
+            an.releaseToFloor (dt);
+    }
+
     void timerCallback() override
     {
         const int mode = proc.analyserMode.load();
-        analyserVisible = mode != 2;
-        if (analyserVisible)
-        {
-            auto& src = mode == 0 ? proc.analyserPre : proc.analyserPost;
-            const double now = juce::Time::getMillisecondCounterHiRes();
-            const double dt = lastMs > 0 ? now - lastMs : 0.0;
-            lastMs = now;
-            analyser.configure (proc.analyserResolution.load(), proc.analyserSpeed.load(), proc.getSampleRate() > 0 ? proc.getSampleRate() : 48000.0);
-            if (src.samplesWritten() != lastWritten && src.copyLatest (analyser.inputBuffer(), analyser.fftSize()))
-            {
-                lastWritten = src.samplesWritten();
-                lastAudioMs = now;
-                analyser.process (dt);
-            }
-            else if (now - lastAudioMs > 100.0)
-                analyser.releaseToFloor (dt);
-        }
+        const double now = juce::Time::getMillisecondCounterHiRes();
+        const double dt = lastMs > 0 ? now - lastMs : 0.0;
+        lastMs = now;
+        if (mode == Pre || mode == Both)  feed (proc.analyserPre, analyserPre, lastWrittenPre, lastAudioPre, now, dt);
+        if (mode == Post || mode == Both) feed (proc.analyserPost, analyserPost, lastWrittenPost, lastAudioPost, now, dt);
         repaint();
     }
 
-    SpectrumProcessor analyser;
-    unsigned lastWritten = 0;
-    double lastMs = 0, lastAudioMs = 0;
-    bool analyserVisible = true;
+    SpectrumProcessor analyserPre, analyserPost;
+    unsigned lastWrittenPre = 0, lastWrittenPost = 0;
+    double lastMs = 0, lastAudioPre = 0, lastAudioPost = 0;
 
     KaminariVocalProcessor& proc;
     APVTS& state;
-    int dragBand = -1;
+    int dragBand = -1, createdBand = -1;
+    double createdMs = 0;
     double range = 18.0;
 };

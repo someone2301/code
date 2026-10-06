@@ -201,7 +201,7 @@ namespace kvui
     public:
         explicit EqSection (KaminariVocalProcessor& p)
             : proc (p), power (p.apvts, "eq_on", "EQ"), curve (p),
-              analyser ({ "Pre", "Post", "Off" }, "Analyzer"), zoomOut ("-"), zoomIn ("+"),
+              analyser ({ "Pre", "Post", "Both", "Off" }, "Analyzer"), zoomOut ("-"), zoomIn ("+"),
               active ("Active"), solo ("Solo"), del ("Delete")
         {
             setTitle ("EQ");
@@ -210,8 +210,8 @@ namespace kvui
                 addAndMakeVisible (c);
             styleText (bandCount, 12.0f, colours::mist);
             bandCount.setJustificationType (juce::Justification::centredLeft);
-            analyser.setSelected (p.analyserMode.load());
-            analyser.onChange = [this] (int i) { proc.analyserMode.store (i); };
+            analyser.setSelected (EqCurve::segmentForMode (p.analyserMode.load()));
+            analyser.onChange = [this] (int i) { proc.analyserMode.store (EqCurve::modeForSegment (i)); };
             resolution.addItemList (SpectrumProcessor::resolutionNames(), 1);
             speed.addItemList (SpectrumProcessor::speedNames(), 1);
             resolution.setSelectedId (p.analyserResolution.load() + 1, juce::dontSendNotification);
@@ -232,7 +232,7 @@ namespace kvui
             active.setTooltip ("Switches the selected band on or off (bypass, not delete).");
             solo.setClickingTogglesState (true);
             solo.onClick = [this] { proc.eqSolo.store (solo.getToggleState() ? selected : -1); };
-            solo.setTooltip ("Hear only the region of the selected band.");
+            solo.setTooltip ("Hear only what the selected band works on: around a bell, below a low shelf or low cut, above a high shelf or high cut.");
             del.onClick = [this] { setParam ("used", 0.0f); };
             del.setTooltip ("Removes the selected band.");
             curve.onSelect = [this] (int b) { select (b); };
@@ -297,7 +297,7 @@ namespace kvui
             top.removeFromRight (52);
             resolution.setBounds (top.removeFromRight (74).reduced (0, 2));
             top.removeFromRight (78);
-            analyser.setBounds (top.removeFromRight (110).reduced (0, 2));
+            analyser.setBounds (top.removeFromRight (150).reduced (0, 2));
             b.removeFromTop (8);
             auto bottom = b.removeFromBottom (26);
             b.removeFromBottom (8);
@@ -356,6 +356,7 @@ namespace kvui
             const juce::String pre = "eq" + juce::String (selected + 1) + "_";
             type.setSelectedId (juce::roundToInt (proc.apvts.getRawParameterValue (pre + "type")->load()) + 1, juce::dontSendNotification);
             active.setToggleState (proc.apvts.getRawParameterValue (pre + "on")->load() > 0.5f, juce::dontSendNotification);
+            solo.setToggleState (proc.eqSolo.load() == selected, juce::dontSendNotification);
             const bool isUsed = proc.apvts.getRawParameterValue (pre + "used")->load() > 0.5f;
             for (auto* c : std::initializer_list<juce::Component*> { &type, &freq, &gain, &q, &active, &solo, &del })
                 c->setEnabled (isUsed);
