@@ -4,6 +4,82 @@
 #include "../dsp/Eq.h"
 #include "../dsp/SpectrumAnalyser.h"
 
+// Pre and post spectra for a display on the 20 Hz .. 20 kHz log axis: pre filled dark, post as a light outline.
+// Shared by the EQ, Multiband, Resonance and Compression displays so all analyzers look and move the same.
+struct AnalyzerPair
+{
+    enum Mode { Pre = 0, Post = 1, Off = 2, Both = 3 };
+    // Segmented button order is Pre, Post, Both, Off.
+    static int modeForSegment (int seg) { static const int m[] = { Pre, Post, Both, Off }; return m[juce::jlimit (0, 3, seg)]; }
+    static int segmentForMode (int mode) { static const int s[] = { 0, 1, 3, 2 }; return s[juce::jlimit (0, 3, mode)]; }
+
+    SpectrumProcessor pre, post;
+
+    void update (KaminariVocalProcessor& p, SpectrumAnalyser& srcPre, SpectrumAnalyser& srcPost, int mode)
+    {
+        const double now = juce::Time::getMillisecondCounterHiRes();
+        const double dt = lastMs > 0 ? now - lastMs : 0.0;
+        lastMs = now;
+        if (mode == Pre || mode == Both)  feed (p, srcPre, pre, lastWrittenPre, lastAudioPre, now, dt);
+        if (mode == Post || mode == Both) feed (p, srcPost, post, lastWrittenPost, lastAudioPost, now, dt);
+    }
+
+    // area: where to draw; xFreq (x within area) -> frequency. dB scale: 0 dB at the top, -90 at the bottom (4.5 dB/oct tilt).
+    void draw (juce::Graphics& g, juce::Rectangle<float> area, const std::function<double (float)>& freqForX, int mode,
+               const juce::String& preLabel = "PRE", const juce::String& postLabel = "POST") const
+    {
+        if (mode == Pre || mode == Both)
+            drawOne (g, area, freqForX, pre, juce::Colour (0xff2b4a82).withAlpha (0.55f), juce::Colour (0xff5d6a88).withAlpha (0.8f));
+        if (mode == Post || mode == Both)
+            drawOne (g, area, freqForX, post, juce::Colour (0xffa9b8d6).withAlpha (mode == Both ? 0.08f : 0.16f), juce::Colour (0xffa9b8d6).withAlpha (0.55f));
+        if (mode == Both)
+        {
+            g.setFont (uiFont (10.0f, true));
+            g.setColour (juce::Colour (0xff5d6a88));
+            g.drawText (preLabel, juce::Rectangle<float> (area.getRight() - 150.0f, area.getY() + 6.0f, 70.0f, 12.0f), juce::Justification::centredRight);
+            g.setColour (juce::Colour (0xffa9b8d6));
+            g.drawText (postLabel, juce::Rectangle<float> (area.getRight() - 76.0f, area.getY() + 6.0f, 70.0f, 12.0f), juce::Justification::centredRight);
+        }
+    }
+
+private:
+    static void drawOne (juce::Graphics& g, juce::Rectangle<float> a, const std::function<double (float)>& freqForX,
+                         const SpectrumProcessor& an, juce::Colour fill, juce::Colour line)
+    {
+        juce::Path spec;
+        spec.startNewSubPath (a.getX(), a.getBottom() + 2.0f);
+        for (float x = 0.0f; x <= a.getWidth(); x += 2.0f)
+        {
+            const double f0 = freqForX (x), f1 = freqForX (x + 2.0f);
+            const float db = an.columnDb (f0, f1) + 4.5f * (float) std::log2 (std::max (20.0, f0) / 1000.0);
+            spec.lineTo (a.getX() + x, a.getY() + juce::jlimit (0.0f, a.getHeight() + 2.0f, a.getHeight() * (-db / 90.0f)));
+        }
+        spec.lineTo (a.getRight(), a.getBottom() + 2.0f);
+        spec.closeSubPath();
+        g.setColour (fill);
+        g.fillPath (spec);
+        g.setColour (line);
+        g.strokePath (spec, juce::PathStrokeType (1.0f));
+    }
+
+    static void feed (KaminariVocalProcessor& p, SpectrumAnalyser& src, SpectrumProcessor& an, unsigned& lastWritten, double& lastAudioMs,
+                      double now, double dt)
+    {
+        an.configure (p.analyserResolution.load(), p.analyserSpeed.load(), p.getSampleRate() > 0 ? p.getSampleRate() : 48000.0);
+        if (src.samplesWritten() != lastWritten && src.copyLatest (an.inputBuffer(), an.fftSize()))
+        {
+            lastWritten = src.samplesWritten();
+            lastAudioMs = now;
+            an.process (dt);
+        }
+        else if (now - lastAudioMs > 100.0)
+            an.releaseToFloor (dt);
+    }
+
+    unsigned lastWrittenPre = 0, lastWrittenPost = 0;
+    double lastMs = 0, lastAudioPre = 0, lastAudioPost = 0;
+};
+
 // EQ response graph with draggable band nodes (Basic view and the EQ page).
 //   - each band's own response is shaded between its curve and 0 dB, in the band's colour (as in Pro-Q)
 //   - analyzer: pre-EQ, post-EQ or both at once (pre filled dark, post as a light outline over it)
@@ -14,10 +90,8 @@
 class EqCurve : public juce::Component, private juce::Timer
 {
 public:
-    enum AnalyserMode { Pre = 0, Post = 1, Off = 2, Both = 3 };
-    // Segmented button order is Pre, Post, Both, Off.
-    static int modeForSegment (int seg) { static const int m[] = { Pre, Post, Both, Off }; return m[juce::jlimit (0, 3, seg)]; }
-    static int segmentForMode (int mode) { static const int s[] = { 0, 1, 3, 2 }; return s[juce::jlimit (0, 3, mode)]; }
+    static int modeForSegment (int seg) { return AnalyzerPair::modeForSegment (seg); }
+    static int segmentForMode (int mode) { return AnalyzerPair::segmentForMode (mode); }
 
     // Band type for a click at a frequency: 0-60 Hz low cut, 60-150 Hz low shelf, 150 Hz-8 kHz bell,
     // 8-15 kHz high shelf, above 15 kHz high cut.
@@ -64,20 +138,8 @@ public:
         g.fillRoundedRectangle (b, 4.0f);
         g.reduceClipRegion (getLocalBounds());
 
-        // analyzers: pre (dark fill) under post (light outline + faint fill)
-        const int mode = proc.analyserMode.load();
-        if (mode == Pre || mode == Both)
-            drawSpectrum (g, analyserPre, juce::Colour (0xff2b4a82).withAlpha (0.55f), juce::Colour (0xff5d6a88).withAlpha (0.8f));
-        if (mode == Post || mode == Both)
-            drawSpectrum (g, analyserPost, mist.withAlpha (mode == Both ? 0.08f : 0.16f), mist.withAlpha (0.55f));
-        if (mode == Both)
-        {
-            g.setFont (uiFont (10.0f, true));
-            g.setColour (juce::Colour (0xff5d6a88));
-            g.drawText ("PRE", getWidth() - 74, 6, 30, 12, juce::Justification::centredRight);
-            g.setColour (mist);
-            g.drawText ("POST", getWidth() - 40, 6, 34, 12, juce::Justification::centredRight);
-        }
+        // analyzers: pre-EQ (dark fill) under post-EQ (light outline + faint fill)
+        analyzers.draw (g, b, [this] (float x) { return freqForX (x); }, proc.analyserMode.load(), "PRE EQ", "POST EQ");
 
         g.setColour (navy800);
         for (double f : { 50.0, 100.0, 200.0, 500.0, 1000.0, 2000.0, 5000.0, 10000.0 })
@@ -268,52 +330,13 @@ private:
     static void gesture (juce::RangedAudioParameter* p, float v) { p->beginChangeGesture(); setPlain (p, v); p->endChangeGesture(); }
     void select (int b) { selected = b; if (onSelect) onSelect (b); repaint(); }
 
-    void drawSpectrum (juce::Graphics& g, const SpectrumProcessor& an, juce::Colour fill, juce::Colour line) const
-    {
-        const auto b = getLocalBounds().toFloat();
-        juce::Path spec;
-        spec.startNewSubPath (0, b.getBottom() + 2.0f);
-        for (int x = 0; x <= getWidth(); x += 2)
-        {
-            const double f0 = freqForX ((float) x), f1 = freqForX ((float) x + 2.0f);
-            const float db = an.columnDb (f0, f1) + 4.5f * (float) std::log2 (std::max (20.0, f0) / 1000.0);   // 4.5 dB/oct tilt
-            spec.lineTo ((float) x, juce::jlimit (0.0f, b.getBottom() + 2.0f, (float) (b.getHeight() * (-db / 90.0))));
-        }
-        spec.lineTo (b.getRight(), b.getBottom() + 2.0f);
-        spec.closeSubPath();
-        g.setColour (fill);
-        g.fillPath (spec);
-        g.setColour (line);
-        g.strokePath (spec, juce::PathStrokeType (1.0f));
-    }
-
-    void feed (SpectrumAnalyser& src, SpectrumProcessor& an, unsigned& lastWritten, double& lastAudioMs, double now, double dt)
-    {
-        an.configure (proc.analyserResolution.load(), proc.analyserSpeed.load(), proc.getSampleRate() > 0 ? proc.getSampleRate() : 48000.0);
-        if (src.samplesWritten() != lastWritten && src.copyLatest (an.inputBuffer(), an.fftSize()))
-        {
-            lastWritten = src.samplesWritten();
-            lastAudioMs = now;
-            an.process (dt);
-        }
-        else if (now - lastAudioMs > 100.0)
-            an.releaseToFloor (dt);
-    }
-
     void timerCallback() override
     {
-        const int mode = proc.analyserMode.load();
-        const double now = juce::Time::getMillisecondCounterHiRes();
-        const double dt = lastMs > 0 ? now - lastMs : 0.0;
-        lastMs = now;
-        if (mode == Pre || mode == Both)  feed (proc.analyserPre, analyserPre, lastWrittenPre, lastAudioPre, now, dt);
-        if (mode == Post || mode == Both) feed (proc.analyserPost, analyserPost, lastWrittenPost, lastAudioPost, now, dt);
+        analyzers.update (proc, proc.analyserPre, proc.analyserPost, proc.analyserMode.load());
         repaint();
     }
 
-    SpectrumProcessor analyserPre, analyserPost;
-    unsigned lastWrittenPre = 0, lastWrittenPost = 0;
-    double lastMs = 0, lastAudioPre = 0, lastAudioPost = 0;
+    AnalyzerPair analyzers;
 
     KaminariVocalProcessor& proc;
     APVTS& state;

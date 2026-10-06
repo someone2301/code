@@ -259,6 +259,8 @@ namespace kv
     {
         float lo = 100, hi = 500, threshDb = -24, ratio = 2, attackMs = 10, releaseMs = 150, kneeDb = 6, rangeDb = -6, gainDb = 0;
         bool expand = false, solo = false;
+        bool bypass = false;   // band passes unprocessed
+        bool mute = false;     // band removed from the output
     };
 
     struct MultibandSettings
@@ -347,9 +349,10 @@ namespace kv
                     else
                         change = bs.rangeDb < 0 ? -std::min (-bs.rangeDb, std::max (0.0f, below) * (ratio - 1.0f))
                                                 : std::min (bs.rangeDb, std::max (0.0f, above) * (ratio - 1.0f));
+                    if (bs.bypass) change = 0.0f;
                     b.gainDb = change;
                     if (std::abs (change) > std::abs (meter)) meter = change;
-                    const float g = dbToGain (change + bs.gainDb);
+                    const float g = bs.mute ? 0.0f : (bs.bypass ? 1.0f : dbToGain (change + bs.gainDb));
                     for (int c = 0; c < 2; ++c)
                     {
                         if (anySolo) { if (bs.solo) y[c] += band[c] * g; }

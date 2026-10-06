@@ -34,6 +34,8 @@ public:
     kvui::FlangerPage& flangerPanel() { return flangerPage; }
     kvui::DistortionPage& distortionPanel() { return distortionPage; }
     kvui::CompressionPage& compressionPanel() { return compressionPage; }
+    kvui::MultibandPage& multibandPanel() { return multibandPage; }
+    kvui::ResonancePage& resonancePanel() { return resonancePage; }
     kvui::TunePage& tunePage() { return tunePage_; }
     kvui::EqPage& eqPage() { return eqPage_; }
     juce::Component& panel (int tab) { return *panels[(size_t) tab]; }

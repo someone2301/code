@@ -9,6 +9,7 @@
 #include "dsp/Resonance.h"
 #include "dsp/Tune.h"
 #include "dsp/Distortion.h"
+#include "dsp/Oversampled.h"
 #include "dsp/SpectrumAnalyser.h"
 #include "dsp/History.h"
 
@@ -99,7 +100,10 @@ public:
     std::array<std::atomic<float>, 6> mbBandChange {};   // per-band gain change in dB (Multiband display)
 
     kv::Tune tune;              // GUI reads its pitch read-outs
-    kv::Resonance resonance;    // GUI reads its per-band reduction
+    kv::Oversampled<kv::Resonance> resonance;   // GUI reads the running instance's per-band reduction (resonance.active())
+
+    // Pre/post analyzers of the Multiband and Resonance displays (fed only while the module is on).
+    SpectrumAnalyser mbAnalyserPre, mbAnalyserPost, rsAnalyserPre, rsAnalyserPost;
     kv::Equalizer eq;
     kv::Distortion distortion;  // GUI reads its drive read-out
     kv::Flanger flanger;        // GUI reads its LFO position
@@ -140,9 +144,10 @@ private:
     bool moduleOn[numModules] {};
     float eqOutGain = 0.0f;
 
-    kv::Multiband multiband;
+    kv::Oversampled<kv::Multiband> multiband;
     kv::Compressor compressor;
-    kv::DeEsser deesser;
+    kv::Oversampled<kv::DeEsser> deesser;
+    int mbOs = 0, dsOs = 0, rsOs = 0;
     std::array<juce::SmoothedValue<float>, numModules> moduleFade;   // 10 ms bypass crossfades (EQ, Multiband, Resonance)
     juce::AudioBuffer<float> work, dryCopy, soloIn;
     kv::Biquad soloBp[2];

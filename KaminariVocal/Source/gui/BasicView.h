@@ -1,6 +1,7 @@
 #pragma once
 
-#include "ModulePanels.h"
+#include "AutoControls.h"
+#include "EqCurve.h"
 #include "Hammer.h"
 
 // Basic view and shared chrome, laid out after the GUI preview (Main artboard).

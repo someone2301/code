@@ -718,10 +718,16 @@ namespace kvui
     class MultibandDisplay : public juce::Component, private juce::Timer
     {
     public:
-        explicit MultibandDisplay (KaminariVocalProcessor& p) : proc (p) { setTitle ("Multiband bands"); startTimerHz (25); }
+        explicit MultibandDisplay (KaminariVocalProcessor& p) : proc (p)
+        {
+            setTitle ("Multiband bands");
+            setDescription ("Click empty space to add a band there; drag a band or its edges to move it.");
+            startTimerHz (25);
+        }
         ~MultibandDisplay() override { stopTimer(); }
         std::function<void (int)> onSelect;
         int selected = 0;
+        int analyzerMode = AnalyzerPair::Both;
 
         float xFor (double f) const { return (float) (std::log (f / 20.0) / std::log (1000.0)) * getWidth(); }
         double fFor (float x) const { return 20.0 * std::pow (1000.0, juce::jlimit (0.0f, 1.0f, x / (float) getWidth())); }
@@ -731,6 +737,8 @@ namespace kvui
         {
             g.setColour (navy950);
             g.fillRoundedRectangle (getLocalBounds().toFloat(), 4.0f);
+            analyzers.draw (g, getLocalBounds().toFloat().withTrimmedBottom (18.0f), [this] (float x) { return fFor (x); }, analyzerMode,
+                            "IN", "OUT");
             g.setColour (navy800);
             for (double f : { 50.0, 100.0, 200.0, 500.0, 1000.0, 2000.0, 5000.0, 10000.0 })
                 g.drawVerticalLine (juce::roundToInt (xFor (f)), 0.0f, (float) getHeight());
@@ -750,7 +758,8 @@ namespace kvui
             {
                 const auto pre = "mb" + juce::String (k + 1) + "_";
                 const float x0 = xFor (plain (proc.apvts, pre + "lo")), x1 = xFor (plain (proc.apvts, pre + "hi"));
-                const auto col = bandColour (k);
+                const bool muted = plain (proc.apvts, pre + "mute") > 0.5f, bypassed = plain (proc.apvts, pre + "bypass") > 0.5f;
+                const auto col = (muted || bypassed) ? steel : bandColour (k);
                 g.setColour (col.withAlpha (k == selected ? 0.16f : 0.08f));
                 g.fillRect (juce::Rectangle<float> (x0, 0, x1 - x0, (float) getHeight() - 18));
                 g.setColour (col.withAlpha (0.7f));
@@ -771,10 +780,11 @@ namespace kvui
                 g.drawEllipse (cx - 7, y - 7, 14, 14, k == selected ? 2.5f : 1.2f);
                 g.setFont (font (11.0f, 1));
                 g.drawText ("Band " + juce::String (k + 1), juce::Rectangle<float> (cx - 30, 6, 60, 14), juce::Justification::centred);
-                if (plain (proc.apvts, pre + "solo") > 0.5f)
+                const juce::String flag = plain (proc.apvts, pre + "solo") > 0.5f ? "SOLO" : (muted ? "MUTE" : (bypassed ? "BYPASS" : ""));
+                if (flag.isNotEmpty())
                 {
-                    g.setColour (amber);
-                    g.drawText ("SOLO", juce::Rectangle<float> (cx - 30, 20, 60, 14), juce::Justification::centred);
+                    g.setColour (flag == "SOLO" ? amber : mist);
+                    g.drawText (flag, juce::Rectangle<float> (cx - 30, 20, 60, 14), juce::Justification::centred);
                 }
             }
         }
@@ -790,6 +800,21 @@ namespace kvui
                 if (std::abs (e.position.x - x0) < 6) { dragBand = k; dragEdge = 0; break; }
                 if (std::abs (e.position.x - x1) < 6) { dragBand = k; dragEdge = 1; break; }
                 if (e.position.x > x0 && e.position.x < x1) { dragBand = k; dragEdge = 2; startLo = plain (proc.apvts, pre + "lo"); startHi = plain (proc.apvts, pre + "hi"); startX = e.position.x; break; }
+            }
+            if (dragBand < 0 && count < 6 && e.position.y < getHeight() - 18 && ! e.mods.isPopupMenu())
+            {
+                // empty space: a new band an octave wide around the click (other settings at their defaults)
+                const juce::String pre = "mb" + juce::String (count + 1) + "_";
+                for (auto* prm : proc.apvts.processor.getParameters())
+                    if (auto* rp = dynamic_cast<juce::RangedAudioParameter*> (prm); rp != nullptr && rp->getParameterID().startsWith (pre))
+                    { rp->beginChangeGesture(); rp->setValueNotifyingHost (rp->getDefaultValue()); rp->endChangeGesture(); }
+                const double f = fFor (e.position.x);
+                setParamPlain (proc.apvts, pre + "lo", (float) juce::jlimit (20.0, 16000.0, f / std::sqrt (2.0)));
+                setParamPlain (proc.apvts, pre + "hi", (float) juce::jlimit (40.0, 20000.0, f * std::sqrt (2.0)));
+                setParamPlain (proc.apvts, "mb_count", (float) (count + 1));
+                dragBand = count;
+                dragEdge = 2;
+                startLo = plain (proc.apvts, pre + "lo"); startHi = plain (proc.apvts, pre + "hi"); startX = e.position.x;
             }
             if (dragBand >= 0) { selected = dragBand; if (onSelect) onSelect (dragBand); }
         }
@@ -810,21 +835,32 @@ namespace kvui
         }
 
     private:
-        void timerCallback() override { repaint(); }
+        void timerCallback() override
+        {
+            analyzers.update (proc, proc.mbAnalyserPre, proc.mbAnalyserPost, analyzerMode);
+            repaint();
+        }
         KaminariVocalProcessor& proc;
+        AnalyzerPair analyzers;
         int dragBand = -1, dragEdge = -1;
         float startLo = 0, startHi = 0, startX = 0;
     };
 
-    class MultibandPage : public AdvFrame
+    class MultibandPage : public AdvFrame, private juce::Timer
     {
     public:
         explicit MultibandPage (KaminariVocalProcessor& p)
             : AdvFrame (p, "Multiband", "Bands only where needed" + dot() + "compress or expand, downward or upward", "mb_on", "multiband"),
               display (p), slope (p.apvts, "mb_slope", { "6", "12", "24" }, "Crossover slope in dB/oct"),
-              detector (p.apvts, "mb_detector", { "Peak", "Smooth" })
+              detector (p.apvts, "mb_detector", { "Peak", "Smooth" }),
+              os (p.apvts, "mb_os", { "Off", "2x", "4x" }, "Oversampling: runs the bands at 2x or 4x the session rate. Adds latency while Multiband is on."),
+              analyzer ({ "In", "Out", "Both", "Off" }, "Analyzer")
         {
             addAndMakeVisible (display);
+            addAndMakeVisible (os);
+            addAndMakeVisible (analyzer);
+            analyzer.setSelected (AnalyzerPair::segmentForMode (display.analyzerMode));
+            analyzer.onChange = [this] (int i) { display.analyzerMode = AnalyzerPair::modeForSegment (i); };
             addAndMakeVisible (panel);
             addAndMakeVisible (slope);
             addAndMakeVisible (detector);
@@ -836,7 +872,9 @@ namespace kvui
             removeBand.onClick = [this] { setParamPlain (proc.apvts, "mb_count", juce::jmax (1.0f, plain (proc.apvts, "mb_count") - 1.0f)); select (0); };
             display.onSelect = [this] (int k) { select (k); };
             select (0);
+            startTimerHz (4);
         }
+        ~MultibandPage() override { stopTimer(); }
 
         void select (int k)
         {
@@ -851,9 +889,12 @@ namespace kvui
             drawGroup (g, bar);
             g.setColour (mist);
             g.setFont (font (12.0f, 0));
-            g.drawText ("Crossover slope", slope.getX() - 106, bar.getY(), 100, bar.getHeight(), juce::Justification::centredRight);
-            g.drawText ("Detector", detector.getX() - 64, bar.getY(), 58, bar.getHeight(), juce::Justification::centredRight);
-            g.drawText ("dB/oct", slope.getRight() + 6, bar.getY(), 50, bar.getHeight(), juce::Justification::centredLeft);
+            g.drawText ("Slope", slope.getX() - 44, bar.getY(), 40, bar.getHeight(), juce::Justification::centredRight);
+            g.drawText ("Detector", detector.getX() - 60, bar.getY(), 56, bar.getHeight(), juce::Justification::centredRight);
+            g.drawText ("Oversampling", os.getX() - 86, bar.getY(), 82, bar.getHeight(), juce::Justification::centredRight);
+            g.drawText ("Analyzer", analyzer.getX() - 62, bar.getY(), 58, bar.getHeight(), juce::Justification::centredRight);
+            g.setColour (steel);
+            g.drawText ("click the display to add a band", display.getX() + 8, display.getY() + 22, 260, 14, juce::Justification::centredLeft);
         }
 
         void layoutContent (juce::Rectangle<int> b) override
@@ -861,15 +902,18 @@ namespace kvui
             bar = b.removeFromBottom (34);
             b.removeFromBottom (8);
             display.setBounds (b);
-            panel.setBounds (b.withSizeKeepingCentre (660, 150).withY (b.getBottom() - 170));
+            panel.setBounds (b.withSizeKeepingCentre (700, 150).withY (b.getBottom() - 170));
             auto r = bar.reduced (8, 4);
-            addBand.setBounds (r.removeFromLeft (100));
+            addBand.setBounds (r.removeFromLeft (92));
             r.removeFromLeft (6);
-            removeBand.setBounds (r.removeFromLeft (120));
-            r.removeFromLeft (120);
-            slope.setBounds (r.removeFromLeft (110));
-            r.removeFromLeft (130);
-            detector.setBounds (r.removeFromLeft (120));
+            removeBand.setBounds (r.removeFromLeft (110));
+            r.removeFromLeft (50);
+            slope.setBounds (r.removeFromLeft (96));
+            r.removeFromLeft (66);
+            detector.setBounds (r.removeFromLeft (110));
+            r.removeFromLeft (92);
+            os.setBounds (r.removeFromLeft (110));
+            analyzer.setBounds (r.removeFromRight (150));
         }
 
         ModuleLNF lnf;
@@ -893,9 +937,11 @@ namespace kvui
                 lo = std::make_unique<Field> (p.apvts, pre + "lo", "Low edge");
                 hi = std::make_unique<Field> (p.apvts, pre + "hi", "High edge");
                 solo = std::make_unique<ToggleBox> (p.apvts, (pre + "solo").toRawUTF8(), "SOLO", "SOLO", hintFor ("_solo"));
+                bypass = std::make_unique<ToggleBox> (p.apvts, (pre + "bypass").toRawUTF8(), "BYPASS", "BYPASS", "Passes this band unprocessed.");
+                mute = std::make_unique<ToggleBox> (p.apvts, (pre + "mute").toRawUTF8(), "MUTE", "MUTE", "Removes this band from the output.");
                 for (auto* kb : { thresh.get(), range.get(), attack.get(), release.get(), gain.get() }) kb->setLNF (&l);
                 for (auto* c : std::initializer_list<juce::Component*> { thresh.get(), range.get(), attack.get(), release.get(), gain.get(), mode.get(),
-                                                                         ratio.get(), knee.get(), lo.get(), hi.get(), solo.get() })
+                                                                         ratio.get(), knee.get(), lo.get(), hi.get(), solo.get(), bypass.get(), mute.get() })
                     addAndMakeVisible (c);
                 resized();
             }
@@ -913,11 +959,17 @@ namespace kvui
                 if (thresh == nullptr) return;
                 auto b = getLocalBounds().reduced (12, 8);
                 b.removeFromTop (14);
-                auto right = b.removeFromRight (150);
+                auto right = b.removeFromRight (190);
                 lo->setBounds (right.removeFromTop (40).removeFromLeft (70));
                 hi->setBounds (lo->getBounds().translated (78, 0));
                 right.removeFromTop (8);
-                solo->setBounds (right.removeFromTop (28));
+                auto toggles = right.removeFromTop (28);
+                const int tw = (toggles.getWidth() - 8) / 3;
+                solo->setBounds (toggles.removeFromLeft (tw));
+                toggles.removeFromLeft (4);
+                bypass->setBounds (toggles.removeFromLeft (tw));
+                toggles.removeFromLeft (4);
+                mute->setBounds (toggles);
                 auto row = b.removeFromTop (78);
                 const int w = row.getWidth() / 5;
                 for (auto* kb : { thresh.get(), range.get(), attack.get(), release.get(), gain.get() }) kb->setBounds (row.removeFromLeft (w));
@@ -932,12 +984,19 @@ namespace kvui
             std::unique_ptr<SegParam> mode;
             std::unique_ptr<HSlider> ratio, knee;
             std::unique_ptr<Field> lo, hi;
-            std::unique_ptr<ToggleBox> solo;
+            std::unique_ptr<ToggleBox> solo, bypass, mute;
             int band = 0;
         } panel;
 
     private:
-        SegParam slope, detector;
+        // the band count can drop (preset, automation, Remove band): keep the panel on an existing band
+        void timerCallback() override
+        {
+            const int count = juce::roundToInt (plain (proc.apvts, "mb_count"));
+            if (display.selected >= count) select (count - 1);
+        }
+        SegParam slope, detector, os;
+        Segmented analyzer;
         juce::TextButton addBand, removeBand;
         juce::Rectangle<int> bar;
     };
@@ -1262,10 +1321,11 @@ namespace kvui
               detect (p.apvts, "ds_detect", { "VOICE FOCUS", "FULL BAND" }),
               linkMode (p.apvts, "ds_link_mode", { "STEREO", "MID", "SIDE" }),
               listen (p.apvts, "ds_listen", "Audition", "Audition", hintFor ("ds_listen")),
-              trigger (p.apvts, "ds_audition_trigger", "Removed only", "Removed only", hintFor ("ds_audition_trigger"))
+              trigger (p.apvts, "ds_audition_trigger", "Removed only", "Removed only", hintFor ("ds_audition_trigger")),
+              os (p.apvts, "ds_os", { "OFF", "2X", "4X" }, "Oversampling: runs the de-esser at 2x or 4x the session rate. Adds latency while De-ess is on.")
         {
             for (auto* c : std::initializer_list<juce::Component*> { &display, &range, &thresh, &rangeKnob, &link, &lookahead, &mode, &process,
-                                                                     &detect, &linkMode, &listen, &trigger })
+                                                                     &detect, &linkMode, &listen, &trigger, &os })
                 addAndMakeVisible (c);
             for (auto* k : { &thresh, &rangeKnob, &link, &lookahead }) k->setLNF (&lnf);
             startTimerHz (10);
@@ -1282,9 +1342,9 @@ namespace kvui
             g.drawText (kvp::freqText (plain (proc.apvts, "ds_det_hi")), range.getRight() - 70, range.getBottom() + 4, 80, 18, juce::Justification::centredRight);
             g.setColour (mist);
             g.setFont (font (11.0f, 1, 0.1f));
-            for (auto* c : std::initializer_list<juce::Component*> { &mode, &process, &detect, &linkMode })
+            for (auto* c : std::initializer_list<juce::Component*> { &mode, &process, &detect, &linkMode, &os })
             {
-                const char* t = c == &mode ? "MODE" : c == &process ? "PROCESSING" : c == &detect ? "DETECTION" : "CHANNELS";
+                const char* t = c == &mode ? "MODE" : c == &process ? "PROCESSING" : c == &detect ? "DETECTION" : c == &os ? "OVERSAMPLING" : "CHANNELS";
                 g.drawText (t, c->getX() - 110, c->getY(), 100, c->getHeight(), juce::Justification::centredRight);
             }
         }
@@ -1306,11 +1366,11 @@ namespace kvui
             link.setBounds (right.removeFromTop (100));
             lookahead.setBounds (right.removeFromTop (100));
             c.removeFromLeft (130);
-            auto rows = c.withSizeKeepingCentre (c.getWidth(), 4 * 34 + 30);
-            for (auto* s : std::initializer_list<juce::Component*> { &mode, &process, &detect, &linkMode })
+            auto rows = c.withSizeKeepingCentre (c.getWidth(), 5 * 32 + 28);
+            for (auto* s : std::initializer_list<juce::Component*> { &mode, &process, &detect, &linkMode, &os })
             {
-                s->setBounds (rows.removeFromTop (28).removeFromLeft (s == &linkMode ? 210 : 230));
-                rows.removeFromTop (6);
+                s->setBounds (rows.removeFromTop (27).removeFromLeft (s == &linkMode || s == &os ? 210 : 230));
+                rows.removeFromTop (5);
             }
             trigger.setBounds (rows.removeFromTop (26).removeFromLeft (130));
         }
@@ -1323,6 +1383,7 @@ namespace kvui
         RangeKnob thresh, rangeKnob, link, lookahead;
         SegParam mode, process, detect, linkMode;
         ToggleBox listen, trigger;
+        SegParam os;
         juce::Rectangle<int> controls;
     };
 
@@ -1332,6 +1393,7 @@ namespace kvui
     {
     public:
         explicit ResGraph (KaminariVocalProcessor& p) : proc (p) { setTitle ("Resonance graph"); startTimerHz (25); }
+        int analyzerMode = AnalyzerPair::Both;
         ~ResGraph() override { stopTimer(); }
         std::function<void (int)> onSelect;
         int selected = 0;
@@ -1345,7 +1407,7 @@ namespace kvui
             g.setColour (navy950);
             g.fillRoundedRectangle (b, 4.0f);
             // reduction hanging from the top (Max Cut dashed)
-            const auto& r = proc.resonance;
+            const auto& r = proc.resonance.active();
             const int n = r.numBands();
             const float zero = getHeight() * 0.62f;
             // area from the bottom up to the 0 dB line; each band's reduction carves a notch downwards
@@ -1360,6 +1422,8 @@ namespace kvui
             red.closeSubPath();
             g.setColour (juce::Colour (0xff2d5490));
             g.fillPath (red);
+            // input and output spectra above the reduction (where the cuts come from and what is left)
+            analyzers.draw (g, b.withTrimmedTop (18.0f).withHeight (zero - 18.0f), [this] (float x) { return fFor (x); }, analyzerMode, "IN", "OUT");
             g.setColour (navy800);
             for (double f : { 100.0, 250.0, 500.0, 1000.0, 2000.0, 4000.0, 8000.0 })
                 g.drawVerticalLine (juce::roundToInt (xFor (f)), 0.0f, b.getBottom());
@@ -1447,7 +1511,12 @@ namespace kvui
             if (e.type == kv::BandPass) m = std::max (-24.0, m) + e.gainDb;
             return juce::jlimit (-24.0, 24.0, m);
         }
-        void timerCallback() override { repaint(); }
+        void timerCallback() override
+        {
+            analyzers.update (proc, proc.rsAnalyserPre, proc.rsAnalyserPost, analyzerMode);
+            repaint();
+        }
+        AnalyzerPair analyzers;
         KaminariVocalProcessor& proc;
         int drag = -1;
     };
@@ -1469,14 +1538,18 @@ namespace kvui
               maxCut (p.apvts, "rs_max_cut", "max cut"), wetTrim (p.apvts, "rs_wet_trim", "wet trim"),
               mix (p.apvts, "rs_mix", "mix"), out (p.apvts, "rs_out_gain", "out"),
               quality (p.apvts, "rs_quality", { "normal", "high", "ultra" }),
+              os (p.apvts, "rs_os", { "off", "2x", "4x" }, "Oversampling: runs the resonance bands at 2x or 4x the session rate. Adds latency while Resonance is on."),
+              analyzer ({ "In", "Out", "Both", "Off" }, "Analyzer"),
               bypass (p.apvts, "rs_bypass", "bypass", "bypass", hintFor ("rs_bypass")),
               delta (p.apvts, "rs_delta", "delta", "delta", hintFor ("rs_delta"))
         {
             for (auto* c : std::initializer_list<juce::Component*> { &graph, &mode, &depth, &detail, &attack, &release, &stereo, &link, &focus,
                                                                      &dLo, &dHi, &aLo, &aHi, &rLo, &rHi, &maxCut, &wetTrim, &mix, &out, &quality,
-                                                                     &bypass, &delta, &panel })
+                                                                     &bypass, &delta, &panel, &os, &analyzer })
                 addAndMakeVisible (c);
             for (auto* k : { &depth, &detail, &attack, &release }) k->setLNF (&lnf);
+            analyzer.setSelected (AnalyzerPair::segmentForMode (graph.analyzerMode));
+            analyzer.onChange = [this] (int i) { graph.analyzerMode = AnalyzerPair::modeForSegment (i); };
             graph.onSelect = [this] (int k) { panel.build (proc, k); resized(); };
             panel.build (p, 0);
             startTimerHz (4);
@@ -1496,6 +1569,8 @@ namespace kvui
             g.drawText (juce::String (juce::CharPointer_UTF8 ("\xe2\x80\x94 tilt \xe2\x80\x94")), col2.getX(), dLo.getY() - 16, col2.getWidth(), 14, juce::Justification::centred);
             g.drawText (juce::String (juce::CharPointer_UTF8 ("\xe2\x80\x94 scale \xe2\x80\x94")), col2.getX(), maxCut.getY() - 16, col2.getWidth(), 14, juce::Justification::centred);
             g.drawText ("quality", quality.getX() - 56, bar.getY(), 50, bar.getHeight(), juce::Justification::centredRight);
+            g.drawText ("oversampling", os.getX() - 82, bar.getY(), 78, bar.getHeight(), juce::Justification::centredRight);
+            g.drawText ("analyzer", analyzer.getX() - 60, graph.getY() - 18, 56, 14, juce::Justification::centredRight);
             g.setColour (white.withAlpha (0.8f));
             g.drawText ("drag a node: freq and depth" + dot() + "double-click: add a depth-curve band", graph.getX(), graph.getY() - 18, graph.getWidth(), 14, juce::Justification::centredRight);
         }
@@ -1509,6 +1584,7 @@ namespace kvui
             col2 = b.removeFromLeft (115);
             b.removeFromLeft (10);
             graph.setBounds (b.withTrimmedTop (20));
+            analyzer.setBounds (juce::Rectangle<int> (graph.getX() + 60, graph.getY() - 20, 150, 18));
             panel.setBounds (graph.getBounds().withSizeKeepingCentre (430, 92).withY (graph.getBottom() - 100));
             auto c = col1.reduced (10, 10);
             mode.setBounds (c.removeFromTop (28).reduced (12, 0));
@@ -1538,8 +1614,10 @@ namespace kvui
             bypass.setBounds (r.removeFromLeft (80));
             r.removeFromLeft (6);
             delta.setBounds (r.removeFromLeft (80));
-            quality.setBounds (r.removeFromRight (200));
-            r.removeFromRight (70);
+            quality.setBounds (r.removeFromRight (170));
+            r.removeFromRight (64);
+            os.setBounds (r.removeFromRight (120));
+            r.removeFromRight (90);
             out.setBounds (r.removeFromRight (90).withTrimmedTop (-10));
             r.removeFromRight (10);
             mix.setBounds (r.removeFromRight (90).withTrimmedTop (-10));
@@ -1614,7 +1692,8 @@ namespace kvui
         RangeKnob depth, detail, attack, release;
         SegParam stereo;
         Field link, focus, dLo, dHi, aLo, aHi, rLo, rHi, maxCut, wetTrim, mix, out;
-        SegParam quality;
+        SegParam quality, os;
+        Segmented analyzer;
         ToggleBox bypass, delta;
         juce::Rectangle<int> col1, col2, bar;
     };

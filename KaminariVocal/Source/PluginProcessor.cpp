@@ -43,10 +43,10 @@ void KaminariVocalProcessor::prepareToPlay (double sampleRate, int samplesPerBlo
     compHistory.setHop ((int) std::lround (sampleRate / 375.0));
     deessHistory.setHop ((int) std::lround (sampleRate / 375.0));
     eq.prepare (sampleRate);
-    multiband.prepare (sampleRate);
+    multiband.prepare (sampleRate, block);
     compressor.prepare (sampleRate);
-    deesser.prepare (sampleRate);
-    resonance.prepare (sampleRate);
+    deesser.prepare (sampleRate, block);
+    resonance.prepare (sampleRate, block);
     distortion.prepare (sampleRate, block);
     distortionIdle = true;
     readModuleSettings();
@@ -88,7 +88,13 @@ int KaminariVocalProcessor::computeLatency() const
     const int la = (int) std::lround (raw ("lv_lookahead")->load() * 0.001 * fs)
                  + (int) std::lround (raw ("ds_lookahead")->load() * 0.001 * fs);
     // Distortion's oversampling filters add latency only while the module is on
-    const int os = raw ("dt_on")->load() > 0.5f ? distortion.latencyFor (juce::roundToInt (raw ("dt_os")->load())) : 0;
+    // oversampling filters add latency only while their module is on
+    auto osLat = [this] (const char* onId, const char* osId, int (*lat) (const KaminariVocalProcessor&, int))
+    { return raw (onId)->load() > 0.5f ? lat (*this, juce::roundToInt (raw (osId)->load())) : 0; };
+    const int os = osLat ("dt_on", "dt_os", [] (const KaminariVocalProcessor& p, int f) { return p.distortion.latencyFor (f); })
+                 + osLat ("mb_on", "mb_os", [] (const KaminariVocalProcessor& p, int f) { return p.multiband.latencyFor (f); })
+                 + osLat ("ds_on", "ds_os", [] (const KaminariVocalProcessor& p, int f) { return p.deesser.latencyFor (f); })
+                 + osLat ("rs_on", "rs_os", [] (const KaminariVocalProcessor& p, int f) { return p.resonance.latencyFor (f); });
     return kv::Tune::latencyFor (fs) + la + os;
 }
 
@@ -157,6 +163,7 @@ void KaminariVocalProcessor::readModuleSettings()
     m.count = i ("mb_count");
     m.slopeIndex = i ("mb_slope");
     m.smoothDetector = i ("mb_detector") == 1;
+    mbOs = i ("mb_os"); dsOs = i ("ds_os"); rsOs = i ("rs_os");
     for (int k = 0; k < 6; ++k)
     {
         const juce::String p = "mb" + juce::String (k + 1) + "_";
@@ -164,6 +171,7 @@ void KaminariVocalProcessor::readModuleSettings()
         bs.lo = f (p + "lo"); bs.hi = f (p + "hi"); bs.threshDb = f (p + "thresh"); bs.ratio = f (p + "ratio");
         bs.attackMs = f (p + "attack"); bs.releaseMs = f (p + "release"); bs.kneeDb = f (p + "knee");
         bs.rangeDb = f (p + "range"); bs.gainDb = f (p + "gain"); bs.expand = i (p + "mode") == 1; bs.solo = b (p + "solo");
+        bs.bypass = b (p + "bypass"); bs.mute = b (p + "mute");
     }
 
     auto& c = compSettings;
@@ -264,9 +272,14 @@ void KaminariVocalProcessor::processModules (float* l, float* r, int n)
         for (int i = 0; i < n; ++i) { l[i] = soloBp[0].process (soloIn.getSample (0, i)); r[i] = soloBp[1].process (soloIn.getSample (1, i)); }
     }
     analyserPost.push (l, r, n);
-    crossfaded (ModMultiband, [&] { moduleGr[ModMultiband].store (multiband.process (l, r, n, mbSettings)); });
+    crossfaded (ModMultiband, [&]
+    {
+        mbAnalyserPre.push (l, r, n);
+        moduleGr[ModMultiband].store (multiband.process (l, r, n, mbOs, [&] (int) { return mbSettings; }));
+        mbAnalyserPost.push (l, r, n);
+    });
     for (int k = 0; k < 6; ++k)
-        mbBandChange[(size_t) k].store (moduleOn[ModMultiband] && k < mbSettings.count ? multiband.bandChange (k) : 0.0f);
+        mbBandChange[(size_t) k].store (moduleOn[ModMultiband] && k < mbSettings.count ? multiband.active().bandChange (k) : 0.0f);
     // Compression and De-ess always run (their lookahead delay must stay in the path); "off" means neutral settings.
     dryCopy.copyFrom (0, 0, l, n);
     dryCopy.copyFrom (1, 0, r, n);
@@ -291,9 +304,20 @@ void KaminariVocalProcessor::processModules (float* l, float* r, int n)
     }
     dryCopy.copyFrom (0, 0, l, n);
     dryCopy.copyFrom (1, 0, r, n);
-    moduleGr[ModDeEss].store (deesser.process (l, r, n, dsSettings));
+    // oversampled only while on (off it runs neutral at the session rate, keeping only its lookahead delay)
+    moduleGr[ModDeEss].store (deesser.process (l, r, n, moduleOn[ModDeEss] ? dsOs : 0, [&] (int factor)
+    {
+        auto d = dsSettings;
+        d.lookaheadSamples *= factor;
+        return d;
+    }));
     deessHistory.push (dryCopy.getReadPointer (0), dryCopy.getReadPointer (1), l, r, n);
-    crossfaded (ModResonance, [&] { moduleGr[ModResonance].store (resonance.process (l, r, n, rsSettings)); });
+    crossfaded (ModResonance, [&]
+    {
+        rsAnalyserPre.push (l, r, n);
+        moduleGr[ModResonance].store (resonance.process (l, r, n, rsOs, [&] (int) { return rsSettings; }));
+        rsAnalyserPost.push (l, r, n);
+    });
 }
 
 void KaminariVocalProcessor::resetSend (int s)

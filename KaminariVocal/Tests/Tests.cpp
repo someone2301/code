@@ -658,7 +658,7 @@ int main (int argc, char** argv)
             prepare (p);
             const auto r = render (p, 1.0, [] (int c, long n) { kv::Random rnd ((uint32_t) n * 2246822519u + (uint32_t) c + 9u); return 0.1f * rnd.next(); });
             double maxRed = 0;
-            for (int k = 0; k < p.resonance.numBands(); ++k) maxRed = std::max (maxRed, (double) p.resonance.bandReduction (k));
+            for (int k = 0; k < p.resonance.active().numBands(); ++k) maxRed = std::max (maxRed, (double) p.resonance.active().bandReduction (k));
             check (maxRed < 2.0, juce::String ("Resonance leaves white noise alone (") + (stereo ? "M/S" : "L/R") + ", largest cut " + juce::String (maxRed, 1) + " dB)");
         }
     }
@@ -1003,6 +1003,51 @@ int main (int argc, char** argv)
         check (ok, "Distortion: every style and oversampling setting stays finite and bounded at full drive and bias");
     }
 
+    // ---- oversampling (Multiband, De-ess, Resonance) and Multiband bypass / mute -----------------------------------
+    {
+        struct Case { const char* on; const char* os; float factor; const char* name; };
+        for (auto c : { Case { "mb_on", "mb_os", 1.0f, "Multiband 2x" }, Case { "ds_on", "ds_os", 2.0f, "De-ess 4x" }, Case { "rs_on", "rs_os", 2.0f, "Resonance 4x" } })
+        {
+            KaminariVocalProcessor p;
+            neutral (p);
+            setParam (p, c.on, 1.0f);
+            setParam (p, "rs_depth", 0.0f);   // a pure tone is a resonance: with depth 0 Resonance leaves it alone
+            prepare (p);
+            const int base = p.getLatencySamples();
+            setParam (p, c.os, c.factor);
+            prepare (p);
+            const int lat = p.getLatencySamples();
+            const auto r = render (p, 1.0, sine (1000.0, -18.0f));
+            bool finite = true;
+            for (int i = 0; i < r.out.getNumSamples(); ++i) finite = finite && std::isfinite (r.out.getSample (0, i));
+            const float level = toneDb (r.out, 0, 1000.0, 12000, 48000);
+            // aligned: the output is the input (as processed) at the reported latency, so it matches the input closely
+            double err = 0, ref = 0;
+            for (int i = 12000; i < 48000; ++i) { const double d = r.out.getSample (0, i) - r.in.getSample (0, i); err += d * d; ref += (double) r.in.getSample (0, i) * r.in.getSample (0, i); }
+            const double alignDb = 10.0 * std::log10 (std::max (1e-30, err / ref));
+            check (finite && lat > base && std::abs (level + 18.0f) < 1.5f && alignDb < -20.0,
+                   juce::String (c.name) + " oversampling: +" + juce::String (lat - base) + " samples latency, tone level " + juce::String (level, 1)
+                   + " dBFS, output aligned with the reported latency (residual " + juce::String (alignDb, 1) + " dB)");
+        }
+
+        auto mbLevel = [] (const char* flag)
+        {
+            KaminariVocalProcessor p;
+            neutral (p);
+            setParam (p, "mb_on", 1.0f);
+            setParam (p, "mb_count", 1.0f);
+            setParam (p, "mb1_lo", 100.0f); setParam (p, "mb1_hi", 400.0f);
+            setParam (p, "mb1_thresh", -50.0f); setParam (p, "mb1_ratio", 10.0f); setParam (p, "mb1_range", -24.0f);
+            if (flag != nullptr) setParam (p, flag, 1.0f);
+            prepare (p);
+            const auto r = render (p, 1.0, sine (200.0, -12.0f));
+            return toneDb (r.out, 0, 200.0, 24000, 48000);
+        };
+        const float comp = mbLevel (nullptr), byp = mbLevel ("mb1_bypass"), mute = mbLevel ("mb1_mute");
+        check (comp < -20.0f && std::abs (byp + 12.0f) < 0.5f && mute < -30.0f, "Multiband band: compressed " + juce::String (comp, 1)
+               + " dBFS, Bypass " + juce::String (byp, 1) + " dBFS (unchanged), Mute " + juce::String (mute, 1) + " dBFS (removed)");
+    }
+
     // ---- EQ solo: auditions what each band type works on --------------------------------------------------------------
     {
         auto soloLevels = [] (int type)
@@ -1204,6 +1249,21 @@ int main (int argc, char** argv)
                 check (std::abs (getParam (p, "eq3_freq") - 523.25f) < 0.5f, "EQ keyboard: dragging from A4 to C5 sweeps the selected band to "
                        + juce::String (getParam (p, "eq3_freq"), 1) + " Hz (C5 = 523.3 Hz)");
                 for (int i = 1; i <= 8; ++i) setParam (p, ("eq" + juce::String (i) + "_used").toRawUTF8(), 0.0f);
+            }
+            // Multiband: clicking empty display space adds a band around the click
+            {
+                ed->showTab (true, KaminariVocalEditor::TabMultiband);
+                setParam (p, "mb_count", 1.0f);
+                setParam (p, "mb1_lo", 100.0f); setParam (p, "mb1_hi", 400.0f);
+                juce::MessageManager::getInstance()->runDispatchLoopUntil (20);
+                auto& disp = ed->multibandPanel().display;
+                const juce::Point<float> at (disp.xFor (3000.0), 60.0f);
+                disp.mouseDown (event (disp, at, at, false));
+                disp.mouseUp (event (disp, at, at, false));
+                const float lo = getParam (p, "mb2_lo"), hi = getParam (p, "mb2_hi");
+                check (juce::roundToInt (getParam (p, "mb_count")) == 2 && lo < 3000.0f && hi > 3000.0f && hi / lo < 2.2f,
+                       "Multiband: clicking the display at 3 kHz adds band 2 (" + juce::String (lo, 0) + " - " + juce::String (hi, 0) + " Hz)");
+                setParam (p, "mb_count", 1.0f);
             }
             setParam (p, "lv_style", 1.0f);   // Vocal
             juce::MessageManager::getInstance()->runDispatchLoopUntil (20);

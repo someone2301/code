@@ -218,6 +218,7 @@ namespace kvp
         layout.add (std::make_unique<AudioParameterInt> (pid ("mb_count"), "Multiband Bands", 1, 6, 1));
         addChoice ("mb_slope", "Multiband Crossover Slope", { "6", "12", "24" }, 1);
         addChoice ("mb_detector", "Multiband Detector", { "Peak", "Smooth" }, 1);
+        addChoice ("mb_os", "Multiband Oversampling", { "Off", "2x", "4x" }, 0);
         const float mbLo[6] = { 100, 500, 2000, 5000, 9000, 14000 }, mbHi[6] = { 500, 2000, 5000, 9000, 14000, 20000 };
         for (int b = 1; b <= 6; ++b)
         {
@@ -233,6 +234,8 @@ namespace kvp
             addFloat  (p + "gain", n + "Gain", { -24.0f, 24.0f, 0.01f }, 0.0f, dbText);
             addChoice (p + "mode", n + "Mode", { "Compress", "Expand" }, 0);
             addBool   (p + "solo", n + "Solo", false);
+            addBool   (p + "bypass", n + "Bypass", false);
+            addBool   (p + "mute", n + "Mute", false);
         }
 
         // Compression
@@ -284,6 +287,7 @@ namespace kvp
         addChoice ("ds_link_mode", "De-Ess Link Mode", { "Stereo", "Mid", "Side" }, 0);
         addBool   ("ds_listen", "De-Ess Detector Listen", false);
         addBool   ("ds_audition_trigger", "De-Ess Audition Triggering", false);
+        addChoice ("ds_os", "De-Ess Oversampling", { "Off", "2x", "4x" }, 0);
 
         // Resonance
         addBool   ("rs_on", "Resonance On", false);
@@ -297,6 +301,7 @@ namespace kvp
         addBool   ("rs_delta", "Resonance Delta", false);
         addBool   ("rs_bypass", "Resonance Bypass", false);
         addChoice ("rs_quality", "Resonance Quality", { "Normal", "High", "Ultra" }, 0);
+        addChoice ("rs_os", "Resonance Oversampling", { "Off", "2x", "4x" }, 0);
         addChoice ("rs_stereo_mode", "Resonance Stereo Mode", { "Left/Right", "Mid/Side" }, 1);
         addFloat  ("rs_link", "Resonance Link", { 0.0f, 100.0f, 0.1f }, 100.0f, pctText);
         addFloat  ("rs_focus", "Resonance Stereo Focus", { -100.0f, 100.0f, 0.1f }, 0.0f, bip);
