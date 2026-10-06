@@ -540,6 +540,26 @@ SideWidener follows the user-supplied SideWidener manual:
 - **Persistence**: parameter and UI-state round trip.
 - **Editor**: views, Advanced buttons, hidden controls per mode, accessible names and tooltips.
 
+#### 2.9.6 Reverb and Delay returns: EQ, ducking, routing (implemented)
+
+Per return (`rv_` and `dl_` prefixes; part of each send's module presets):
+
+| ID | Name | Range / choices | Default |
+|---|---|---|---|
+| `xx_eq1_on`, `xx_eq1_freq`, `xx_eq1_q` | High Pass (12 dB/oct) | 20 Hz … 20 kHz; Q 0.1 … 18 | off, 100 Hz, 1 |
+| `xx_eq2_…`, `xx_eq3_…` (`on`, `freq`, `gain`, `q`) | Bell 1, Bell 2 | gain −18 … +18 dB | off, 400 Hz / 3 kHz, 0 dB, 1 |
+| `xx_eq4_on`, `xx_eq4_freq`, `xx_eq4_q` | Low Pass (12 dB/oct) | 20 Hz … 20 kHz | off, 10 kHz, 1 |
+| `xx_duck_on` | Ducking | off / on | off |
+| `xx_duck_thresh` | Threshold | −60 … 0 dB | −30 dB |
+| `xx_duck_depth` | Depth (full depth 6 dB above the threshold) | 0 … 30 dB | 9 dB |
+| `xx_duck_attack`, `xx_duck_release` | Attack, Release | 0.1 … 200 ms, 10 … 2000 ms | 10 ms, 250 ms |
+| `xx_duck_source` | Source | Vocal (processed, what you hear), Raw Input (before the channel modules) | Vocal |
+| `xx_wet_gain` | Wet Gain (after ducking) | −24 … +12 dB | 0 dB |
+
+Global (chain presets only): `fx_route` Off / Delay into Reverb / Reverb into Delay (default Off) and `fx_route_amt` 0 … 100 % (default 30 %). One direction at a time, so the two returns can never form a loop. The source return is taken after its EQ and before ducking, follows its on/off fade, and is guarded like any return.
+
+Order per return: effect → EQ (band solo replaces the output with the band's region) → routing tap → ducking → wet gain → on/off fade → return guard. The EQ follows changes over about 20 ms. The Sends page has Sound / EQ / Duck & Route views for Reverb and Delay; the EQ view shows the return's spectrum before and after the EQ, its response and four band nodes (drag, wheel = Q, double-click = band off; clicking empty space switches on the band that fits there), and per band On, Solo, Freq, Gain (bells) and Q.
+
 ### 2.10 Presets (implemented for the sends; data for every module)
 
 Two levels, both with factory and user presets:
@@ -673,13 +693,14 @@ Part of Tune (needs Tune on). `tn_correct` (Correct Pitch, default on) switches 
 
 Vibrato is added to the correction on voiced notes only and goes through the same period-jump shifter, so it adds no latency. A new note (target change or a gap in voicing) restarts the onset. Synced tremolo locks its phase to the host's beat position while the transport runs.
 
-### 2.14 Flanger send (implemented)
+### 2.14 Flanger (implemented, in the channel chain)
 
-Fourth send (`fl_*`), same routing as the others (2.9): 100 % wet return, pre/post-fader tap, return guard, idle detection. The comb forms where the return meets the dry vocal, so it is deepest with the send near 0 dB (default send level −6 dB).
+A channel module between Compression and Distortion (it was a send in the first version). It processes the vocal in place and mixes its output with the dry signal (`fl_mix`), so the comb forms inside the module and the result is the same with or without the sends. It has no latency, crossfades for 10 ms when switched on or off, and restarts its sweep from a clean state when switched on again. Presets: module scope `flanger` (everything but `fl_on`).
 
 | ID | Name | Range / choices | Default |
 |---|---|---|---|
-| `fl_on`, `fl_send`, `fl_tap` | On, Send, Tap | as the other sends | off, −6 dB, post |
+| `fl_on` | Flanger On | off / on | off |
+| `fl_mix` | Mix | 0 … 100 % | 50 % |
 | `fl_rate` | Rate (Sync = Free) | 0.02 … 10 Hz | 0.3 Hz |
 | `fl_sync` | Sync | Free, 4 bars, 2 bars, 1 bar, 1/2, 1/4, 1/8 | Free |
 | `fl_depth` | Depth (sweep up to +6 ms above Delay) | 0 … 100 % | 60 % |
@@ -689,12 +710,45 @@ Fourth send (`fl_*`), same routing as the others (2.9): 100 % wet return, pre/po
 | `fl_shape` | Shape | Sine, Triangle | Triangle |
 | `fl_hicut` | High Cut on the repeats | 1 … 20 kHz | 12 kHz |
 
-Session state version 3: the Advanced tab index moved because the Distortion tab sits before De-ess; older sessions are converted on load.
+Session state version 4: the Flanger tab sits before Distortion; older sessions' Advanced tab index is converted on load.
+
+### 2.15 Oversampling (Multiband, De-ess, Resonance)
+
+`mb_os`, `ds_os`, `rs_os`: Off, 2x, 4x (default Off). The module runs at the higher rate between JUCE's linear-phase half-band FIR up- and down-samplers (`kv::Oversampled`, one prepared instance per rate, so switching never allocates on the audio thread). The FIR latency is added to the plug-in's reported latency only while the module is on and oversampling; De-ess lookahead is scaled to the running rate.
+
+### 2.16 EQ additions
+
+- Each band's own response is shaded between its curve and 0 dB in the band's colour; curves that leave the graph simply leave it (no line along the bottom edge).
+- Analyzer: Pre, Post, Both (default) or Off. Both draws the pre-EQ spectrum filled and the post-EQ spectrum as a light outline over it.
+- Click on empty graph space creates a band whose type follows the frequency: below 60 Hz Low Cut, 60–150 Hz Low Shelf, 150 Hz–8 kHz Bell, 8–15 kHz High Shelf, above 15 kHz High Cut. Holding the mouse down drags the new band at once.
+- Solo works for every type: around a bell, notch or band pass; below a low shelf or low cut; above a high shelf or high cut. The audition is taken from the EQ's input, so a band that cuts can still be heard.
+- Keyboard under the graph (the Tune page's style): keys on the graph's frequency axis; click or drag sweeps the selected band to the note under the mouse (Shift: free sweep without note snapping).
+
+### 2.17 Multiband additions
+
+- Per band: `mbN_bypass` (band passes unchanged) and `mbN_mute` (band removed), as well as Solo.
+- Pre / post analyzer in the display; click on empty space adds a band around the click (resets that band's settings).
+- Bypassed or muted bands are drawn grey and flagged.
+
+### 2.18 Compression side-chain detection
+
+Up to four detection bands shape what the detector hears; the audio itself is not filtered.
+
+| ID (N = 1..4) | Name | Range / choices | Default |
+|---|---|---|---|
+| `lv_scN_used` | Band in use | off / on | off |
+| `lv_scN_on` | Band active | off / on | on |
+| `lv_scN_type` | Type | Bell, Low Cut, High Cut, Low Shelf, High Shelf | Bell |
+| `lv_scN_freq` | Frequency | 20 Hz … 20 kHz | 120, 600, 3000, 8000 Hz |
+| `lv_scN_gain` | Gain (not used by the cuts) | −24 … +24 dB | 0 dB |
+| `lv_scN_q` | Q | 0.1 … 18 | 1 |
+
+The side-chain display shows the main signal entering the compressor and the detector signal (after the bands and the side-chain level), the bands' combined response and their nodes. Click empty space to add a band (below 100 Hz a low cut, above 12 kHz a high cut, otherwise a bell), drag for frequency and gain, mouse wheel for Q, double-click for 0 dB. The selected band is edited beside the display. In Vocal style the Ratio knob is shown inactive and reads Auto (the style sets the ratio).
 
 ## 3. Signal flow
 
 ```
- Input ──► [In Gain] ──► [TUNE] ──► [EQ] ──► [MULTIBAND] ──► [COMPRESSION] ──► [DISTORTION] ──► [DE-ESS] ──► [RESONANCE] ──► [Out Gain] ──► [Safety] ──► Output
+ Input ──► [In Gain] ──► [TUNE] ──► [EQ] ──► [MULTIBAND] ──► [COMPRESSION] ──► [FLANGER] ──► [DISTORTION] ──► [DE-ESS] ──► [RESONANCE] ──► [Out Gain] ──► [Safety] ──► Output
    │                       │          │                                                                │
    ├─► In meter            │          ├─► analyzer tap (pre-EQ / post-EQ, copy only)                   ├─► Out meter
    │                       │          │                                                                │
@@ -708,16 +762,16 @@ Order rationale:
 1. Tune first: the detector needs the cleanest, unprocessed signal; EQ boosts and compression can bias period detection.
 2. EQ before dynamics: cuts and tone shaping happen first, so the compressor reacts to the corrected tone.
 3. Multiband before Compression: low-mid boom and proximity effect are tamed before they drive the main compressor (the UI shows Multiband to the left of Compression).
-4. Distortion after Compression: the compressor evens the level, so the saturation is consistent from word to word.
+4. Flanger, then Distortion, after Compression: the compressor evens the level, so the sweep and the saturation are consistent from word to word; saturating after the flanger colours the comb as well.
 5. De-ess after Compression and Distortion: makeup gain, release and saturation can all raise sibilance; de-essing afterwards catches it.
 6. Resonance last: removes harsh, ringing resonances that remain after all gain changes.
-The UI's module order (Tune, Multiband, Compression, Distortion, De-ess, Resonance) follows this order.
+The UI's module order (Tune, Multiband, Compression, Flanger, Distortion, De-ess, Resonance) follows this order.
 
 The order is fixed in version 1. Routing is postponed.
 
 ### 3.1 Effect sends
 
-After the channel modules: pre-fader tap → Out Gain → post-fader tap → dry output. Each of the four sends (Reverb, Delay, Widener, Flanger) taps pre- or post-fader, runs its effect 100 % wet, and its return is added to the dry output (section 2.9).
+After the channel modules: pre-fader tap → Out Gain → post-fader tap → dry output. Each of the three sends (Reverb, Delay, Widener) taps pre- or post-fader, runs its effect 100 % wet, and its return is added to the dry output (section 2.9). The Reverb and Delay returns then pass through their return EQ, ducking and wet gain; with routing on, one return also feeds the other effect's input (section 2.9.6).
 
 ---
 
@@ -781,6 +835,8 @@ Default size 1100 × 760 px (680 px plus a 64 px send row added with the effect 
 └────┴─────────────────┴──────────────────────┴────────────────────┴─────────────────────┴────┘
 ```
 
+Tune card tuning view (implemented): below the Retune Speed hammer, one line shows the detected note → the note it is tuned to and how far the voice is from it (♯ +n ct / ♭ −n ct, or "in tune" within 5 cents); under it a −50 … +50 cent bar with a marker at the voice's deviation, the span being corrected shaded from the marker towards the target, and a centre mark that lights when the voice is in tune. "-- no pitch" when nothing is detected.
+
 ### 5.2 Advanced view
 
 The header and both meter rails stay. The module tabs replace the four strips; the selected module expands. Each tab shows its bypass state and a mini GR meter, so no module's state is hidden.
@@ -808,6 +864,8 @@ Advanced editors:
 - Low-Mid: band region on a frequency strip with two crossover handles, all dynamics controls, Solo.
 
 ---
+
+Module tabs (implemented): the lightning icon on each module tab is that module's On switch. Bright with a glow = on, dim grey = bypassed; it brightens and shows a ring on hover and shrinks while pressed; its tooltip says what a click will do. It follows the module's On parameter everywhere else (page header, Basic card, automation). Clicking the rest of the tab shows the page; clicking the icon never changes the page.
 
 ## 6. Design system
 
@@ -866,7 +924,11 @@ Used for Tune Retune Speed, Multiband, Compression, De-ess and Resonance in the 
 
 - An original war-hammer drawing standing head up: chamfered head with engraved lines, collar, wrapped grip, pommel. No box or track. (A generic Norse-style hammer, not a copy of any film or comic design.)
 - **Dragging down raises the value**: the hammer fills with colour (white at the top through the accent blue) from the top of the head down towards the pommel; dragging up empties it in reverse. Mouse wheel and arrow keys follow the same direction. The whole control is the drag area.
-- Seven electric arcs crackle around the silhouette. They switch on in a fixed order as the value rises (grey when off, white with a blue glow when on), and a soft aura grows behind the filled part.
+- At rest nothing surrounds the hammer. Past an activation point (fill 0.1) it charges up, and everything follows the fill continuously (intensity 0 → 1):
+  - aura: flame-shaped, licking upwards, white inside with a blue edge, glow and outline; brighter with intensity and flashing on surges; always kept inside the control;
+  - lightning in three layers, each bolt white-cored with a blue glow, flickering: fast small arcs crawling on the hammer, branching medium bolts thrown off its edges, and slower large surges (random intervals, shorter at high intensity) that also flash the aura;
+  - ambient particles: rising sparks and curling wisps.
+  Bolt count, brightness, speed and reach grow with intensity; all timing is random, so the pattern never repeats. The hammer body is drawn over the aura so it stays readable.
 - Parameters where a lower value means more effect (Retune Speed, thresholds) use an inverted mapping, so a fuller hammer always means more effect.
 - Basic-view mappings (fill 0 = hammer empty, 1 = full). Pulling each dynamics hammer down always increases gain reduction:
 
@@ -879,7 +941,7 @@ Used for Tune Retune Speed, Multiband, Compression, De-ess and Resonance in the 
 
   Each strip's GR bar and readout follow the hammer.
 - The drawing is driven only by the parameter value through a `ParameterAttachment`, so automation, preset loads, A/B, undo and host changes update it exactly like a drag. Range, default and automation behavior are the parameter's own.
-- Glow and arcs pulse with the host's beat (tempo, ppq position and play state published once per block, sequence-locked, re-anchored every block so it cannot drift). Pulse peaks on the beat; above 144 BPM it pulses every 2 beats so it stays ≤ 2.4 Hz. No tempo or stopped transport → steady glow.
+- The aura pulses with the host's beat (tempo, ppq position and play state published once per block, sequence-locked, re-anchored every block so it cannot drift). Pulse peaks on the beat; above 144 BPM it pulses every 2 beats so it stays ≤ 2.4 Hz. No tempo or stopped transport → steady glow.
 - Vector drawing; scales cleanly at any size. Accessibility: role slider, name = parameter name, value = parameter text with unit.
 
 ### 6.6 Scaling

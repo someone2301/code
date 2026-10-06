@@ -425,7 +425,7 @@ namespace kvp
         addFloat  (kvid::dlDiffSize, "Delay Diffusion Size", { 0.0f, 100.0f, 0.1f }, 50.0f, pctText);
         addChoice (kvid::dlDiffLoop, "Delay Diffusion Position", { "Post", "Loop" }, 0);
 
-        // Reverb and Delay returns: EQ, ducking, wet gain (DESIGN.md 2.8.4); Delay / Reverb routing
+        // Reverb and Delay returns: EQ, ducking, wet gain (DESIGN.md 2.9.6); Delay / Reverb routing
         for (auto [pre, name] : { std::pair<const char*, const char*> { "rv_", "Reverb" }, { "dl_", "Delay" } })
         {
             const String p (pre), n (name);

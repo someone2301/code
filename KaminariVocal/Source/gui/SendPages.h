@@ -1129,7 +1129,7 @@ namespace kvui
     //==================================================================================================================
     // SENDS page: title, one tab per send (on light, name, send level) and the selected send's panel.
     //==================================================================================================================
-    // RETURN EQ, DUCKING AND ROUTING (Reverb and Delay, DESIGN.md 2.8.4)
+    // RETURN EQ, DUCKING AND ROUTING (Reverb and Delay, DESIGN.md 2.9.6)
     // Spectrum of the return before and after its EQ, the EQ's response and its four band nodes
     // (1 high pass, 2 and 3 bells, 4 low pass).
     //   - drag a node: frequency (and gain for a bell); mouse wheel on a node: Q; double-click a node: band off

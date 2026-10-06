@@ -5,7 +5,7 @@
 #include <algorithm>
 #include <cmath>
 
-// Return processing for the Reverb and Delay sends (DESIGN.md 2.8.4): a four-band EQ on the wet signal and ducking
+// Return processing for the Reverb and Delay sends (DESIGN.md 2.9.6): a four-band EQ on the wet signal and ducking
 // keyed by the vocal.
 namespace kv
 {
