@@ -31,6 +31,18 @@ namespace kv
         bool autoRelease = true, smoothDetector = true, autoGain = true;
         float holdMs = 0, mix = 1.0f, wetGainDb = 0, dryDb = -60, scLevelDb = 0, outGainDb = 0, stereoLink = 1.0f;
         int lookaheadSamples = 0;
+
+        // Side-chain detection bands: shape what the detector hears (the audio itself is not filtered).
+        struct ScBand
+        {
+            enum Type { Bell, LowCut, HighCut, LowShelf, HighShelf };
+            bool used = false, on = true;
+            int type = Bell;
+            float freq = 1000.0f, gainDb = 0.0f, q = 1.0f;
+            bool active() const noexcept { return used && on; }
+        };
+        static constexpr int numScBands = 4;
+        ScBand scBand[numScBands];
     };
 
     class Compressor
@@ -49,7 +61,25 @@ namespace kv
             for (auto& d : look) d.reset();
             gr = 0; env[0] = env[1] = 0; hold = 0; slow = 0; lastOut[0] = lastOut[1] = 0;
             rms[0] = rms[1] = 0;
+            for (auto& ch : scFilter) for (auto& f : ch) f.reset();
             makeup.snap (0.0f);
+        }
+
+        // Biquad for one side-chain band (a cut is 12 dB/oct; its Q sets the corner resonance)
+        static Biquad scBiquad (const CompressorSettings::ScBand& b, float fs)
+        {
+            Biquad q;
+            using T = CompressorSettings::ScBand;
+            const float qq = std::clamp (b.q, 0.1f, 18.0f);
+            switch (b.type)
+            {
+                case T::LowCut:    q.set (Biquad::HighPass, fs, b.freq, qq * 0.7071f); break;
+                case T::HighCut:   q.set (Biquad::LowPass,  fs, b.freq, qq * 0.7071f); break;
+                case T::LowShelf:  q.set (Biquad::LowShelf, fs, b.freq, std::min (qq, 2.0f), b.gainDb); break;
+                case T::HighShelf: q.set (Biquad::HighShelf, fs, b.freq, std::min (qq, 2.0f), b.gainDb); break;
+                default:           q.set (Biquad::Peak, fs, b.freq, qq, b.gainDb); break;
+            }
+            return q;
         }
 
         // Static makeup used by Auto Gain (DESIGN.md 2.4): half the reduction a 0 dBFS signal gets, at most 12 dB.
@@ -59,8 +89,27 @@ namespace kv
             return std::min (12.0f, 0.5f * g);
         }
 
-        float process (float* l, float* r, int n, const CompressorSettings& s)
+        // detectorOut (optional, n samples): the mono signal the detector hears, after the side-chain bands and level
+        float process (float* l, float* r, int n, const CompressorSettings& s, float* detectorOut = nullptr)
         {
+            bool scOn[CompressorSettings::numScBands];
+            bool anySc = false;
+            for (int k = 0; k < CompressorSettings::numScBands; ++k)
+            {
+                scOn[k] = s.scBand[k].active();
+                anySc = anySc || scOn[k];
+                if (! scOn[k]) continue;
+                const auto q = scBiquad (s.scBand[k], fs);
+                for (auto& ch : scFilter)
+                {
+                    auto& f = ch[k];
+                    if (! scWasActive[k]) f.reset();   // a band switched on starts from silence
+                    f.b0 = q.b0; f.b1 = q.b1; f.b2 = q.b2; f.a1 = q.a1; f.a2 = q.a2;
+                }
+            }
+            for (int k = 0; k < CompressorSettings::numScBands; ++k)
+                scWasActive[k] = scOn[k];
+
             const float ratioBase = s.ratio;
             float knee = s.kneeDb, attack = s.attackMs, release = s.releaseMs;
             switch (s.style)
@@ -87,7 +136,12 @@ namespace kv
                 float det[2];
                 for (int c = 0; c < 2; ++c)
                 {
-                    const float src = (s.style == CompressorSettings::Classic ? lastOut[c] : x[c]) * sc;   // Classic = feedback
+                    float src = (s.style == CompressorSettings::Classic ? lastOut[c] : x[c]) * sc;   // Classic = feedback
+                    if (anySc)
+                        for (int k = 0; k < CompressorSettings::numScBands; ++k)
+                            if (scOn[k]) src = scFilter[c][k].process (src);
+                    if (detectorOut != nullptr)
+                        detectorOut[i] = c == 0 ? 0.5f * src : detectorOut[i] + 0.5f * src;
                     if (s.smoothDetector)
                     {
                         rms[c] = src * src + rmsC * (rms[c] - src * src);
@@ -154,6 +208,8 @@ namespace kv
         float fs = 48000.0f;
         DelayLine look[2];
         Smoother makeup;
+        Biquad scFilter[2][CompressorSettings::numScBands];
+        bool scWasActive[CompressorSettings::numScBands] {};
         float gr = 0, env[2] {}, hold = 0, slow = 0, lastOut[2] {}, rms[2] {};
     };
 

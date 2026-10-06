@@ -1098,12 +1098,337 @@ namespace kvui
         juce::Rectangle<int> knee, main, meters;
     };
 
+    //==================================================================================================================
+    // Side-chain detection: spectrum of the main signal and of the signal the detector hears (after the side-chain
+    // bands), the bands' combined response and their nodes.
+    //   - click empty space: a new detection band there (below 100 Hz a low cut, above 12 kHz a high cut, else a bell);
+    //     keeping the mouse down drags it straight away
+    //   - drag a node: frequency and gain; mouse wheel on a node: Q; double-click a node: gain to 0 dB
+    class ScDisplay : public juce::Component, public juce::SettableTooltipClient, private juce::Timer
+    {
+    public:
+        static constexpr int numBands = kv::CompressorSettings::numScBands;
+        static constexpr float rangeDb = 24.0f;
+
+        explicit ScDisplay (KaminariVocalProcessor& p) : proc (p), state (p.apvts)
+        {
+            setTitle ("Side chain detection");
+            setTooltip ("Click to add a detection band. Drag a band to set its frequency and gain; mouse wheel sets its Q.");
+            startTimerHz (30);
+        }
+        ~ScDisplay() override { stopTimer(); }
+
+        std::function<void (int)> onSelect;
+        int selectedBand() const noexcept { return selected; }
+        void select (int b) { selected = b; if (onSelect) onSelect (b); repaint(); }
+
+        static int typeForFrequency (double f)
+        {
+            using T = kv::CompressorSettings::ScBand;
+            return f < 100.0 ? T::LowCut : (f > 12000.0 ? T::HighCut : T::Bell);
+        }
+
+        float xForFreq (double f) const { return (float) (std::log (f / 20.0) / std::log (1000.0)) * (float) getWidth(); }
+        double freqForX (float x) const { return 20.0 * std::pow (1000.0, juce::jlimit (0.0, 1.0, (double) x / juce::jmax (1, getWidth()))); }
+        float yForDb (double db) const { return (float) (0.5 - db / (2.0 * rangeDb)) * (float) getHeight(); }
+        double dbForY (float y) const { return (0.5 - (double) y / juce::jmax (1, getHeight())) * 2.0 * rangeDb; }
+
+        kv::CompressorSettings::ScBand band (int i) const
+        {
+            kv::CompressorSettings::ScBand b;
+            const juce::String p = "lv_sc" + juce::String (i + 1) + "_";
+            b.used = state.getRawParameterValue (p + "used")->load() > 0.5f;
+            b.on = state.getRawParameterValue (p + "on")->load() > 0.5f;
+            b.type = juce::roundToInt (state.getRawParameterValue (p + "type")->load());
+            b.freq = state.getRawParameterValue (p + "freq")->load();
+            b.gainDb = state.getRawParameterValue (p + "gain")->load();
+            b.q = state.getRawParameterValue (p + "q")->load();
+            return b;
+        }
+
+        static bool hasGain (int type) { using T = kv::CompressorSettings::ScBand; return type != T::LowCut && type != T::HighCut; }
+
+        static double magnitudeDb (const kv::CompressorSettings::ScBand& b, double f, double fs)
+        {
+            const auto c = kv::Compressor::scBiquad (b, (float) fs);
+            const double w = 2.0 * kv::pi * f / fs;
+            const std::complex<double> z1 = std::polar (1.0, -w), z2 = z1 * z1;
+            const double m = std::abs ((double) c.b0 + (double) c.b1 * z1 + (double) c.b2 * z2)
+                             / std::max (1e-12, std::abs (1.0 + (double) c.a1 * z1 + (double) c.a2 * z2));
+            return 20.0 * std::log10 (std::max (m, 1e-9));
+        }
+
+        juce::Point<float> nodePos (int i) const
+        {
+            const auto b = band (i);
+            return { xForFreq (b.freq), yForDb (hasGain (b.type) ? b.gainDb : 0.0) };
+        }
+
+        void paint (juce::Graphics& g) override
+        {
+            auto a = getLocalBounds().toFloat();
+            g.setColour (navy950);
+            g.fillRoundedRectangle (a, 4.0f);
+            g.saveState();
+            g.reduceClipRegion (getLocalBounds());
+            g.setFont (font (9.5f, 0));
+            for (double f : { 50.0, 100.0, 200.0, 500.0, 1000.0, 2000.0, 5000.0, 10000.0 })
+            {
+                const float x = xForFreq (f);
+                g.setColour (navy800);
+                g.drawVerticalLine ((int) x, 0.0f, a.getBottom());
+                g.setColour (mist.withAlpha (0.6f));
+                g.drawText (f >= 1000.0 ? juce::String ((int) (f / 1000)) + "k" : juce::String ((int) f), (int) x + 3, getHeight() - 13, 30, 12, juce::Justification::centredLeft);
+            }
+            g.setColour (navy800);
+            for (double db : { -12.0, 12.0 }) g.drawHorizontalLine ((int) yForDb (db), 0.0f, a.getRight());
+            g.setColour (navy600);
+            g.drawHorizontalLine ((int) yForDb (0.0), 0.0f, a.getRight());
+
+            analyzers.draw (g, a, [this] (float x) { return freqForX (x); }, AnalyzerPair::Both, "MAIN", "DETECTOR");
+
+            const double fs = proc.getSampleRate() > 0 ? proc.getSampleRate() : 48000.0;
+            bool any = false;
+            for (int i = 0; i < numBands; ++i)
+            {
+                const auto b = band (i);
+                if (! b.used) continue;
+                juce::Path p;
+                for (float x = 0.0f; x <= a.getWidth(); x += 2.0f)
+                {
+                    const float y = juce::jlimit (-20.0f, a.getHeight() + 20.0f, yForDb (magnitudeDb (b, freqForX (x), fs)));
+                    if (p.isEmpty()) p.startNewSubPath (x, y); else p.lineTo (x, y);
+                }
+                juce::Path fill (p);
+                fill.lineTo (a.getRight(), yForDb (0.0));
+                fill.lineTo (0.0f, yForDb (0.0));
+                fill.closeSubPath();
+                const auto col = EqCurve::bandColour (i);
+                g.setColour (col.withAlpha ((i == selected ? 0.24f : 0.1f) * (b.on ? 1.0f : 0.5f)));
+                g.fillPath (fill);
+                g.setColour (col.withAlpha (b.on ? 0.55f : 0.25f));
+                g.strokePath (p, juce::PathStrokeType (1.0f));
+                any = any || b.on;
+            }
+            if (any)
+            {
+                juce::Path total;
+                for (float x = 0.0f; x <= a.getWidth(); x += 2.0f)
+                {
+                    double db = 0.0;
+                    for (int i = 0; i < numBands; ++i)
+                        if (const auto b = band (i); b.active()) db += magnitudeDb (b, freqForX (x), fs);
+                    const float y = juce::jlimit (-20.0f, a.getHeight() + 20.0f, yForDb (db));
+                    if (total.isEmpty()) total.startNewSubPath (x, y); else total.lineTo (x, y);
+                }
+                g.setColour (white.withAlpha (0.9f));
+                g.strokePath (total, juce::PathStrokeType (1.6f));
+            }
+            for (int i = 0; i < numBands; ++i)
+            {
+                const auto b = band (i);
+                if (! b.used) continue;
+                const auto pt = nodePos (i);
+                const auto col = b.on ? EqCurve::bandColour (i) : mist.withAlpha (0.5f);
+                const float r = i == selected ? 8.0f : 6.5f;
+                g.setColour (navy950);
+                g.fillEllipse (pt.x - r, pt.y - r, 2 * r, 2 * r);
+                g.setColour (col);
+                g.drawEllipse (pt.x - r, pt.y - r, 2 * r, 2 * r, i == selected ? 2.0f : 1.4f);
+                g.setFont (font (9.5f, 1));
+                g.drawText (juce::String (i + 1), juce::Rectangle<float> (pt.x - r, pt.y - r, 2 * r, 2 * r), juce::Justification::centred);
+            }
+            g.restoreState();
+            g.setColour (navy600);
+            g.drawRoundedRectangle (a.reduced (0.5f), 4.0f, 1.0f);
+        }
+
+        int bandAt (juce::Point<float> p) const
+        {
+            for (int i = numBands; --i >= 0;)
+                if (band (i).used && nodePos (i).getDistanceFrom (p) < 11.0f)
+                    return i;
+            return -1;
+        }
+
+        // Adds a detection band at a point (first free slot); returns it, or -1 when all are in use.
+        int addBandAt (juce::Point<float> p)
+        {
+            for (int i = 0; i < numBands; ++i)
+                if (! band (i).used)
+                {
+                    const double f = freqForX (p.x);
+                    const int type = typeForFrequency (f);
+                    gesture (param (i, "type"), (float) type);
+                    gesture (param (i, "freq"), (float) f);
+                    gesture (param (i, "gain"), hasGain (type) ? (float) juce::jlimit ((double) -rangeDb, (double) rangeDb, std::round (dbForY (p.y) * 10.0) / 10.0) : 0.0f);
+                    gesture (param (i, "q"), 1.0f);
+                    gesture (param (i, "on"), 1.0f);
+                    gesture (param (i, "used"), 1.0f);
+                    select (i);
+                    return i;
+                }
+            return -1;
+        }
+
+        void mouseDown (const juce::MouseEvent& e) override
+        {
+            dragBand = bandAt (e.position);
+            if (dragBand < 0 && ! e.mods.isPopupMenu())
+            {
+                dragBand = addBandAt (e.position);
+                createdBand = dragBand;
+                createdMs = juce::Time::getMillisecondCounterHiRes();
+            }
+            if (dragBand >= 0)
+            {
+                select (dragBand);
+                for (auto* id : { "freq", "gain" }) param (dragBand, id)->beginChangeGesture();
+            }
+        }
+
+        void mouseDrag (const juce::MouseEvent& e) override
+        {
+            if (dragBand < 0) return;
+            setPlain (param (dragBand, "freq"), (float) freqForX (e.position.x));
+            if (hasGain (band (dragBand).type))
+                setPlain (param (dragBand, "gain"), (float) juce::jlimit ((double) -rangeDb, (double) rangeDb, dbForY (e.position.y)));
+        }
+
+        void mouseUp (const juce::MouseEvent&) override
+        {
+            if (dragBand >= 0)
+                for (auto* id : { "freq", "gain" }) param (dragBand, id)->endChangeGesture();
+            dragBand = -1;
+        }
+
+        void mouseDoubleClick (const juce::MouseEvent& e) override
+        {
+            const int b = bandAt (e.position);
+            if (b >= 0 && ! (b == createdBand && juce::Time::getMillisecondCounterHiRes() - createdMs < 800.0))
+                gesture (param (b, "gain"), 0.0f);
+        }
+
+        void mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheelDetails& w) override
+        {
+            const int b = bandAt (e.position);
+            if (b < 0) return;
+            auto* q = param (b, "q");
+            q->beginChangeGesture();
+            q->setValueNotifyingHost (juce::jlimit (0.0f, 1.0f, q->getValue() + (w.isReversed ? -w.deltaY : w.deltaY) * 0.05f));
+            q->endChangeGesture();
+        }
+
+    private:
+        juce::RangedAudioParameter* param (int b, const char* what) { return state.getParameter ("lv_sc" + juce::String (b + 1) + "_" + what); }
+        static void setPlain (juce::RangedAudioParameter* p, float v) { p->setValueNotifyingHost (p->convertTo0to1 (v)); }
+        static void gesture (juce::RangedAudioParameter* p, float v) { p->beginChangeGesture(); setPlain (p, v); p->endChangeGesture(); }
+
+        void timerCallback() override
+        {
+            analyzers.update (proc, proc.compInAnalyser, proc.compScAnalyser, AnalyzerPair::Both);
+            if (selected >= 0 && ! band (selected).used) select (-1);
+            repaint();
+        }
+
+        KaminariVocalProcessor& proc;
+        APVTS& state;
+        AnalyzerPair analyzers;
+        int selected = -1, dragBand = -1, createdBand = -1;
+        double createdMs = 0;
+    };
+
+    // Editor for the selected side-chain band: on/off, type, frequency, gain, Q and remove.
+    class ScBandEditor : public juce::Component
+    {
+    public:
+        explicit ScBandEditor (KaminariVocalProcessor& p) : proc (p)
+        {
+            del.setButtonText ("x");
+            del.setTooltip ("Remove this detection band");
+            del.onClick = [this] { if (band >= 0) setParamPlain (proc.apvts, prefix() + "used", 0.0f); };
+            addChildComponent (del);
+        }
+
+        void setBand (int b)
+        {
+            if (b == band) return;
+            band = b;
+            power.reset(); type.reset(); freq.reset(); gain.reset(); q.reset(); typeAtt.reset();
+            del.setVisible (b >= 0);
+            if (b >= 0)
+            {
+                const auto pre = prefix();
+                power = std::make_unique<PowerButton> (proc.apvts, pre + "on", "Detection band " + juce::String (b + 1));
+                type = std::make_unique<ChoiceBox> (proc.apvts, (pre + "type").toRawUTF8(), "", "Shape of this detection band");
+                freq = std::make_unique<Field> (proc.apvts, pre + "freq", "Freq");
+                gain = std::make_unique<Field> (proc.apvts, pre + "gain", "Gain");
+                q = std::make_unique<Field> (proc.apvts, pre + "q", "Q");
+                for (auto* c : std::initializer_list<juce::Component*> { power.get(), type.get(), freq.get(), gain.get(), q.get() })
+                    addAndMakeVisible (c);
+                typeAtt = std::make_unique<juce::ParameterAttachment> (*proc.apvts.getParameter (pre + "type"), [this] (float v)
+                {
+                    // a cut has no gain: show it inactive
+                    const bool g = ScDisplay::hasGain (juce::roundToInt (v));
+                    gain->setEnabled (g);
+                    gain->setAlpha (g ? 1.0f : 0.38f);
+                    gain->box.setTooltip (g ? juce::String() : "A cut has no gain: it removes everything past its frequency.");
+                });
+                typeAtt->sendInitialUpdate();
+            }
+            resized();
+            repaint();
+        }
+
+        void paint (juce::Graphics& g) override
+        {
+            g.setColour (band >= 0 ? EqCurve::bandColour (band) : mist);
+            g.setFont (font (11.0f, 2, 0.1f));
+            if (band < 0)
+            {
+                g.setColour (mist);
+                g.setFont (font (11.5f, 0));
+                g.drawFittedText ("Click the spectrum to add a detection band. Bands shape what the detector hears; the audio is not filtered.",
+                                  getLocalBounds().reduced (4), juce::Justification::centred, 4);
+                return;
+            }
+            g.drawText ("BAND " + juce::String (band + 1), 34, 0, 80, 24, juce::Justification::centredLeft);
+        }
+
+        void resized() override
+        {
+            if (band < 0 || power == nullptr) return;
+            auto b = getLocalBounds();
+            auto top = b.removeFromTop (24);
+            power->setBounds (top.removeFromLeft (24));
+            del.setBounds (top.removeFromRight (24));
+            top.removeFromRight (6);
+            type->setBounds (top.removeFromRight (juce::jmin (118, top.getWidth() - 90)));
+            b.removeFromTop (8);
+            auto row = b.removeFromTop (40);
+            const int w = (row.getWidth() - 12) / 3;
+            freq->setBounds (row.removeFromLeft (w)); row.removeFromLeft (6);
+            gain->setBounds (row.removeFromLeft (w)); row.removeFromLeft (6);
+            q->setBounds (row);
+        }
+
+    private:
+        juce::String prefix() const { return "lv_sc" + juce::String (band + 1) + "_"; }
+        KaminariVocalProcessor& proc;
+        int band = -1;
+        std::unique_ptr<PowerButton> power;
+        std::unique_ptr<ChoiceBox> type;
+        std::unique_ptr<Field> freq, gain, q;
+        std::unique_ptr<juce::ParameterAttachment> typeAtt;
+        juce::TextButton del;
+    };
+
     class CompressionPage : public AdvFrame
     {
     public:
         explicit CompressionPage (KaminariVocalProcessor& p)
             : AdvFrame (p, "Compression", "Style, timing, parallel Dry, auto gain", "lv_on", "compression"),
-              display (p),
+              display (p), scDisplay (p), scEditor (p),
               thresh (p.apvts, "lv_thresh", "Threshold", "-50 dB", "0 dB"),
               ratio (p.apvts, "lv_ratio", "Ratio", "1:1", "20:1"),
               attack (p.apvts, "lv_attack", "Attack", "fast", "slow"),
@@ -1131,13 +1456,17 @@ namespace kvui
               })
         {
             for (auto* c : std::initializer_list<juce::Component*> { &display, &thresh, &ratio, &attack, &release, &mix, &out, &dry, &wet, &style,
-                                                                     &knee, &range, &lookahead, &hold, &scLevel, &link, &detector, &autoRelease, &autoGain })
+                                                                     &knee, &range, &lookahead, &hold, &scLevel, &link, &detector, &autoRelease, &autoGain,
+                                                                     &scDisplay, &scEditor })
                 addAndMakeVisible (c);
+            scDisplay.onSelect = [this] (int b) { scEditor.setBand (b); };
             for (auto* k : { &thresh, &ratio, &attack, &release, &mix, &out, &dry, &wet }) k->setLNF (&lnf);
             styleAtt.sendInitialUpdate();
         }
 
         RangeKnob& ratioKnob() { return ratio; }
+        ScDisplay& sideChainDisplay() { return scDisplay; }
+        ScBandEditor& sideChainEditor() { return scEditor; }
 
         void paint (juce::Graphics& g) override
         {
@@ -1146,15 +1475,16 @@ namespace kvui
             drawGroup (g, sideChain);
             g.setColour (mist);
             g.setFont (font (11.0f, 2, 0.1f));
-            g.drawText ("SIDE CHAIN", sideChain.getX() + 12, sideChain.getY() + 6, 100, 14, juce::Justification::centredLeft);
-            g.drawText ("DETECTOR", detector.getX(), detector.getY() - 16, 120, 14, juce::Justification::centredLeft);
+            g.drawText ("SIDE CHAIN DETECTION", sideChain.getX() + 12, sideChain.getY() + 6, 200, 14, juce::Justification::centredLeft);
+            g.drawText ("DETECTOR", detector.getX() - 84, detector.getY() + 4, 80, 14, juce::Justification::centredRight);
         }
 
         void layoutContent (juce::Rectangle<int> b) override
         {
-            display.setBounds (b.removeFromTop (b.getHeight() - 78 - 10 - 210 - 10));
+            const int scH = 150;
+            display.setBounds (b.removeFromTop (b.getHeight() - scH - 10 - 210 - 10));
             b.removeFromTop (10);
-            sideChain = b.removeFromBottom (78);
+            sideChain = b.removeFromBottom (scH);
             b.removeFromBottom (10);
             controls = b;
             auto c = controls.reduced (12, 10);
@@ -1179,17 +1509,24 @@ namespace kvui
             autoGain.setBounds (right.withSizeKeepingCentre (110, 24));
             const int sw = (sliders.getWidth() - 3 * 30) / 4;
             for (auto* s : { &knee, &range, &lookahead, &hold }) { s->setBounds (sliders.removeFromLeft (sw)); sliders.removeFromLeft (30); }
+            // side chain: level, link and detector | spectrum with detection bands | selected band
             auto sc = sideChain.reduced (12, 8).withTrimmedTop (20);
-            scLevel.setBounds (sc.removeFromLeft (200).withHeight (44));
-            sc.removeFromLeft (40);
-            link.setBounds (sc.removeFromLeft (200).withHeight (44));
-            sc.removeFromLeft (40);
-            detector.setBounds (sc.removeFromLeft (130).withHeight (26).translated (0, 6));
+            auto lc = sc.removeFromLeft (190);
+            scLevel.setBounds (lc.removeFromTop (44));
+            lc.removeFromTop (4);
+            link.setBounds (lc.removeFromTop (44));
+            sc.removeFromLeft (16);
+            scEditor.setBounds (sc.removeFromRight (250).withTrimmedTop (2));
+            sc.removeFromRight (14);
+            scDisplay.setBounds (sc);
+            detector.setBounds (sideChain.getX() + 320, sideChain.getY() + 5, 130, 22);
         }
 
     private:
         ModuleLNF lnf;
         CompDisplay display;
+        ScDisplay scDisplay;
+        ScBandEditor scEditor;
         RangeKnob thresh, ratio, attack, release, mix, out, dry, wet;
         ChoiceBox style;
         HSlider knee, range, lookahead, hold, scLevel, link;

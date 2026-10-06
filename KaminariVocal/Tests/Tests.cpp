@@ -1003,6 +1003,39 @@ int main (int argc, char** argv)
         check (ok, "Distortion: every style and oversampling setting stays finite and bounded at full drive and bias");
     }
 
+    // ---- Compression side-chain detection bands ----------------------------------------------------------------------
+    {
+        auto compLevel = [] (std::function<void (KaminariVocalProcessor&)> sc)
+        {
+            KaminariVocalProcessor p;
+            neutral (p);
+            setParam (p, "lv_on", 1.0f);
+            setParam (p, "lv_thresh", -30.0f); setParam (p, "lv_ratio", 8.0f); setParam (p, "lv_range", 40.0f);
+            setParam (p, "lv_auto_gain", 0.0f);
+            if (sc) sc (p);
+            prepare (p);
+            const auto r = render (p, 1.0, sine (100.0, -12.0f));
+            return toneDb (r.out, 0, 100.0, 24000, 48000);
+        };
+        const float plainComp = compLevel (nullptr);
+        const float lowCut = compLevel ([] (KaminariVocalProcessor& p)
+        {
+            setParam (p, "lv_sc1_used", 1.0f); setParam (p, "lv_sc1_type", 1.0f); setParam (p, "lv_sc1_freq", 2000.0f);
+        });
+        const float cutOff = compLevel ([] (KaminariVocalProcessor& p)
+        {
+            setParam (p, "lv_sc1_used", 1.0f); setParam (p, "lv_sc1_type", 1.0f); setParam (p, "lv_sc1_freq", 2000.0f); setParam (p, "lv_sc1_on", 0.0f);
+        });
+        const float boost = compLevel ([] (KaminariVocalProcessor& p)
+        {
+            setParam (p, "lv_sc2_used", 1.0f); setParam (p, "lv_sc2_type", 0.0f); setParam (p, "lv_sc2_freq", 100.0f); setParam (p, "lv_sc2_gain", 12.0f);
+        });
+        check (plainComp < -20.0f && lowCut > plainComp + 10.0f && std::abs (cutOff - plainComp) < 0.2f && boost < plainComp - 2.0f,
+               "Compression side chain: 100 Hz tone " + juce::String (plainComp, 1) + " dBFS; with a 2 kHz low cut in the detector "
+               + juce::String (lowCut, 1) + " dBFS (detector no longer hears it); band switched off " + juce::String (cutOff, 1)
+               + " dBFS; +12 dB bell at 100 Hz " + juce::String (boost, 1) + " dBFS (more reduction)");
+    }
+
     // ---- oversampling (Multiband, De-ess, Resonance) and Multiband bypass / mute -----------------------------------
     {
         struct Case { const char* on; const char* os; float factor; const char* name; };
@@ -1264,6 +1297,36 @@ int main (int argc, char** argv)
                 check (juce::roundToInt (getParam (p, "mb_count")) == 2 && lo < 3000.0f && hi > 3000.0f && hi / lo < 2.2f,
                        "Multiband: clicking the display at 3 kHz adds band 2 (" + juce::String (lo, 0) + " - " + juce::String (hi, 0) + " Hz)");
                 setParam (p, "mb_count", 1.0f);
+            }
+            // Compression side chain: clicking the spectrum creates detection bands; the editor follows the selection
+            {
+                ed->showTab (true, KaminariVocalEditor::TabCompression);
+                juce::MessageManager::getInstance()->runDispatchLoopUntil (20);
+                auto& sc = ed->compressionPanel().sideChainDisplay();
+                const float midY = (float) sc.getHeight() * 0.5f;
+                bool typesOk = sc.getWidth() > 200;
+                int k = 1;
+                for (auto [f, type] : { std::pair<double, int> { 60.0, 1 }, { 3000.0, 0 }, { 15000.0, 2 } })
+                {
+                    const juce::Point<float> at (sc.xForFreq (f), midY - 20.0f);
+                    sc.mouseDown (event (sc, at, at, false));
+                    sc.mouseUp (event (sc, at, at, false));
+                    const juce::String pre = "lv_sc" + juce::String (k) + "_";
+                    typesOk = typesOk && getParam (p, (pre + "used").toRawUTF8()) > 0.5f && juce::roundToInt (getParam (p, (pre + "type").toRawUTF8())) == type
+                              && std::abs (std::log2 (getParam (p, (pre + "freq").toRawUTF8()) / f)) < 0.05 && sc.selectedBand() == k - 1;
+                    ++k;
+                }
+                const bool bellGain = getParam (p, "lv_sc2_gain") > 2.0f;
+                // drag band 2 down to a cut and up in frequency
+                const auto n2 = sc.nodePos (1);
+                const juce::Point<float> to (sc.xForFreq (5000.0), sc.yForDb (-6.0));
+                sc.mouseDown (event (sc, n2, n2, false));
+                sc.mouseDrag (event (sc, to, n2, true));
+                sc.mouseUp (event (sc, to, n2, true));
+                const bool dragged = std::abs (getParam (p, "lv_sc2_freq") - 5000.0f) < 100.0f && std::abs (getParam (p, "lv_sc2_gain") + 6.0f) < 0.3f;
+                check (typesOk && bellGain && dragged, "Compression side chain: clicks create a 60 Hz low cut, a 3 kHz bell and a 15 kHz high cut; "
+                       "dragging band 2 sets " + juce::String (getParam (p, "lv_sc2_freq"), 0) + " Hz / " + juce::String (getParam (p, "lv_sc2_gain"), 1) + " dB");
+                for (int i = 1; i <= 4; ++i) setParam (p, ("lv_sc" + juce::String (i) + "_used").toRawUTF8(), 0.0f);
             }
             setParam (p, "lv_style", 1.0f);   // Vocal
             juce::MessageManager::getInstance()->runDispatchLoopUntil (20);

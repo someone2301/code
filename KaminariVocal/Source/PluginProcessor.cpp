@@ -38,6 +38,7 @@ void KaminariVocalProcessor::prepareToPlay (double sampleRate, int samplesPerBlo
     work.setSize (2, block, false, false, true);
     dryCopy.setSize (2, block, false, false, true);
     soloIn.setSize (2, block, false, false, true);
+    scDetector.setSize (1, block, false, false, true);
 
     tune.prepare (sampleRate);
     compHistory.setHop ((int) std::lround (sampleRate / 375.0));
@@ -190,6 +191,13 @@ void KaminariVocalProcessor::readModuleSettings()
         // off: no reduction or gain change, but the lookahead delay stays so the latency does not change
         c.threshDb = 0; c.rangeDb = 0; c.autoGain = false;
     }
+    for (int k = 0; k < kv::CompressorSettings::numScBands; ++k)
+    {
+        const juce::String p = "lv_sc" + juce::String (k + 1) + "_";
+        auto& sb = c.scBand[k];
+        sb.used = b (p + "used"); sb.on = b (p + "on"); sb.type = i (p + "type");
+        sb.freq = f (p + "freq"); sb.gainDb = f (p + "gain"); sb.q = f (p + "q");
+    }
 
     auto& d = dsSettings;
     d = {};
@@ -283,7 +291,9 @@ void KaminariVocalProcessor::processModules (float* l, float* r, int n)
     // Compression and De-ess always run (their lookahead delay must stay in the path); "off" means neutral settings.
     dryCopy.copyFrom (0, 0, l, n);
     dryCopy.copyFrom (1, 0, r, n);
-    moduleGr[ModCompression].store (compressor.process (l, r, n, compSettings));
+    moduleGr[ModCompression].store (compressor.process (l, r, n, compSettings, scDetector.getWritePointer (0)));
+    compInAnalyser.push (dryCopy.getReadPointer (0), dryCopy.getReadPointer (1), n);
+    compScAnalyser.push (scDetector.getReadPointer (0), scDetector.getReadPointer (0), n);
     compMakeup.store (compressor.currentMakeup());
     compHistory.push (dryCopy.getReadPointer (0), dryCopy.getReadPointer (1), l, r, n);
     // Flanger: no latency; resets when switched on again so no old sweep tail plays

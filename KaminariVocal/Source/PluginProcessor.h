@@ -104,6 +104,8 @@ public:
 
     // Pre/post analyzers of the Multiband and Resonance displays (fed only while the module is on).
     SpectrumAnalyser mbAnalyserPre, mbAnalyserPost, rsAnalyserPre, rsAnalyserPost;
+    // Compression: the main signal entering the compressor and the signal its detector hears (after the side-chain bands)
+    SpectrumAnalyser compInAnalyser, compScAnalyser;
     kv::Equalizer eq;
     kv::Distortion distortion;  // GUI reads its drive read-out
     kv::Flanger flanger;        // GUI reads its LFO position
@@ -149,7 +151,7 @@ private:
     kv::Oversampled<kv::DeEsser> deesser;
     int mbOs = 0, dsOs = 0, rsOs = 0;
     std::array<juce::SmoothedValue<float>, numModules> moduleFade;   // 10 ms bypass crossfades (EQ, Multiband, Resonance)
-    juce::AudioBuffer<float> work, dryCopy, soloIn;
+    juce::AudioBuffer<float> work, dryCopy, soloIn, scDetector;
     kv::Biquad soloBp[2];
     juce::ValueTree abState[2];
     int abSlot = 0;

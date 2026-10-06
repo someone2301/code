@@ -258,6 +258,18 @@ namespace kvp
         addFloat  ("lv_stereo_link", "Compression Stereo Link", { 0.0f, 100.0f, 0.1f }, 100.0f, pctText);
         addFloat  ("lv_out_gain", "Compression Output", { -24.0f, 24.0f, 0.01f }, 0.0f, dbText);
         addBool   ("lv_auto_gain", "Compression Auto Gain", true);
+        // side-chain detection bands (shape what the detector hears)
+        const float scFreqs[4] = { 120, 600, 3000, 8000 };
+        for (int b = 1; b <= 4; ++b)
+        {
+            const String p = "lv_sc" + String (b) + "_", n = "Compression SC " + String (b) + " ";
+            addBool   (p + "used", n + "Used", false);
+            addBool   (p + "on", n + "Active", true);
+            addChoice (p + "type", n + "Type", { "Bell", "Low Cut", "High Cut", "Low Shelf", "High Shelf" }, 0);
+            addFloat  (p + "freq", n + "Freq", logRange (20.0f, 20000.0f), scFreqs[b - 1], hzText, freqFromText);
+            addFloat  (p + "gain", n + "Gain", { -24.0f, 24.0f, 0.01f }, 0.0f, dbText);
+            addFloat  (p + "q", n + "Q", logRange (0.1f, 18.0f), 1.0f, num);
+        }
 
         // Distortion
         addBool   ("dt_on", "Distortion On", false);
