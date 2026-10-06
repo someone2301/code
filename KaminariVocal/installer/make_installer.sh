@@ -16,7 +16,7 @@
 set -euo pipefail
 
 [ "$(uname)" = "Darwin" ] || { echo "This script must run on macOS."; exit 1; }
-for tool in cmake pkgbuild productbuild codesign /usr/libexec/PlistBuddy; do
+for tool in cmake pkgbuild productbuild codesign plutil; do
     command -v "$tool" >/dev/null || { echo "Missing tool: $tool"; exit 1; }
 done
 
@@ -62,8 +62,24 @@ for entry in "${FORMATS[@]}"; do
     codesign --verify --deep --strict "$B"
 
     echo "==> Packaging $NAME"
-    pkgbuild --analyze --root "$STAGE" "$WORK/$NAME.plist" >/dev/null
-    /usr/libexec/PlistBuddy -c "Set :0:BundleIsRelocatable false" "$WORK/$NAME.plist"
+    # Component list written directly: "pkgbuild --analyze" returns an empty list for .vst3 bundles.
+    # Not relocatable, so the installer always writes to DEST (no "found elsewhere" redirection).
+    cat > "$WORK/$NAME.plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<array>
+    <dict>
+        <key>RootRelativeBundlePath</key><string>$(basename "$BUNDLE")</string>
+        <key>BundleIsRelocatable</key><false/>
+        <key>BundleIsVersionChecked</key><false/>
+        <key>BundleHasStrictIdentifier</key><false/>
+        <key>BundleOverwriteAction</key><string>upgrade</string>
+    </dict>
+</array>
+</plist>
+PLIST
+    plutil -lint "$WORK/$NAME.plist" >/dev/null
     SCRIPTS=()
     [ "$NAME" = "AU" ] && SCRIPTS=(--scripts "$HERE/scripts-au")
     pkgbuild --root "$STAGE" --component-plist "$WORK/$NAME.plist" --identifier "$PKGID" --version "$VERSION" \
