@@ -11,7 +11,7 @@ namespace kvui
     public:
         RangeKnob (APVTS& s, const juce::String& id, const juce::String& captionText, const juce::String& loText = {},
                    const juce::String& hiText = {}, const juce::String& hint = {})
-            : state (s), caption (captionText.toUpperCase()), lo (loText), hi (hiText)
+            : caption (captionText.toUpperCase()), lo (loText), hi (hiText)
         {
             slider.setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag);
             slider.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
@@ -70,7 +70,6 @@ namespace kvui
         juce::Label value;
 
     private:
-        APVTS& state;
         juce::String caption, lo, hi;
         std::unique_ptr<APVTS::SliderAttachment> att;
         std::function<juce::String()> valueFn;

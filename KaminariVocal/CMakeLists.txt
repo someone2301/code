@@ -73,6 +73,11 @@ set(KV_DEFINITIONS
 
 target_compile_definitions(KaminariVocal PUBLIC ${KV_DEFINITIONS})
 
+# Same floating-point results on Intel and Apple Silicon: no fused multiply-add contraction (clang fuses by default
+# on arm64, which changes the last bit of some results and breaks the bit-exact bypass guarantees).
+set(KV_FP_FLAGS $<$<OR:$<CXX_COMPILER_ID:Clang>,$<CXX_COMPILER_ID:AppleClang>,$<CXX_COMPILER_ID:GNU>>:-ffp-contract=off>)
+target_compile_options(KaminariVocal PRIVATE ${KV_FP_FLAGS})
+
 target_link_libraries(KaminariVocal
     PRIVATE
         KaminariVocalData
@@ -86,6 +91,7 @@ if(KV_BUILD_TESTS)
     juce_add_console_app(KaminariVocalTests PRODUCT_NAME "KaminariVocalTests")
     target_sources(KaminariVocalTests PRIVATE ${KV_SOURCES} Tests/Tests.cpp)
     target_include_directories(KaminariVocalTests PRIVATE Source)
+    target_compile_options(KaminariVocalTests PRIVATE ${KV_FP_FLAGS})
     target_compile_definitions(KaminariVocalTests PUBLIC
         ${KV_DEFINITIONS}
         JUCE_STANDALONE_APPLICATION=1

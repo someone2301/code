@@ -21,15 +21,15 @@ jobs:
           ARCHS: "x86_64;arm64"
         run: ./KaminariVocal/installer/make_installer.sh
 
-      - name: Build and run the tests
-        run: |
-          cmake -S KaminariVocal -B build-tests -DCMAKE_BUILD_TYPE=Release -DKV_BUILD_TESTS=ON -DKV_COPY_AFTER_BUILD=OFF -DCMAKE_OSX_ARCHITECTURES=arm64
-          cmake --build build-tests --target KaminariVocalTests -j "$(sysctl -n hw.ncpu)"
-          ./build-tests/KaminariVocalTests_artefacts/Release/KaminariVocalTests
-
       - name: Upload the installer
         uses: actions/upload-artifact@v4
         with:
           name: KaminariVocal-macOS
           path: KaminariVocal/dist/*.pkg
           if-no-files-found: error
+
+      - name: Build and run the tests
+        run: |
+          cmake -S KaminariVocal -B build-tests -DCMAKE_BUILD_TYPE=Release -DKV_BUILD_TESTS=ON -DKV_COPY_AFTER_BUILD=OFF -DCMAKE_OSX_ARCHITECTURES=arm64
+          cmake --build build-tests --target KaminariVocalTests -j "$(sysctl -n hw.ncpu)"
+          ./build-tests/KaminariVocalTests_artefacts/Release/KaminariVocalTests
