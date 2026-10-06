@@ -27,6 +27,8 @@ public:
             setDoubleClickReturnValue (true, p->convertFrom0to1 (p->getDefaultValue()));
     }
 
+    juce::RangedAudioParameter* getParam() const noexcept { return param; }
+
     // Normalised position 0..1 of the current value.
     float position() { return (float) valueToProportionOfLength (getValue()); }
 
@@ -75,14 +77,20 @@ public:
         }
         grabKeyboardFocus();
         lastY = e.position.y;
+        juce::Slider::mouseDown (e);   // starts the host gesture (a horizontal slider also jumps to the click)
         startDrag();
-        juce::Slider::mouseDown (e);   // starts the host gesture
     }
 
     void mouseDrag (const juce::MouseEvent& e) override
     {
         if (e.mods.isPopupMenu() || ! isEnabled())
             return;
+        if (isHorizontal())
+        {
+            // horizontal sliders follow the mouse sideways, like any linear fader
+            juce::Slider::mouseDrag (e);
+            return;
+        }
         const float dy = lastY - e.position.y;
         lastY = e.position.y;
         applyDrag (dy, e.mods.isShiftDown());

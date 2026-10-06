@@ -157,6 +157,7 @@ namespace kvui
             att->setValueAsPartOfGesture (param->convertFrom0to1 (n));
         }
         void mouseUp (const juce::MouseEvent&) override { if (att) att->endGesture(); }
+        juce::RangedAudioParameter* getParam() const noexcept { return param; }
     private:
         juce::RangedAudioParameter* param = nullptr;
         std::unique_ptr<juce::ParameterAttachment> att;

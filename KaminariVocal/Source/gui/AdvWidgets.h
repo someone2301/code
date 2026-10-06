@@ -19,7 +19,8 @@ namespace kvui
             att = std::make_unique<APVTS::SliderAttachment> (s, id, slider);
             auto* p = s.getParameter (id);
             slider.bind (p, captionText);
-            slider.setHint (hint.isNotEmpty() ? hint : hintFor (id));
+            baseHint = hint.isNotEmpty() ? hint : hintFor (id);
+            slider.setHint (baseHint);
             const auto& r = p->getNormalisableRange();
             slider.getProperties().set ("kvBipolar", r.start < 0.0f && r.end > 0.0f && std::abs (p->convertFrom0to1 (p->getDefaultValue())) < 1e-6f);
             value.setJustificationType (juce::Justification::centred);
@@ -36,7 +37,18 @@ namespace kvui
         void setLNF (juce::LookAndFeel* l) { slider.setLookAndFeel (l); }
         // How far the range labels may extend beyond the ring (smaller keeps neighbouring knobs' labels apart).
         void setLabelOverhang (int px) { overhang = px; resized(); repaint(); }
-        void refresh() { value.setText (slider.getTextFromValue (slider.getValue()), juce::dontSendNotification); }
+        void refresh() { value.setText (inactiveText.isNotEmpty() ? inactiveText : slider.getTextFromValue (slider.getValue()), juce::dontSendNotification); }
+
+        // Inactive: dimmed, not editable, value replaced by a short reason (e.g. "Auto"). Empty text = active.
+        void setInactive (const juce::String& reasonValue, const juce::String& why)
+        {
+            const bool off = reasonValue.isNotEmpty();
+            inactiveText = reasonValue;
+            setEnabled (! off);
+            setAlpha (off ? 0.38f : 1.0f);
+            slider.setHint (off ? why : baseHint);
+            refresh();
+        }
         void setValueText (std::function<juce::String()> f) { valueFn = std::move (f); slider.onValueChange = [this] { value.setText (valueFn(), juce::dontSendNotification); }; value.setText (valueFn(), juce::dontSendNotification); }
 
         void paint (juce::Graphics& g) override
@@ -74,6 +86,7 @@ namespace kvui
         std::unique_ptr<APVTS::SliderAttachment> att;
         std::function<juce::String()> valueFn;
         int overhang = 13;
+        juce::String inactiveText, baseHint;
     };
 
     // Horizontal parameter slider with range labels and a caption underneath.

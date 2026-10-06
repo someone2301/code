@@ -33,6 +33,7 @@ public:
     kvui::WidenerPanel& widenerPanel() { return widener; }
     kvui::FlangerPanel& flangerPanel() { return flanger; }
     kvui::DistortionPage& distortionPanel() { return distortionPage; }
+    kvui::CompressionPage& compressionPanel() { return compressionPage; }
     kvui::TunePage& tunePage() { return tunePage_; }
     kvui::EqPage& eqPage() { return eqPage_; }
     juce::Component& panel (int tab) { return *panels[(size_t) tab]; }

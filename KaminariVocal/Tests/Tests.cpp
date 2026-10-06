@@ -1074,6 +1074,76 @@ int main (int argc, char** argv)
         check (rv.header.level.slider.getTitle() == "Reverb Send" && wd.msFocus.slider.getTooltip().contains ("Crossover"),
                "controls carry accessible names and tooltips");
 
+        // every continuous control on every page responds to a mouse drag the way a user would make it:
+        // up for knobs and value boxes, sideways for horizontal sliders, down for the Basic hammers
+        {
+            auto event = [] (juce::Component& c, juce::Point<float> pos, juce::Point<float> down, bool dragged)
+            {
+                return juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), pos,
+                                         juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier), juce::MouseInputSource::defaultPressure,
+                                         0.0f, 0.0f, 0.0f, 0.0f, &c, &c, juce::Time::getCurrentTime(), down, juce::Time::getCurrentTime(), 1, dragged);
+            };
+            auto drag = [&] (juce::Component& c, juce::Point<float> delta)
+            {
+                const auto start = c.getLocalBounds().getCentre().toFloat();
+                c.mouseDown (event (c, start, start, false));
+                for (int i = 1; i <= 8; ++i) c.mouseDrag (event (c, start + delta * ((float) i / 8.0f), start, true));
+                c.mouseUp (event (c, start + delta, start, true));
+            };
+            juce::StringArray dead;
+            int tested = 0;
+            std::function<void (juce::Component&, const juce::String&)> visit = [&] (juce::Component& c, const juce::String& where)
+            {
+                if (! c.isVisible() || c.getWidth() <= 0 || ! c.isEnabled()) return;
+                juce::RangedAudioParameter* prm = nullptr;
+                juce::Point<float> delta;
+                if (auto* s = dynamic_cast<ParamSlider*> (&c))
+                {
+                    prm = s->getParam();
+                    delta = s->isHorizontal() ? juce::Point<float> (60.0f, 0.0f) : juce::Point<float> (0.0f, -60.0f);
+                }
+                else if (auto* vb = dynamic_cast<kvui::ValueBox*> (&c))
+                {
+                    prm = vb->getParam();
+                    delta = { 0.0f, -60.0f };
+                }
+                if (prm != nullptr && dynamic_cast<juce::AudioParameterFloat*> (prm) != nullptr)
+                {
+                    ++tested;
+                    prm->setValueNotifyingHost (0.4f);
+                    juce::MessageManager::getInstance()->runDispatchLoopUntil (5);
+                    const float before = prm->getValue();
+                    drag (c, delta);
+                    if (std::abs (prm->getValue() - before) < 0.02f)
+                        dead.addIfNotAlreadyThere (where + ": " + prm->getName (64));
+                    prm->setValueNotifyingHost (prm->getDefaultValue());
+                    return;
+                }
+                for (auto* child : c.getChildren())
+                    visit (*child, where);
+            };
+            const char* tabNamesT[] = { "Tune", "EQ", "Multiband", "Compression", "Distortion", "De-ess", "Resonance" };
+            for (int t = 0; t < KaminariVocalEditor::TabSends; ++t)
+            {
+                ed->showTab (true, t);
+                visit (ed->panel (t), tabNamesT[t]);
+            }
+            for (int s2 = 0; s2 < KaminariVocalProcessor::numSends; ++s2)
+            {
+                ed->showAdvanced (true, s2);
+                visit (ed->panel (KaminariVocalEditor::TabSends), juce::String ("Send ") + sendName[s2]);
+            }
+            for (auto& line : dead) std::printf ("  no response: %s\n", line.toRawUTF8());
+            setParam (p, "lv_style", 1.0f);   // Vocal
+            juce::MessageManager::getInstance()->runDispatchLoopUntil (20);
+            const bool ratioOff = ! ed->compressionPanel().ratioKnob().isEnabled() && ed->compressionPanel().ratioKnob().value.getText() == "Auto";
+            setParam (p, "lv_style", 0.0f);
+            juce::MessageManager::getInstance()->runDispatchLoopUntil (20);
+            check (ratioOff && ed->compressionPanel().ratioKnob().isEnabled(), "Compression Vocal style: the Ratio knob is dimmed, disabled and reads Auto");
+            check (dead.isEmpty() && tested > 60, "every knob, slider and value box responds to a drag (" + juce::String (tested) + " tested, "
+                   + juce::String (dead.size()) + " not responding)");
+        }
+
         if (argc > 1)
         {
             juce::File dir (argv[1]);

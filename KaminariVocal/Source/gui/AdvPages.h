@@ -948,13 +948,23 @@ namespace kvui
               link (p.apvts, "lv_stereo_link", "Stereo link", "0 %", "100 %"),
               detector (p.apvts, "lv_detector", { "Peak", "Smooth" }),
               autoRelease (p.apvts, "lv_auto_release", "AUTO", "AUTO", hintFor ("lv_auto_release")),
-              autoGain (p.apvts, "lv_auto_gain", "AUTO GAIN", "AUTO GAIN", hintFor ("lv_auto_gain"))
+              autoGain (p.apvts, "lv_auto_gain", "AUTO GAIN", "AUTO GAIN", hintFor ("lv_auto_gain")),
+              styleAtt (*p.apvts.getParameter ("lv_style"), [this] (float v)
+              {
+                  // Vocal style sets its own ratio (2:1 .. 8:1 from the overshoot): the Ratio knob does nothing there
+                  ratio.setInactive (juce::roundToInt (v) == kv::CompressorSettings::Vocal ? "Auto" : "",
+                                     "Vocal style sets the ratio automatically (2:1 to 8:1, rising with the level above the threshold). "
+                                     "Choose another style to set it by hand.");
+              })
         {
             for (auto* c : std::initializer_list<juce::Component*> { &display, &thresh, &ratio, &attack, &release, &mix, &out, &dry, &wet, &style,
                                                                      &knee, &range, &lookahead, &hold, &scLevel, &link, &detector, &autoRelease, &autoGain })
                 addAndMakeVisible (c);
             for (auto* k : { &thresh, &ratio, &attack, &release, &mix, &out, &dry, &wet }) k->setLNF (&lnf);
+            styleAtt.sendInitialUpdate();
         }
+
+        RangeKnob& ratioKnob() { return ratio; }
 
         void paint (juce::Graphics& g) override
         {
@@ -1012,6 +1022,7 @@ namespace kvui
         HSlider knee, range, lookahead, hold, scLevel, link;
         SegParam detector;
         ToggleBox autoRelease, autoGain;
+        juce::ParameterAttachment styleAtt;
         juce::Rectangle<int> controls, sideChain;
     };
 
