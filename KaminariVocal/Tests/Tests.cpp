@@ -873,6 +873,27 @@ int main (int argc, char** argv)
         check (std::abs (1200.0 * std::log2 (fOff / in)) < 3.0, "Correct pitch off: the tone keeps its own pitch ("
                + juce::String (1200.0 * std::log2 (fOff / 440.0), 1) + " cents from A4)");
 
+        // Detune with Correct Pitch off: sung notes are shifted by the Detune amount
+        setParam (p, "tn_detune", -30.0f);
+        prepare (p);
+        r = render (p, 1.0, sine (in, -12.0f));
+        const double fDet = zeroCrossFreq (r.out, 0, 24000, 48000);
+        check (std::abs (1200.0 * std::log2 (fDet / in) + 30.0) < 3.0, "Detune -30 cents with Correct Pitch off shifts the tone by "
+               + juce::String (1200.0 * std::log2 (fDet / in), 1) + " cents");
+        // Detune with Correct Pitch on: the note grid moves (A4 +40 cents is pulled to A4 +50 cents, not to A4)
+        setParam (p, "tn_correct", 1.0f);
+        setParam (p, "tn_speed", 0.0f);
+        setParam (p, "tn_humanize", 0.0f);
+        setParam (p, "tn_detune", 50.0f);
+        prepare (p);
+        const double in40 = 440.0 * std::pow (2.0, 0.40 / 12.0);
+        r = render (p, 1.0, sine (in40, -12.0f));
+        const double fGrid = zeroCrossFreq (r.out, 0, 24000, 48000);
+        check (std::abs (1200.0 * std::log2 (fGrid / 440.0) - 50.0) < 5.0, "Detune +50 cents moves the grid: A4 +40 cents corrects to "
+               + juce::String (1200.0 * std::log2 (fGrid / 440.0), 1) + " cents (expected +50)");
+        setParam (p, "tn_detune", 0.0f);
+        setParam (p, "tn_correct", 0.0f);
+
         setParam (p, "tn_vib_on", 1.0f);
         setParam (p, "tn_vib_depth", 50.0f);
         setParam (p, "tn_vib_rate", 5.0f);

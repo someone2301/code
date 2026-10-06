@@ -140,14 +140,24 @@ namespace kvui
         }
         void paint (juce::Graphics& g) override
         {
+            if (stripCaption)
+            {
+                g.setColour (kvtheme::mist);
+                g.setFont (kvtheme::font (10.5f, 1, 0.1f));
+                g.drawText (caption, 4, 0, getWidth() - 4, 15, juce::Justification::centredLeft);
+                return;
+            }
             g.setColour (kvtheme::white);
             g.setFont (kvtheme::font (12.0f, 0));
             g.drawText (caption, 0, 0, getWidth(), 15, juce::Justification::centred);
         }
         void resized() override { box.setBounds (0, 17, getWidth(), getHeight() - 17); }
+        // Small, left-aligned caption like the combo boxes in a page's top strip.
+        void setStripCaption (bool on) { stripCaption = on; repaint(); }
         ValueBox box;
     private:
         juce::String caption;
+        bool stripCaption = false;
     };
 
     // Rounded section background used to group controls.

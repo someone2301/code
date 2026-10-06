@@ -18,6 +18,8 @@
             "tn_speed": 30, "tn_humanize": 25, "tn_vib_on": true, "tn_vib_depth": 60, "tn_vib_rate": 5.0, "tn_vib_delay": 200, "tn_vib_rise": 300, "tn_vib_variation": 25 } },
         { "name": "Hard Tune Vibrato", "description": "Instant snapping with a steady electronic vibrato.", "values": {
             "tn_speed": 0, "tn_humanize": 0, "tn_vib_on": true, "tn_vib_depth": 40, "tn_vib_rate": 6.0, "tn_vib_delay": 150, "tn_vib_rise": 200, "tn_vib_variation": 10 } },
+        { "name": "A432 Reference", "description": "Natural correction to a 432 Hz tuning reference (Detune -31.8 cents).", "values": {
+            "tn_speed": 40, "tn_humanize": 30, "tn_detune": -31.8 } },
         { "name": "Vibrato Only", "description": "No pitch correction, just an added vibrato.", "values": {
             "tn_correct": false, "tn_vib_on": true, "tn_vib_depth": 30, "tn_vib_rate": 5.5, "tn_vib_delay": 250, "tn_vib_rise": 300, "tn_vib_variation": 20 } },
         { "name": "Tremolo 1/8", "description": "Natural tuning with an eighth-note tremolo locked to the song.", "values": {

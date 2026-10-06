@@ -176,6 +176,11 @@ namespace kvp
         for (int n = 0; n < 12; ++n)
             addBool ("tn_note_" + String (n), String ("Note ") + noteNames[n], true);
         addBool   ("tn_correct", "Tune Correct Pitch", true);
+        addFloat  ("tn_detune", "Tune Detune", { -100.0f, 100.0f, 0.1f }, 0.0f, [] (float v, int)
+        {
+            const auto a4 = 440.0 * std::pow (2.0, v / 1200.0);
+            return (std::abs (v) < 0.05f ? String ("0") : (v > 0 ? "+" : "") + String (v, 1)) + " ct (A4 " + String (a4, 1) + " Hz)";
+        }, [] (const String& t) { return t.getFloatValue(); });
         addBool   ("tn_vib_on", "Vibrato On", false);
         addFloat  ("tn_vib_depth", "Vibrato Depth", { 0.0f, 100.0f, 0.1f }, 30.0f, [] (float v, int) { return String (roundToInt (v)) + " ct"; });
         addFloat  ("tn_vib_rate", "Vibrato Rate", { 1.0f, 12.0f, 0.01f }, 5.5f, [] (float v, int) { return String (v, 2) + " Hz"; });

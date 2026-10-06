@@ -207,13 +207,14 @@ namespace kvui
               tremRate (p.apvts, "tn_trem_rate", "Rate", "SLOW", "FAST", "Tremolo speed when Sync is Free."),
               tremStereo (p.apvts, "tn_trem_stereo", "Stereo", "0", "180", "Phase between left and right. 180 degrees moves the vocal side to side (auto-pan)."),
               tremOptions (p.apvts),
+              detune (p.apvts, "tn_detune", "DETUNE"),
               scaleAtt (*p.apvts.getParameter ("tn_scale"), [this] (float) { applyScale(); }),
               keyAtt (*p.apvts.getParameter ("tn_key"), [this] (float) { applyScale(); }),
               correctAtt (*p.apvts.getParameter ("tn_correct"), [this] (float) { updateVisibility(); }),
               syncAtt (*p.apvts.getParameter ("tn_trem_sync"), [this] (float) { updateVisibility(); })
         {
             for (auto* c : std::initializer_list<juce::Component*> { &range, &key, &scale, &speed, &humanize, &meter, &piano, &holdButton,
-                                                                     &correct, &vibPower, &tremPower, &tremOptions })
+                                                                     &correct, &vibPower, &tremPower, &tremOptions, &detune })
                 addAndMakeVisible (c);
             for (auto* k : { &vibDepth, &vibRate, &vibDelay, &vibRise, &vibVariation, &tremDepth, &tremRate, &tremStereo })
             {
@@ -231,6 +232,9 @@ namespace kvui
             holdButton.setTooltip ("Freezes the pitch meter.");
             holdButton.onClick = [this] { meter.hold = holdButton.getToggleState(); };
             correctAtt.sendInitialUpdate();
+            detune.setStripCaption (true);
+            detune.box.setTooltip ("Detune: moves every target note by up to 100 cents (shown as the A4 reference).\n"
+                                   "With Correct Pitch off it shifts sung notes by this amount. Drag up or down, double-click to type.");
             startTimerHz (8);
         }
         ~TunePage() override
@@ -256,14 +260,14 @@ namespace kvui
             drawGroup (g, strip, navy800);
             g.setColour (mist);
             g.setFont (font (10.5f, 1, 0.1f));
-            g.drawText ("CORRECTION", strip.getRight() - 300, strip.getY() + 10, 180, 14, juce::Justification::centredRight);
+            g.drawText ("CORRECTION", strip.getRight() - 250, strip.getY() + 10, 130, 14, juce::Justification::centredRight);
             g.drawText ("TRACKING", strip.getRight() - 106, strip.getY() + 10, 90, 14, juce::Justification::centred);
             const double sr = proc.getSampleRate() > 0 ? proc.getSampleRate() : 48000.0;
             const int lat = kv::Tune::latencyFor (sr);
             g.setColour (white);
             g.setFont (font (12.5f, 0));
-            g.drawText ("Classic period shift" + dot() + juce::String (lat) + " smp" + dot() + juce::String (1000.0 * lat / sr, 1) + " ms",
-                        strip.getRight() - 360, strip.getY() + 28, 240, 16, juce::Justification::centredRight);
+            g.drawText (juce::String (lat) + " smp" + dot() + juce::String (1000.0 * lat / sr, 1) + " ms",
+                        strip.getRight() - 250, strip.getY() + 28, 130, 16, juce::Justification::centredRight);
             g.setColour (voiced ? accent : navy600);
             g.fillEllipse ((float) strip.getRight() - 90.0f, (float) strip.getY() + 32.0f, 9.0f, 9.0f);
             g.setColour (white);
@@ -314,7 +318,8 @@ namespace kvui
             auto s = strip.reduced (12, 6);
             range.setBounds (s.removeFromLeft (170)); s.removeFromLeft (16);
             key.setBounds (s.removeFromLeft (80)); s.removeFromLeft (16);
-            scale.setBounds (s.removeFromLeft (150));
+            scale.setBounds (s.removeFromLeft (150)); s.removeFromLeft (16);
+            detune.setBounds (s.removeFromLeft (150).withTrimmedTop (2));
             piano.setBounds (b.removeFromBottom (72));
             b.removeFromBottom (28);
             layoutGroups (b.removeFromBottom (138), { &vibGrp, &tremGrp }, 92);
@@ -374,6 +379,7 @@ namespace kvui
         PowerButton vibPower, tremPower;
         RangeKnob vibDepth, vibRate, vibDelay, vibRise, vibVariation, tremDepth, tremRate, tremStereo;
         TremoloOptions tremOptions;
+        Field detune;
 
     private:
         SendGroup vibGrp { "VIBRATO", { &vibDepth, &vibRate, &vibDelay, &vibRise, &vibVariation } },

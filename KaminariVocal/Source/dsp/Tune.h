@@ -47,6 +47,7 @@ namespace kv
         int range = 1;              // 0 High, 1 Middle, 2 Low, 3 Deep
         float speedMs = 40, humanize = 0.2f;
         bool correct = true;        // false: no retuning (vibrato and tremolo still work)
+        float detuneCents = 0.0f;   // moves the note grid (Correct on) or shifts sung notes by this much (Correct off)
 
         bool vibOn = false;
         float vibCents = 30, vibRateHz = 5.5f, vibDelayMs = 250, vibRiseMs = 300, vibVariation = 0.2f;
@@ -305,30 +306,32 @@ namespace kv
             // nearest enabled note, with hysteresis towards the current target
             int bestNote = -1;
             float bestDist = 1e9f;
-            for (int note = (int) std::floor (midi) - 7; note <= (int) std::ceil (midi) + 7; ++note)
+            const float grid = s.detuneCents / 100.0f;   // Detune: every target note sits this many semitones off 12-TET A440
+            for (int note = (int) std::floor (midi - grid) - 7; note <= (int) std::ceil (midi - grid) + 7; ++note)
             {
                 if (! s.notes[((note % 12) + 12) % 12]) continue;
-                float dist = std::abs ((float) note - midi);
+                float dist = std::abs ((float) note + grid - midi);
                 if (note == targetNote) dist -= 0.15f;
                 if (dist < bestDist) { bestDist = dist; bestNote = note; }
             }
             if (bestNote != targetNote) { heldSamples = 0; noteSamples = 0; }
             targetNote = bestNote;
-            desired = bestNote >= 0 ? (float) bestNote - midi : 0.0f;
+            desired = bestNote >= 0 ? (float) bestNote + grid - midi : 0.0f;
         }
 
         void smoothCorrection (const TuneSettings& s)
         {
-            float target = voiced && s.correct ? std::clamp (desired, -2.0f, 2.0f) : 0.0f;
-            float tc = std::max (0.0f, s.speedMs);
-            if (voiced)
+            // Correct off: sung notes are only shifted by Detune (a fixed offset, reached in about 15 ms)
+            float target = ! voiced ? 0.0f : (s.correct ? std::clamp (desired, -2.0f, 2.0f) : s.detuneCents / 100.0f);
+            float tc = s.correct ? std::max (0.0f, s.speedMs) : 15.0f;
+            if (voiced && s.correct)
             {
                 heldSamples += 1;
                 const float held = (float) heldSamples / fs;
                 if (held > 0.15f)   // Humanize: held notes are corrected more gently
                     tc = tc * (1.0f + 3.0f * s.humanize) + 80.0f * s.humanize;
             }
-            else tc = 30.0f;        // unvoiced: release the correction
+            else if (! voiced) tc = 30.0f;   // unvoiced: release the correction
             if (tc <= 0.0f) correction = target;
             else correction += (target - correction) * (1.0f - std::exp (-1.0f / (0.001f * tc * fs)));
             // desired drifts with the detected pitch between analyses: keep it relative to the last detection

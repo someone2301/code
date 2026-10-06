@@ -134,6 +134,7 @@ void KaminariVocalProcessor::readModuleSettings()
     t.speedMs = f ("tn_speed");
     t.humanize = f ("tn_humanize") / 100.0f;
     t.correct = b ("tn_correct");
+    t.detuneCents = f ("tn_detune");
     t.vibOn = b ("tn_vib_on");
     t.vibCents = f ("tn_vib_depth"); t.vibRateHz = f ("tn_vib_rate");
     t.vibDelayMs = f ("tn_vib_delay"); t.vibRiseMs = f ("tn_vib_rise"); t.vibVariation = f ("tn_vib_variation") / 100.0f;
