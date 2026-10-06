@@ -1502,6 +1502,45 @@ int main (int argc, char** argv)
             shot (1, kvid::dlMode, 1.0f, "adv_delay_dual.png");
             shot (1, kvid::dlMode, 2.0f, "adv_delay_pingpong.png");
             shot (2, kvid::wdType, 1.0f, "adv_widener_side.png");
+            // hammer: nothing at rest; lightning and particles past the activation point, more as the hammer fills
+            {
+                auto activity = [&] (float fill)
+                {
+                    setParam (p, "mb1_thresh", -50.0f * fill);
+                    LightningSlider h (*p.apvts.getParameter ("mb1_thresh"), p.hostTempo, "Threshold", true);
+                    h.setCompact (true);
+                    h.setBounds (0, 0, 150, 180);
+                    double bolts = 0, parts = 0;
+                    for (int k = 0; k < 200; ++k) { h.advanceAnimation (16.0); bolts += h.activeBolts(); parts += h.activeParticles(); }
+                    return std::make_tuple (h.intensity(), bolts / 200.0, parts / 200.0);
+                };
+                const auto [i0, b0, p0] = activity (0.05f);
+                const auto [i1, b1, p1] = activity (0.4f);
+                const auto [i2, b2, p2] = activity (1.0f);
+                check (i0 <= 0.0f && b0 <= 0.0 && p0 <= 0.0 && b1 > 0.5 && b2 > 1.5 * b1 && p2 > p1 && i2 > i1,
+                       "hammer: at rest no lightning or particles; at 40 % " + juce::String (b1, 1) + " bolts and " + juce::String (p1, 0)
+                       + " particles on average, full " + juce::String (b2, 1) + " bolts and " + juce::String (p2, 0) + " particles");
+            }
+            // hammer close-up at rest, just past activation, half and full
+            {
+                juce::Image sheet (juce::Image::ARGB, 4 * 300, 360, true);
+                juce::Graphics sg (sheet);
+                sg.fillAll (juce::Colour (0xff0b1a33));
+                const float levels[] = { 0.05f, 0.3f, 0.65f, 1.0f };
+                for (int k = 0; k < 4; ++k)
+                {
+                    setParam (p, "mb1_thresh", -50.0f * levels[k]);   // threshold: inverted, so a fuller hammer is a lower threshold
+                    LightningSlider h (*p.apvts.getParameter ("mb1_thresh"), p.hostTempo, "Threshold", true);
+                    h.setCompact (true);
+                    h.setBounds (0, 0, 150, 180);
+                    h.advanceAnimation (700.0);
+                    auto img = h.createComponentSnapshot (h.getLocalBounds(), true, 2.0f);
+                    sg.drawImageAt (img, k * 300, 0);
+                }
+                juce::FileOutputStream o (dir.getChildFile ("hammer_levels.png"));
+                o.setPosition (0); o.truncate();
+                juce::PNGImageFormat().writeImageToStream (sheet, o);
+            }
             // Reverb return EQ and Delay ducking / routing views
             setParam (p, "rv_eq1_on", 1.0f); setParam (p, "rv_eq1_freq", 180.0f);
             setParam (p, "rv_eq2_on", 1.0f); setParam (p, "rv_eq2_freq", 450.0f); setParam (p, "rv_eq2_gain", -4.0f);
