@@ -1,14 +1,13 @@
 #pragma once
 
-#include "DspCommon.h"
+#include "../sends/DspCommon.h"
 #include <atomic>
 
-// Flanger send (DESIGN.md 2.14). Original implementation: a short delay (Delay, 0.1 .. 10 ms) swept upwards by an LFO
-// (Depth, up to +6 ms) with feedback (positive or negative, soft-limited in the loop) and a high cut on the repeats.
-// Left and right LFOs are offset by Stereo Phase. The rate runs free or locks to the host tempo.
-//
-// The return is 100 % wet. The flanging comb forms where the return meets the dry vocal, so it is deepest when the
-// return is about as loud as the dry signal (send level near 0 dB) and gentler at lower send levels.
+// Flanger (DESIGN.md 2.14), a channel module between Compression and Distortion. Original implementation: a short
+// delay (Delay, 0.1 .. 10 ms) swept upwards by an LFO (Depth, up to +6 ms) with feedback (positive or negative,
+// soft-limited in the loop) and a high cut on the repeats. Left and right LFOs are offset by Stereo Phase. The rate
+// runs free or locks to the host tempo. Mix blends the swept copy with the dry signal: the comb is deepest at 50 %.
+// No latency: the dry signal is not delayed.
 namespace kv
 {
     struct FlangerSettings
@@ -21,11 +20,12 @@ namespace kv
         float stereo = 0.5f;       // 0..1 = 0..180 degrees
         int shape = 1;             // 0 sine, 1 triangle
         float hiCutHz = 12000.0f;
+        float mix = 0.5f;          // 0 dry .. 1 swept copy only
         bool playing = false;
         double ppq = 0.0, bpm = 120.0;
     };
 
-    class FlangerSend
+    class Flanger
     {
     public:
         static constexpr float maxSweepMs = 6.0f;
@@ -36,6 +36,7 @@ namespace kv
             for (auto& d : line) d.prepare ((int) ((10.0f + maxSweepMs + 1.0f) * 0.001f * fs) + 8);
             delaySmooth.prepare (fs, 30.0f);
             depthSmooth.prepare (fs, 30.0f);
+            mixSmooth.prepare (fs, 20.0f);
             reset();
         }
 
@@ -53,7 +54,8 @@ namespace kv
 
         void process (const float* inL, const float* inR, float* outL, float* outR, int n, const FlangerSettings& s)
         {
-            if (! primed) { delaySmooth.snap (s.delayMs); depthSmooth.snap (s.depth); primed = true; }
+            if (! primed) { delaySmooth.snap (s.delayMs); depthSmooth.snap (s.depth); mixSmooth.snap (s.mix); primed = true; }
+            mixSmooth.setTarget (s.mix);
             delaySmooth.setTarget (s.delayMs);
             depthSmooth.setTarget (s.depth);
             for (auto& f : damp) f.setCutoff (s.hiCutHz, fs);
@@ -74,7 +76,7 @@ namespace kv
                     phase -= std::floor (phase);
                     ph = phase;
                 }
-                const float base = delaySmooth.next(), depth = depthSmooth.next();
+                const float base = delaySmooth.next(), depth = depthSmooth.next(), mix = mixSmooth.next();
                 for (int c = 0; c < 2; ++c)
                 {
                     const float p = (float) (ph - std::floor (ph)) + (c == 1 ? 0.5f * s.stereo : 0.0f);
@@ -83,8 +85,9 @@ namespace kv
                     const float y = line[c].read (d - 1.0f);   // read before this sample's push: d - 1 gives a delay of d
                     // feedback is soft-limited and damped so high settings ring but never run away
                     fb[c] = damp[c].process (y);
-                    line[c].push (in[c][i] + softClip (g * fb[c]));
-                    out[c][i] = fb[c];
+                    const float x = in[c][i];   // read before the write below: in and out may be the same buffer
+                    line[c].push (x + softClip (g * fb[c]));
+                    out[c][i] = x + (fb[c] - x) * mix;
                 }
                 lastPh = (float) (ph - std::floor (ph));
             }
@@ -97,7 +100,7 @@ namespace kv
         OnePoleLP damp[2];
         float fb[2] { 0, 0 };
         double phase = 0.0;
-        Smoother delaySmooth, depthSmooth;
+        Smoother delaySmooth, depthSmooth, mixSmooth;
         bool primed = false;
     };
 }

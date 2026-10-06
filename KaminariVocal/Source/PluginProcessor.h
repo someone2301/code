@@ -18,21 +18,22 @@
 //   input -> In Gain -> [channel modules] -> pre-fader tap -> Out Gain -> post-fader tap -> dry out
 //   each send: tap * send level -> effect (100 % wet) -> return guard -> summed with the dry out
 //
-// The dry signal is never processed by a send: the output is the dry signal plus the four returns.
-// Channel modules, in order: Tune -> EQ -> Multiband -> Compression -> Distortion -> De-ess -> Resonance.
+// The dry signal is never processed by a send: the output is the dry signal plus the three returns.
+// Channel modules, in order: Tune -> EQ -> Multiband -> Compression -> Flanger -> Distortion -> De-ess -> Resonance.
 // Layouts: mono -> mono, mono -> stereo, stereo -> stereo. A mono input is processed as dual mono, so the
 // sends' stereo returns stay stereo on a mono-in/stereo-out track.
 class KaminariVocalProcessor : public juce::AudioProcessor,
                                private juce::AsyncUpdater
 {
 public:
-    enum SendIndex { Reverb, Delay, Widener, Flanger, numSends };
-    // Indices are not the processing order (Distortion runs between Compression and De-ess).
-    enum ModuleIndex { ModTune, ModEq, ModMultiband, ModCompression, ModDeEss, ModResonance, ModDistortion, numModules };
+    enum SendIndex { Reverb, Delay, Widener, numSends };
+    // Indices are not the processing order (Flanger and Distortion run between Compression and De-ess).
+    enum ModuleIndex { ModTune, ModEq, ModMultiband, ModCompression, ModDeEss, ModResonance, ModDistortion, ModFlanger, numModules };
 
     // Saved with every session; raise when a later version must convert old sessions (see DESIGN.md 2.11).
     // 3: Distortion tab inserted before De-ess (saved Advanced tab indices from 4 on move up by one).
-    static constexpr int stateVersion = 3;
+    // 4: Flanger moved from the sends into the chain; its tab sits before Distortion (indices from 4 on move up again).
+    static constexpr int stateVersion = 4;
     // Algorithm version per module, saved with the session so a later, improved algorithm can keep old
     // sessions sounding the same. All modules are at version 1.
     static constexpr int engineVersion = 1;
@@ -101,7 +102,7 @@ public:
     kv::Resonance resonance;    // GUI reads its per-band reduction
     kv::Equalizer eq;
     kv::Distortion distortion;  // GUI reads its drive read-out
-    kv::FlangerSend flanger;    // GUI reads its LFO position
+    kv::Flanger flanger;        // GUI reads its LFO position
 
     // Session state read back from the last setStateInformation (tests and future migrations).
     int loadedStateVersion = stateVersion;
@@ -109,7 +110,7 @@ public:
     // Non-parameter UI state saved with the session.
     std::atomic<bool> advancedView { false };
     std::atomic<int> advancedSend { Reverb };
-    std::atomic<int> advancedTab { 0 };   // Advanced view tab: 0..6 modules (display order), 7 sends
+    std::atomic<int> advancedTab { 0 };   // Advanced view tab: 0..7 modules (display order), 8 sends
 
     // Delay times in samples from the current settings and host tempo (also used by the GUI read-out).
     float delayTimeSamples (int echo, double bpm) const;
@@ -133,7 +134,7 @@ private:
     kv::DeEsserSettings dsSettings;
     kv::ResonanceSettings rsSettings;
     kv::DistortionSettings dtSettings;
-    bool distortionIdle = true;
+    bool distortionIdle = true, flangerIdle = true;
     double chunkPpq = 0.0, chunkBpm = 120.0;
     bool chunkPlaying = false;
     bool moduleOn[numModules] {};
@@ -156,6 +157,7 @@ private:
     kv::DelaySettings readDelay (double bpm) const;
     kv::WidenerSettings readWidener() const;
     kv::FlangerSettings readFlanger (double bpm) const;
+    kv::FlangerSettings flSettings;
 
     struct SendPtrs { Raw on, level, tap; };
     std::array<SendPtrs, numSends> sendPtrs;

@@ -57,7 +57,7 @@ namespace
     // Switches every channel module off, so the dry path is a pure delay of the reported latency.
     void neutral (KaminariVocalProcessor& p)
     {
-        for (auto* id : { "tn_on", "eq_on", "mb_on", "lv_on", "dt_on", "ds_on", "rs_on" })
+        for (auto* id : { "tn_on", "eq_on", "mb_on", "lv_on", "fl_on", "dt_on", "ds_on", "rs_on" })
             setParam (p, id, 0.0f);
     }
 
@@ -183,9 +183,9 @@ namespace
     }
 
     constexpr int numSends = KaminariVocalProcessor::numSends;
-    const char* sendOn[]    = { kvid::rvOn, kvid::dlOn, kvid::wdOn, kvid::flOn };
-    const char* sendLevel[] = { kvid::rvSend, kvid::dlSend, kvid::wdSend, kvid::flSend };
-    const char* sendName[]  = { "reverb", "delay", "widener", "flanger" };
+    const char* sendOn[]    = { kvid::rvOn, kvid::dlOn, kvid::wdOn };
+    const char* sendLevel[] = { kvid::rvSend, kvid::dlSend, kvid::wdSend };
+    const char* sendName[]  = { "reverb", "delay", "widener" };
 }
 
 int main (int argc, char** argv)
@@ -315,14 +315,13 @@ int main (int argc, char** argv)
         }
         setParam (p, kvid::dlFeedback, 100.0f);
         setParam (p, kvid::rvDecay, 20.0f);
-        setParam (p, kvid::flFeedback, 95.0f);
         prepare (p);
         float peak[numSends] = {};
         render (p, 4.0, [] (int c, long n) { return (float) std::sin (2 * kv::pi * 300.0 * n / sr + c); },
                 [&] (int) { for (int s = 0; s < numSends; ++s) peak[s] = std::max (peak[s], p.returnPeak[(size_t) s].load()); });
-        check (peak[0] <= 1.0f && peak[1] <= 1.0f && peak[2] <= 1.0f && peak[3] <= 1.0f,
+        check (peak[0] <= 1.0f && peak[1] <= 1.0f && peak[2] <= 1.0f,
                "full-scale input, all sends +6 dB, 100 % feedback, 20 s decay: every return peak <= 0 dBFS ("
-               + juce::String (peak[0], 3) + ", " + juce::String (peak[1], 3) + ", " + juce::String (peak[2], 3) + ", " + juce::String (peak[3], 3) + ")");
+               + juce::String (peak[0], 3) + ", " + juce::String (peak[1], 3) + ", " + juce::String (peak[2], 3) + ")");
     }
 
     // ---- reverb ---------------------------------------------------------------------------------------------------
@@ -1006,20 +1005,35 @@ int main (int argc, char** argv)
 
     // ---- flanger ---------------------------------------------------------------------------------------------------
     {
-        // the flanged comb: dry + return at 0 dB cuts some frequencies of white noise deeply
+        // static comb (no sweep, no feedback), Mix 50 %: dry + copy delayed 1 ms cancel at 500 Hz and add at 1 kHz
         KaminariVocalProcessor p;
         neutral (p);
         setParam (p, kvid::flOn, 1.0f);
-        setParam (p, kvid::flSend, 0.0f);
-        setParam (p, kvid::flDepth, 0.0f);       // static comb for the measurement
-        setParam (p, kvid::flDelay, 1.0f);       // 1 ms: notches at 500 Hz, 1.5 kHz, ...
+        setParam (p, kvid::flMix, 50.0f);
+        setParam (p, kvid::flDepth, 0.0f);
+        setParam (p, kvid::flDelay, 1.0f);
         setParam (p, kvid::flFeedback, 0.0f);
         setParam (p, kvid::flHiCut, 20000.0f);
         prepare (p);
-        const auto r = render (p, 1.0, [] (int, long n) { kv::Random rnd ((uint32_t) n * 2654435761u + 3u); return 0.3f * rnd.next(); });
-        const float notch = toneDb (r.out, 0, 500.0, 12000, 48000);   // dry + copy delayed 1 ms cancel at 500 Hz
-        const float peak = toneDb (r.out, 0, 1000.0, 12000, 48000);   // and add at 1 kHz
-        check (peak - notch > 12.0f, "flanger at 0 dB send: comb notch " + juce::String (peak - notch, 1) + " dB below the comb peak");
+        check (p.getLatencySamples() == kv::Tune::latencyFor (sr), "Flanger adds no latency");
+        auto noise = [] (int, long n) { kv::Random rnd ((uint32_t) n * 2654435761u + 3u); return 0.3f * rnd.next(); };
+        auto r = render (p, 0.5, sine (500.0, -12.0f));
+        const float notch = toneDb (r.out, 0, 500.0, 4800, 24000);
+        r = render (p, 0.5, sine (1000.0, -12.0f));
+        const float peak = toneDb (r.out, 0, 1000.0, 4800, 24000);
+        check (peak - notch > 40.0f && std::abs (peak + 12.0f) < 0.5f, "Flanger in the chain, Mix 50 %: 500 Hz cancelled to "
+               + juce::String (notch, 1) + " dBFS, 1 kHz passes at " + juce::String (peak, 1) + " dBFS (input -12)");
+        setParam (p, kvid::flFeedback, 95.0f);
+        setParam (p, kvid::flDepth, 100.0f);
+        prepare (p);
+        r = render (p, 3.0, [] (int c, long n) { return (float) std::sin (2 * kv::pi * 300.0 * n / sr + c); });
+        bool bounded = true;
+        for (int i = 0; i < r.out.getNumSamples(); ++i) bounded = bounded && std::isfinite (r.out.getSample (0, i)) && std::abs (r.out.getSample (0, i)) < 4.0f;
+        check (bounded, "Flanger at 95 % feedback and full depth stays finite and bounded");
+        neutral (p);
+        prepare (p);
+        r = render (p, 0.5, noise);
+        check (maxDiff (r) == 0.0f, "Flanger off: the signal passes unchanged");
     }
 
     // ---- editor ---------------------------------------------------------------------------------------------------
@@ -1122,7 +1136,7 @@ int main (int argc, char** argv)
                 for (auto* child : c.getChildren())
                     visit (*child, where);
             };
-            const char* tabNamesT[] = { "Tune", "EQ", "Multiband", "Compression", "Distortion", "De-ess", "Resonance" };
+            const char* tabNamesT[] = { "Tune", "EQ", "Multiband", "Compression", "Flanger", "Distortion", "De-ess", "Resonance" };
             for (int t = 0; t < KaminariVocalEditor::TabSends; ++t)
             {
                 ed->showTab (true, t);
@@ -1168,14 +1182,14 @@ int main (int argc, char** argv)
                 juce::MessageManager::getInstance()->runDispatchLoopUntil (40);
             }
             save ("basic.png");
-            const char* names[] = { "tune", "eq", "multiband", "compression", "distortion", "deess", "resonance" };
+            const char* names[] = { "tune", "eq", "multiband", "compression", "flanger", "distortion", "deess", "resonance" };
             for (int t = 0; t < KaminariVocalEditor::TabSends; ++t)
             {
                 ed->showTab (true, t);
                 for (int k = 0; k < 4; ++k) { render (p, 0.1, vocal); juce::MessageManager::getInstance()->runDispatchLoopUntil (40); }
                 save (juce::String ("adv_") + names[t] + ".png");
             }
-            const char* sendNames[] = { "reverb", "delay", "widener", "flanger" };
+            const char* sendNames[] = { "reverb", "delay", "widener" };
             for (int s2 = 0; s2 < numSends; ++s2)
             {
                 ed->showAdvanced (true, s2);

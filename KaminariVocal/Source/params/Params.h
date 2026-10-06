@@ -4,7 +4,7 @@
 #include "../sends/Reverb.h"
 #include "../sends/Delay.h"
 #include "../sends/Widener.h"
-#include "../sends/Flanger.h"
+#include "../dsp/Flanger.h"
 #include "../dsp/Eq.h"
 
 // Permanent parameter IDs (see docs/KaminariVocal/DESIGN.md, section 2.9). Never rename or reuse an ID.
@@ -18,7 +18,6 @@ namespace kvid
     inline constexpr const char* rvOn = "rv_on",  * rvSend = "rv_send",  * rvTap = "rv_tap";
     inline constexpr const char* dlOn = "dl_on",  * dlSend = "dl_send",  * dlTap = "dl_tap";
     inline constexpr const char* wdOn = "wd_on",  * wdSend = "wd_send",  * wdTap = "wd_tap";
-    inline constexpr const char* flOn = "fl_on",  * flSend = "fl_send",  * flTap = "fl_tap";
 
     // reverb
     inline constexpr const char* rvMode = "rv_mode", * rvDecay = "rv_decay", * rvSize = "rv_size",
@@ -47,7 +46,7 @@ namespace kvid
                                  * swOutput = "wd_sw_output";
 
     // flanger
-    inline constexpr const char* flRate = "fl_rate", * flSync = "fl_sync", * flDepth = "fl_depth", * flDelay = "fl_delay",
+    inline constexpr const char* flOn = "fl_on", * flMix = "fl_mix", * flRate = "fl_rate", * flSync = "fl_sync", * flDepth = "fl_depth", * flDelay = "fl_delay",
                                  * flFeedback = "fl_feedback", * flStereo = "fl_stereo", * flShape = "fl_shape",
                                  * flHiCut = "fl_hicut";
 }
@@ -426,10 +425,9 @@ namespace kvp
         addFloat  (kvid::swOutput, "SideWidener Output", { -60.0f, 0.0f, 0.01f, 2.5f }, 0.0f,
                    [] (float v, int) { return v <= -60.0f ? String ("-inf dB") : String (v, 1) + " dB"; });
 
-        // Flanger send
-        addBool   (kvid::flOn, "Flanger Send On", false);
-        addFloat  (kvid::flSend, "Flanger Send", sendRange, -6.0f, sendText, {}, sendFromText);
-        addChoice (kvid::flTap, "Flanger Send Tap", taps, 0);
+        // Flanger (channel module between Compression and Distortion)
+        addBool   (kvid::flOn, "Flanger On", false);
+        addFloat  (kvid::flMix, "Flanger Mix", { 0.0f, 100.0f, 0.1f }, 50.0f, pctText);
         addFloat  (kvid::flRate, "Flanger Rate", logRange (0.02f, 10.0f), 0.3f, [] (float v, int) { return String (v, v < 1.0f ? 2 : 1) + " Hz"; });
         addChoice (kvid::flSync, "Flanger Sync", flangerSyncNames(), 0);
         addFloat  (kvid::flDepth, "Flanger Depth", { 0.0f, 100.0f, 0.1f }, 60.0f, pctText);

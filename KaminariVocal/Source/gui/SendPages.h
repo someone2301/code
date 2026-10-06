@@ -2,7 +2,7 @@
 
 #include "AdvWidgets.h"
 
-// Advanced send pages (Reverb, Delay, Widener, Flanger), laid out after the GUI preview artboards AdvReverb, AdvDelay,
+// Advanced send pages (Reverb, Delay, Widener) and the Flanger module page, laid out after the GUI preview artboards AdvReverb, AdvDelay,
 // AdvWidener and AdvWidenerSide: a shared send header, then titled control groups with range-labelled knobs and a
 // small display of what the send does. Only controls that change the sound in the current mode are shown.
 namespace kvui
@@ -980,7 +980,7 @@ namespace kvui
             const float base = plainValue (state, kvid::flDelay), depth = plainValue (state, kvid::flDepth) * 0.01f;
             const float stereo = plainValue (state, kvid::flStereo) / 180.0f;
             const int shape = juce::roundToInt (plainValue (state, kvid::flShape));
-            const float top = base + kv::FlangerSend::maxSweepMs * depth;
+            const float top = base + kv::Flanger::maxSweepMs * depth;
             const float yMax = juce::jmax (2.0f, top * 1.15f);
             auto plot = b.reduced (12.0f, 10.0f).withTrimmedTop (14.0f).withTrimmedBottom (12.0f);
             g.setColour (navy800);
@@ -993,7 +993,7 @@ namespace kvui
                 {
                     const float ph = 2.0f * (float) i / (float) n + (c == 1 ? 0.5f * stereo : 0.0f);
                     const float lfo = 0.5f + 0.5f * kv::lfoShape (shape, ph - 0.25f);
-                    const float d = base + kv::FlangerSend::maxSweepMs * depth * lfo;
+                    const float d = base + kv::Flanger::maxSweepMs * depth * lfo;
                     const float x = plot.getX() + (float) i, y = plot.getBottom() - plot.getHeight() * d / yMax;
                     if (i == 0) path.startNewSubPath (x, y); else path.lineTo (x, y);
                 }
@@ -1007,7 +1007,7 @@ namespace kvui
                 {
                     const float ph = pos + (float) k;
                     const float lfo = 0.5f + 0.5f * kv::lfoShape (shape, ph - 0.25f);
-                    const float d = base + kv::FlangerSend::maxSweepMs * depth * lfo;
+                    const float d = base + kv::Flanger::maxSweepMs * depth * lfo;
                     const float x = plot.getX() + plot.getWidth() * ph / 2.0f, y = plot.getBottom() - plot.getHeight() * d / yMax;
                     g.setColour (white);
                     g.fillEllipse (x - 3.5f, y - 3.5f, 7.0f, 7.0f);
@@ -1054,23 +1054,24 @@ namespace kvui
         SegParam shape;
     };
 
-    class FlangerPanel : public juce::Component
+    class FlangerPage : public AdvFrame
     {
     public:
-        explicit FlangerPanel (KaminariVocalProcessor& p)
-            : header (p, KaminariVocalProcessor::Flanger, kvid::flOn, kvid::flSend, kvid::flTap, "Flanger", "flanger"),
+        explicit FlangerPage (KaminariVocalProcessor& p)
+            : AdvFrame (p, "Flanger", "Swept comb filter" + dot() + "after Compression, before Distortion", "fl_on", "flanger"),
               sweep (p),
               rate (p.apvts, kvid::flRate, "Rate", "SLOW", "FAST", "Sweep speed when Sync is Free."),
               depth (p.apvts, kvid::flDepth, "Depth", "MIN", "MAX", "How far the delay sweeps (up to 6 ms above Delay)."),
               delay (p.apvts, kvid::flDelay, "Delay", "0.1", "10 MS", "Shortest delay of the sweep. Short = high, metallic notches; long = chorus-like."),
               feedback (p.apvts, kvid::flFeedback, "Feedback", "-95", "+95", "Resonance of the sweep. Negative values give a hollow tone."),
               stereo (p.apvts, kvid::flStereo, "Stereo", "0", "180", "Phase between the left and right sweeps. 0 = mono sweep."),
-              hiCut (p.apvts, kvid::flHiCut, "High Cut", "DARK", "OPEN", "Darkens the flanged signal and its feedback."),
+              hiCut (p.apvts, kvid::flHiCut, "High Cut", "DARK", "OPEN", "Darkens the swept copy and its feedback."),
+              mix (p.apvts, kvid::flMix, "Mix", "DRY", "WET", "Blend of the swept copy and the dry vocal. 50 % gives the deepest flanging."),
               options (p.apvts),
               state (p.apvts),
               syncAtt (*p.apvts.getParameter (kvid::flSync), [this] (float) { update(); })
         {
-            for (auto* c : std::initializer_list<juce::Component*> { &header, &sweep, &options })
+            for (auto* c : std::initializer_list<juce::Component*> { &sweep, &options })
                 addAndMakeVisible (c);
             for (auto* k : knobs())
             {
@@ -1080,8 +1081,8 @@ namespace kvui
             }
             syncAtt.sendInitialUpdate();
         }
-        ~FlangerPanel() override { for (auto* k : knobs()) k->setLNF (nullptr); }
-        std::vector<RangeKnob*> knobs() { return { &rate, &depth, &delay, &feedback, &stereo, &hiCut }; }
+        ~FlangerPage() override { for (auto* k : knobs()) k->setLNF (nullptr); }
+        std::vector<RangeKnob*> knobs() { return { &rate, &depth, &delay, &feedback, &stereo, &hiCut, &mix }; }
 
         void update()
         {
@@ -1092,38 +1093,35 @@ namespace kvui
 
         void paint (juce::Graphics& g) override
         {
-            for (auto* grp : { &sweepGrp, &delayGrp, &stereoGrp, &toneGrp })
+            AdvFrame::paint (g);
+            for (auto* grp : { &sweepGrp, &delayGrp, &stereoGrp, &toneGrp, &outGrp })
                 if (! grp->area.isEmpty())
                     drawTitledGroup (g, grp->area, grp->title);
             g.setColour (steel);
             g.setFont (font (12.0f, 0));
-            g.drawFittedText ("The return is 100 % wet. The flanging forms where it meets the dry vocal, so it is strongest with the send near 0 dB "
-                              "and gentler at lower send levels. Feedback above about 80 % gives the resonant jet sound.",
-                              noteArea, juce::Justification::topLeft, 3, 1.0f);
+            g.drawFittedText ("Mix 50 % gives the deepest flanging; higher values move towards a pure pitch wobble. "
+                              "Feedback above about 80 % gives the resonant jet sound. No latency.",
+                              noteArea, juce::Justification::topLeft, 2, 1.0f);
         }
 
-        void resized() override
+        void layoutContent (juce::Rectangle<int> b) override
         {
-            auto b = getLocalBounds();
-            header.setBounds (b.removeFromTop (80));
-            b.removeFromTop (16);
-            sweep.setBounds (b.removeFromTop (170));
+            sweep.setBounds (b.removeFromTop (200));
             b.removeFromTop (14);
-            layoutGroups (b.removeFromTop (150), { &sweepGrp, &delayGrp, &stereoGrp, &toneGrp }, 104, 16);
+            layoutGroups (b.removeFromTop (160), { &sweepGrp, &delayGrp, &stereoGrp, &toneGrp, &outGrp }, 104, 16);
             b.removeFromTop (10);
-            noteArea = b.removeFromTop (48);
+            noteArea = b.removeFromTop (40);
         }
 
-        ModuleLNF lnf;
-        SendHeader header;
         SweepDisplay sweep;
-        RangeKnob rate, depth, delay, feedback, stereo, hiCut;
+        RangeKnob rate, depth, delay, feedback, stereo, hiCut, mix;
         FlangerOptions options;
 
     private:
+        ModuleLNF lnf;
         APVTS& state;
         SendGroup sweepGrp { "SWEEP", { &rate, &depth }, nullptr, 0, &options, 140, 76, 2 }, delayGrp { "DELAY", { &delay, &feedback } },
-                  stereoGrp { "STEREO", { &stereo } }, toneGrp { "TONE", { &hiCut } };
+                  stereoGrp { "STEREO", { &stereo } }, toneGrp { "TONE", { &hiCut } }, outGrp { "OUTPUT", { &mix } };
         juce::Rectangle<int> noteArea;
         juce::ParameterAttachment syncAtt;
     };
@@ -1171,11 +1169,11 @@ namespace kvui
     class SendsPage : public juce::Component, private juce::Timer
     {
     public:
-        SendsPage (KaminariVocalProcessor& p, ReverbPanel& r, DelayPanel& d, WidenerPanel& w, FlangerPanel& f) : panels { &r, &d, &w, &f }
+        SendsPage (KaminariVocalProcessor& p, ReverbPanel& r, DelayPanel& d, WidenerPanel& w) : panels { &r, &d, &w }
         {
-            const char* names[] = { "Reverb", "Delay", "Widener", "Flanger" };
-            const char* on[] = { kvid::rvOn, kvid::dlOn, kvid::wdOn, kvid::flOn };
-            const char* lv[] = { kvid::rvSend, kvid::dlSend, kvid::wdSend, kvid::flSend };
+            const char* names[] = { "Reverb", "Delay", "Widener" };
+            const char* on[] = { kvid::rvOn, kvid::dlOn, kvid::wdOn };
+            const char* lv[] = { kvid::rvSend, kvid::dlSend, kvid::wdSend };
             for (int i = 0; i < numPanels; ++i)
             {
                 auto* b = tabs.add (new SendTab (p, names[i], on[i], lv[i]));
@@ -1187,7 +1185,7 @@ namespace kvui
             startTimerHz (5);
         }
         ~SendsPage() override { stopTimer(); }
-        static constexpr int numPanels = 4;
+        static constexpr int numPanels = 3;
         void show (int i) { current = juce::jlimit (0, numPanels - 1, i); update(); }
         int shown() const { return current; }
         std::function<void (int)> onChange;
@@ -1211,7 +1209,7 @@ namespace kvui
             g.drawText ("SENDS", 54, 12, 100, 28, juce::Justification::centredLeft);
             g.setColour (mist);
             g.setFont (font (13.0f, 0));
-            g.drawText ("Reverb, delay, widener and flanger" + dot() + "returns are 100 % wet and added to the unchanged dry vocal", 128, 12, 640, 28,
+            g.drawText ("Reverb, delay and widener" + dot() + "returns are 100 % wet and added to the unchanged dry vocal", 128, 12, 640, 28,
                         juce::Justification::centredLeft);
         }
         void resized() override

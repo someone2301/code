@@ -2,7 +2,7 @@
 
 namespace
 {
-    const char* tabNames[] = { "TUNE", "EQ", "MULTIBAND", "COMPRESSION", "DISTORTION", "DE-ESS", "RESONANCE", "SENDS" };
+    const char* tabNames[] = { "TUNE", "EQ", "MULTIBAND", "COMPRESSION", "FLANGER", "DISTORTION", "DE-ESS", "RESONANCE", "SENDS" };
 }
 
 KaminariVocalEditor::KaminariVocalEditor (KaminariVocalProcessor& p)
@@ -11,8 +11,8 @@ KaminariVocalEditor::KaminariVocalEditor (KaminariVocalProcessor& p)
       inRail (p.apvts, kvid::inGain, "IN", p.inPeakCh[0], p.inPeakCh[1], lnf),
       outRail (p.apvts, kvid::outGain, "OUT", p.outPeakCh[0], p.outPeakCh[1], lnf),
       eq (p),
-      tunePage_ (p), eqPage_ (p), multibandPage (p), compressionPage (p), distortionPage (p), deEssPage (p), resonancePage (p),
-      reverb (p), delay (p), widener (p), flanger (p)
+      tunePage_ (p), eqPage_ (p), multibandPage (p), compressionPage (p), flangerPage (p), distortionPage (p), deEssPage (p), resonancePage (p),
+      reverb (p), delay (p), widener (p)
 {
     setLookAndFeel (&lnf);
     setTitle ("Kaminari Vocal");
@@ -23,11 +23,12 @@ KaminariVocalEditor::KaminariVocalEditor (KaminariVocalProcessor& p)
     cards[0] = std::make_unique<kvui::ModuleCard> (p, "Tune", "tn_on", "tn_speed", true, "Retune Speed", KaminariVocalProcessor::ModTune);
     cards[1] = std::make_unique<kvui::ModuleCard> (p, "Multiband", "mb_on", "mb1_thresh", true, "Threshold", KaminariVocalProcessor::ModMultiband);
     cards[2] = std::make_unique<kvui::ModuleCard> (p, "Compression", "lv_on", "lv_thresh", true, "Compression", KaminariVocalProcessor::ModCompression);
-    cards[3] = std::make_unique<kvui::ModuleCard> (p, "Distortion", "dt_on", "dt_drive", false, "Drive", KaminariVocalProcessor::ModDistortion);
-    cards[4] = std::make_unique<kvui::ModuleCard> (p, "De-ess", "ds_on", "ds_thresh", true, "De-ess", KaminariVocalProcessor::ModDeEss);
-    cards[5] = std::make_unique<kvui::ModuleCard> (p, "Resonance", "rs_on", "rs_depth", false, "Depth", KaminariVocalProcessor::ModResonance);
-    const int cardTab[6] = { TabTune, TabMultiband, TabCompression, TabDistortion, TabDeEss, TabResonance };
-    for (int i = 0; i < 6; ++i)
+    cards[3] = std::make_unique<kvui::ModuleCard> (p, "Flanger", "fl_on", "fl_mix", false, "Mix", KaminariVocalProcessor::ModFlanger);
+    cards[4] = std::make_unique<kvui::ModuleCard> (p, "Distortion", "dt_on", "dt_drive", false, "Drive", KaminariVocalProcessor::ModDistortion);
+    cards[5] = std::make_unique<kvui::ModuleCard> (p, "De-ess", "ds_on", "ds_thresh", true, "De-ess", KaminariVocalProcessor::ModDeEss);
+    cards[6] = std::make_unique<kvui::ModuleCard> (p, "Resonance", "rs_on", "rs_depth", false, "Depth", KaminariVocalProcessor::ModResonance);
+    const int cardTab[7] = { TabTune, TabMultiband, TabCompression, TabFlanger, TabDistortion, TabDeEss, TabResonance };
+    for (int i = 0; i < 7; ++i)
     {
         root.addChildComponent (*cards[(size_t) i]);
         cards[(size_t) i]->open.onClick = [this, t = cardTab[i]] { showTab (true, t); };
@@ -41,15 +42,13 @@ KaminariVocalEditor::KaminariVocalEditor (KaminariVocalProcessor& p)
                                                      [] (int s) { return juce::String (kv::delayStyleName (s)); }, lnf);
     sendCards[2] = std::make_unique<kvui::SendCard> (p, KaminariVocalProcessor::Widener, kvid::wdOn, kvid::wdSend, kvid::wdType, kvid::wdTap, "Widener",
                                                      [] (int t) { return juce::String (t == 0 ? "MicroShift" : "SideWidener"); }, lnf);
-    sendCards[3] = std::make_unique<kvui::SendCard> (p, KaminariVocalProcessor::Flanger, kvid::flOn, kvid::flSend, kvid::flSync, kvid::flTap, "Flanger",
-                                                     [] (int t) { return t == 0 ? juce::String ("Free sweep") : kvp::flangerSyncNames()[t] + " sweep"; }, lnf);
     for (int s = 0; s < KaminariVocalProcessor::numSends; ++s)
     {
         root.addChildComponent (*sendCards[(size_t) s]);
         sendCards[(size_t) s]->open.onClick = [this, s] { showAdvanced (true, s); };
     }
 
-    panels = { &tunePage_, &eqPage_, &multibandPage, &compressionPage, &distortionPage, &deEssPage, &resonancePage, &sendsPage };
+    panels = { &tunePage_, &eqPage_, &multibandPage, &compressionPage, &flangerPage, &distortionPage, &deEssPage, &resonancePage, &sendsPage };
     sendsPage.show (p.advancedSend.load());
     sendsPage.onChange = [this] (int i) { proc.advancedSend.store (i); };
     for (int t = 0; t < numTabs; ++t)
@@ -85,6 +84,12 @@ KaminariVocalEditor::KaminariVocalEditor (KaminariVocalProcessor& p)
     tabs[TabCompression]->info = grText (KaminariVocalProcessor::ModCompression);
     tabs[TabDeEss]->info = grText (KaminariVocalProcessor::ModDeEss);
     tabs[TabResonance]->info = grText (KaminariVocalProcessor::ModResonance);
+    tabs[TabFlanger]->info = [this]
+    {
+        if (proc.apvts.getRawParameterValue ("fl_on")->load() <= 0.5f) return juce::String ("off");
+        const int sync = juce::roundToInt (proc.apvts.getRawParameterValue ("fl_sync")->load());
+        return sync == 0 ? proc.apvts.getParameter ("fl_rate")->getCurrentValueAsText() : kvp::flangerSyncNames()[sync];
+    };
     tabs[TabDistortion]->info = [this]
     {
         return proc.apvts.getRawParameterValue ("dt_on")->load() > 0.5f
@@ -141,9 +146,9 @@ KaminariVocalEditor::KaminariVocalEditor (KaminariVocalProcessor& p)
     chain.onLoaded = [this]
     {
         chain.refresh();
-        for (auto* bar : { &reverb.header.preset, &delay.header.preset, &widener.header.preset, &flanger.header.preset, &tunePage_.preset,
-                           &eqPage_.preset, &multibandPage.preset, &compressionPage.preset, &distortionPage.preset, &deEssPage.preset,
-                           &resonancePage.preset })
+        for (auto* bar : { &reverb.header.preset, &delay.header.preset, &widener.header.preset, &tunePage_.preset,
+                           &eqPage_.preset, &multibandPage.preset, &compressionPage.preset, &flangerPage.preset, &distortionPage.preset,
+                           &deEssPage.preset, &resonancePage.preset })
             bar->refresh();
     };
 
@@ -311,10 +316,10 @@ void KaminariVocalEditor::layoutRoot()
         // Tab widths follow their names. Read-outs (note, gain reduction, bands) are shown in priority order while
         // they fit; the rest of the row is shared out.
         auto tabRow = body.removeFromTop (38);
-        const auto nameFont = kvtheme::font (12.5f, 2, 0.06f);
-        constexpr int gap = 6, pad = 36, infoGap = 6;
-        const int infoW[numTabs] = { 26, 50, 48, 34, 44, 30, 34, 0 };
-        const int priority[] = { TabCompression, TabDeEss, TabResonance, TabTune, TabDistortion, TabMultiband, TabEq };
+        const auto nameFont = kvtheme::font (14.0f, 3, 0.08f);
+        constexpr int gap = 6, pad = 40, infoGap = 6;   // pad: 10 + bolt 16 + 10, plus 4 spare
+        const int infoW[numTabs] = { 26, 50, 48, 34, 44, 44, 30, 34, 0 };
+        const int priority[] = { TabCompression, TabDeEss, TabResonance, TabTune, TabDistortion, TabFlanger, TabMultiband, TabEq };
         int w[numTabs];
         int used = (numTabs - 1) * gap;
         for (int t = 0; t < numTabs; ++t)
@@ -368,11 +373,11 @@ void KaminariVocalEditor::TabButton::paintButton (juce::Graphics& g, bool hover,
     }
     b.removeFromLeft (16);
     g.setColour (white);
-    g.setFont (font (12.5f, 2, 0.06f));
+    g.setFont (font (14.0f, 3, 0.08f));
     g.drawText (getButtonText(), b, juce::Justification::centredLeft);
     if (info && showInfo)
     {
-        const int w = (int) juce::GlyphArrangement::getStringWidth (font (12.5f, 2, 0.06f), getButtonText());
+        const int w = (int) juce::GlyphArrangement::getStringWidth (font (14.0f, 3, 0.08f), getButtonText());
         g.setColour (mist);
         g.setFont (font (12.0f, 0, 0.05f));
         g.drawText (info(), b.withTrimmedLeft (w + 8), juce::Justification::centredLeft);

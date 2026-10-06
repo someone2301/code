@@ -6,12 +6,12 @@
 
 // Root editor, 1100 x 760 at 100 % (zoom 75-200 %), laid out after the GUI preview.
 //   Header: wordmark, Basic/Advanced, chain presets, A/B, latency, undo/redo, zoom.
-//   Basic view: IN/OUT rails, EQ section with analyzer, six module cards with hammer sliders, send row.
+//   Basic view: IN/OUT rails, EQ section with analyzer, seven module cards with hammer sliders, send row.
 //   Advanced view: one tab per module and per send.
 class KaminariVocalEditor : public juce::AudioProcessorEditor, private juce::Timer
 {
 public:
-    enum Tab { TabTune, TabEq, TabMultiband, TabCompression, TabDistortion, TabDeEss, TabResonance, TabSends, numTabs };
+    enum Tab { TabTune, TabEq, TabMultiband, TabCompression, TabFlanger, TabDistortion, TabDeEss, TabResonance, TabSends, numTabs };
     static constexpr int baseWidth = 1100, baseHeight = 760;
 
     explicit KaminariVocalEditor (KaminariVocalProcessor&);
@@ -31,7 +31,7 @@ public:
     kvui::ReverbPanel& reverbPanel() { return reverb; }
     kvui::DelayPanel& delayPanel() { return delay; }
     kvui::WidenerPanel& widenerPanel() { return widener; }
-    kvui::FlangerPanel& flangerPanel() { return flanger; }
+    kvui::FlangerPage& flangerPanel() { return flangerPage; }
     kvui::DistortionPage& distortionPanel() { return distortionPage; }
     kvui::CompressionPage& compressionPanel() { return compressionPage; }
     kvui::TunePage& tunePage() { return tunePage_; }
@@ -75,7 +75,7 @@ private:
 
     // Basic view
     kvui::EqSection eq;
-    std::array<std::unique_ptr<kvui::ModuleCard>, 6> cards;
+    std::array<std::unique_ptr<kvui::ModuleCard>, 7> cards;
     std::array<std::unique_ptr<kvui::SendCard>, KaminariVocalProcessor::numSends> sendCards;
 
     // Advanced view
@@ -91,14 +91,14 @@ private:
     kvui::EqPage eqPage_;
     kvui::MultibandPage multibandPage;
     kvui::CompressionPage compressionPage;
+    kvui::FlangerPage flangerPage;
     kvui::DistortionPage distortionPage;
     kvui::DeEssPage deEssPage;
     kvui::ResonancePage resonancePage;
     kvui::ReverbPanel reverb;
     kvui::DelayPanel delay;
     kvui::WidenerPanel widener;
-    kvui::FlangerPanel flanger;
-    kvui::SendsPage sendsPage { proc, reverb, delay, widener, flanger };
+    kvui::SendsPage sendsPage { proc, reverb, delay, widener };
     std::array<juce::Component*, numTabs> panels {};
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (KaminariVocalEditor)

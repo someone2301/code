@@ -12,7 +12,6 @@ KaminariVocalProcessor::KaminariVocalProcessor()
     sendPtrs[Reverb]  = { raw (kvid::rvOn), raw (kvid::rvSend), raw (kvid::rvTap) };
     sendPtrs[Delay]   = { raw (kvid::dlOn), raw (kvid::dlSend), raw (kvid::dlTap) };
     sendPtrs[Widener] = { raw (kvid::wdOn), raw (kvid::wdSend), raw (kvid::wdTap) };
-    sendPtrs[Flanger] = { raw (kvid::flOn), raw (kvid::flSend), raw (kvid::flTap) };
 
     // A new instance starts on the "Default" chain preset (a saved session replaces it in setStateInformation).
     presets.loadChainPreset ("Default");
@@ -121,6 +120,7 @@ void KaminariVocalProcessor::readModuleSettings()
     moduleOn[ModDeEss] = b ("ds_on");
     moduleOn[ModResonance] = b ("rs_on");
     moduleOn[ModDistortion] = b ("dt_on");
+    moduleOn[ModFlanger] = b ("fl_on");
 
     // Tune: a named scale decides the notes; Custom uses the 12 note switches
     auto& t = tuneSettings;
@@ -260,6 +260,14 @@ void KaminariVocalProcessor::processModules (float* l, float* r, int n)
     moduleGr[ModCompression].store (compressor.process (l, r, n, compSettings));
     compMakeup.store (compressor.currentMakeup());
     compHistory.push (dryCopy.getReadPointer (0), dryCopy.getReadPointer (1), l, r, n);
+    // Flanger: no latency; resets when switched on again so no old sweep tail plays
+    {
+        auto& fade = moduleFade[ModFlanger];
+        const bool active = moduleOn[ModFlanger] || fade.isSmoothing() || fade.getCurrentValue() > 0.0f;
+        if (active && flangerIdle) flanger.reset();
+        flangerIdle = ! active;
+        crossfaded (ModFlanger, [&] { flanger.process (l, r, l, r, n, flSettings); moduleGr[ModFlanger].store (flanger.lfoNow.load()); });
+    }
     // Distortion: skipped entirely while off (no latency); restarts from a clean state
     {
         auto& fade = moduleFade[ModDistortion];
@@ -280,7 +288,6 @@ void KaminariVocalProcessor::resetSend (int s)
     if (s == Reverb)  reverb.reset();
     if (s == Delay)   delay.reset();
     if (s == Widener) widener.reset();
-    if (s == Flanger) flanger.reset();
 }
 
 float KaminariVocalProcessor::delayTimeSamples (int echo, double bpm) const
@@ -352,6 +359,7 @@ kv::FlangerSettings KaminariVocalProcessor::readFlanger (double bpm) const
     s.stereo = raw (kvid::flStereo)->load() / 180.0f;
     s.shape = juce::roundToInt (raw (kvid::flShape)->load());
     s.hiCutHz = raw (kvid::flHiCut)->load();
+    s.mix = raw (kvid::flMix)->load() / 100.0f;
     s.bpm = bpm;
     return s;
 }
@@ -405,7 +413,7 @@ void KaminariVocalProcessor::processBlock (juce::AudioBuffer<float>& buffer, juc
     const auto rvSettings = readReverb();
     const auto dlSettings = readDelay (bpm);
     const auto wdSettings = readWidener();
-    auto flSettings = readFlanger (bpm);
+    flSettings = readFlanger (bpm);
     inGainSmooth.setTargetValue (juce::Decibels::decibelsToGain (raw (kvid::inGain)->load()));
     outGainSmooth.setTargetValue (juce::Decibels::decibelsToGain (raw (kvid::outGain)->load()));
 
@@ -495,7 +503,6 @@ void KaminariVocalProcessor::processBlock (juce::AudioBuffer<float>& buffer, juc
             if (s == Reverb)  reverb.process (in[0], in[1], out[0], out[1], n, rvSettings);
             if (s == Delay)   delay.process (in[0], in[1], out[0], out[1], n, dlSettings);
             if (s == Widener) widener.process (in[0], in[1], out[0], out[1], n, wdSettings);
-            if (s == Flanger) flanger.process (in[0], in[1], out[0], out[1], n, flSettings);
 
             float blockPeak = 0.0f;
             for (int i = 0; i < n; ++i)
@@ -615,10 +622,12 @@ void KaminariVocalProcessor::setStateInformation (const void* data, int sizeInBy
             loadedStateVersion = (int) state.getProperty ("state_version", 1);
             advancedView.store (state.getProperty ("ui_view", "basic").toString() == "advanced");
             advancedSend.store (juce::jlimit (0, (int) numSends - 1, (int) state.getProperty ("ui_send", 0)));
-            int tab = (int) state.getProperty ("ui_tab", 7);
+            int tab = (int) state.getProperty ("ui_tab", 8);
             if (loadedStateVersion < 3 && tab >= 4)
-                tab = tab >= 6 ? 7 : tab + 1;   // Distortion tab inserted before De-ess; sends were 6..8
-            advancedTab.store (juce::jlimit (0, 7, tab));
+                tab = tab >= 6 ? 7 : tab + 1;   // v3: Distortion tab inserted before De-ess; sends were 6..8
+            if (loadedStateVersion < 4 && tab >= 4)
+                tab += 1;                       // v4: Flanger tab inserted before Distortion
+            advancedTab.store (juce::jlimit (0, 8, tab));
             uiScale.store (juce::jlimit (0.75f, 2.0f, (float) state.getProperty ("ui_scale", 1.0f)));
             analyserMode.store (juce::jlimit (0, 2, (int) state.getProperty ("analyser_mode", 1)));
             analyserResolution.store (juce::jlimit (0, 3, (int) state.getProperty ("analyser_resolution", (int) SpectrumProcessor::High)));
