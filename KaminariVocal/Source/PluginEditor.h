@@ -2,6 +2,7 @@
 
 #include "PluginProcessor.h"
 #include "gui/AdvPages.h"
+#include "gui/SendPages.h"
 
 // Root editor, 1100 x 760 at 100 % (zoom 75-200 %), laid out after the GUI preview.
 //   Header: wordmark, Basic/Advanced, chain presets, A/B, latency, undo/redo, zoom.
@@ -91,7 +92,7 @@ private:
     kvui::ReverbPanel reverb;
     kvui::DelayPanel delay;
     kvui::WidenerPanel widener;
-    kvui::SendsPage sendsPage { reverb, delay, widener };
+    kvui::SendsPage sendsPage { proc, reverb, delay, widener };
     std::array<juce::Component*, numTabs> panels {};
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (KaminariVocalEditor)

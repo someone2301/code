@@ -34,6 +34,8 @@ namespace kvui
             refresh();
         }
         void setLNF (juce::LookAndFeel* l) { slider.setLookAndFeel (l); }
+        // How far the range labels may extend beyond the ring (smaller keeps neighbouring knobs' labels apart).
+        void setLabelOverhang (int px) { overhang = px; resized(); repaint(); }
         void refresh() { value.setText (slider.getTextFromValue (slider.getValue()), juce::dontSendNotification); }
         void setValueText (std::function<juce::String()> f) { valueFn = std::move (f); slider.onValueChange = [this] { value.setText (valueFn(), juce::dontSendNotification); }; value.setText (valueFn(), juce::dontSendNotification); }
 
@@ -46,8 +48,8 @@ namespace kvui
             if (lo.isNotEmpty() || hi.isNotEmpty())
             {
                 const int y = ring.getBottom() - 4;
-                g.drawText (lo, juce::jmax (0, ring.getX() - 13), y, ring.getWidth() / 2 + 13, 12, juce::Justification::centredLeft);
-                g.drawText (hi, ring.getCentreX(), y, juce::jmin (getWidth() - ring.getCentreX(), ring.getWidth() / 2 + 13), 12, juce::Justification::centredRight);
+                g.drawFittedText (lo, juce::jmax (0, ring.getX() - overhang), y, ring.getWidth() / 2 + overhang - 2, 12, juce::Justification::centredLeft, 1, 0.7f);
+                g.drawFittedText (hi, ring.getCentreX() + 2, y, juce::jmin (getWidth() - ring.getCentreX(), ring.getWidth() / 2 + overhang) - 2, 12, juce::Justification::centredRight, 1, 0.7f);
             }
             g.setColour (white);
             g.setFont (font (11.5f, 2, 0.06f));
@@ -60,7 +62,7 @@ namespace kvui
             value.setBounds (b.removeFromBottom (16));
             b.removeFromBottom (15);
             if (lo.isNotEmpty() || hi.isNotEmpty()) b.removeFromBottom (8);
-            const int d = juce::jmin (b.getWidth() - (lo.isNotEmpty() || hi.isNotEmpty() ? 26 : 0), b.getHeight());
+            const int d = juce::jmin (b.getWidth() - (lo.isNotEmpty() || hi.isNotEmpty() ? 2 * overhang : 0), b.getHeight());
             slider.setBounds (b.withSizeKeepingCentre (d, d));
         }
 
@@ -72,6 +74,7 @@ namespace kvui
         juce::String caption, lo, hi;
         std::unique_ptr<APVTS::SliderAttachment> att;
         std::function<juce::String()> valueFn;
+        int overhang = 13;
     };
 
     // Horizontal parameter slider with range labels and a caption underneath.

@@ -930,8 +930,22 @@ int main (int argc, char** argv)
             for (int s2 = 0; s2 < 3; ++s2)
             {
                 ed->showAdvanced (true, s2);
+                for (int k = 0; k < 4; ++k) { render (p, 0.1, vocal); juce::MessageManager::getInstance()->runDispatchLoopUntil (40); }
                 save (juce::String ("adv_") + sendNames[s2] + ".png");
             }
+            // other modes of the send pages
+            auto shot = [&] (int send, const char* id, float v, const char* name)
+            {
+                setParam (p, id, v);
+                ed->showAdvanced (true, send);
+                for (int k = 0; k < 3; ++k) { render (p, 0.1, vocal); juce::MessageManager::getInstance()->runDispatchLoopUntil (40); }
+                save (name);
+            };
+            shot (0, kvid::rvMode, 14.0f, "adv_reverb_nonlin.png");
+            shot (0, kvid::rvMode, 7.0f, "adv_reverb_ambience.png");
+            shot (1, kvid::dlMode, 1.0f, "adv_delay_dual.png");
+            shot (1, kvid::dlMode, 2.0f, "adv_delay_pingpong.png");
+            shot (2, kvid::wdType, 1.0f, "adv_widener_side.png");
         }
     }
 
