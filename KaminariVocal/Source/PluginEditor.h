@@ -82,12 +82,29 @@ private:
     std::array<std::unique_ptr<kvui::SendCard>, KaminariVocalProcessor::numSends> sendCards;
 
     // Advanced view
+    // Module tab. Its lightning icon is the module's on/off switch (bright = on, dim = bypassed); clicking anywhere
+    // else on the tab shows the module's page.
     struct TabButton : juce::TextButton
     {
         std::function<juce::String()> info;
         bool send = false;
         bool showInfo = true;   // off when the tab row is too narrow for it
         void paintButton (juce::Graphics&, bool, bool) override;
+
+        void setPowerParameter (juce::RangedAudioParameter& p, juce::UndoManager* um);
+        bool isPowerOn() const { return power != nullptr && power->getValue() > 0.5f; }
+        juce::Rectangle<int> boltArea() const { return { 0, 0, 30, getHeight() }; }
+        void mouseMove (const juce::MouseEvent&) override;
+        void mouseExit (const juce::MouseEvent&) override;
+        void mouseDown (const juce::MouseEvent&) override;
+        void mouseDrag (const juce::MouseEvent&) override;
+        void mouseUp (const juce::MouseEvent&) override;
+        juce::String getTooltip() override;
+
+    private:
+        juce::RangedAudioParameter* power = nullptr;
+        std::unique_ptr<juce::ParameterAttachment> powerAtt;
+        bool boltHover = false, boltDown = false;
     };
     std::array<std::unique_ptr<TabButton>, numTabs> tabs;
     kvui::TunePage tunePage_;

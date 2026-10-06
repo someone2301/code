@@ -1410,6 +1410,24 @@ int main (int argc, char** argv)
                        "dragging band 2 sets " + juce::String (getParam (p, "lv_sc2_freq"), 0) + " Hz / " + juce::String (getParam (p, "lv_sc2_gain"), 1) + " dB");
                 for (int i = 1; i <= 4; ++i) setParam (p, ("lv_sc" + juce::String (i) + "_used").toRawUTF8(), 0.0f);
             }
+            // tab lightning icons: a click switches the module on or off and leaves the page as it is
+            {
+                ed->showTab (true, KaminariVocalEditor::TabEq);
+                juce::MessageManager::getInstance()->runDispatchLoopUntil (20);
+                auto& tabB = ed->tabButton (KaminariVocalEditor::TabDistortion);
+                juce::Component& tab = tabB;
+                const float before = getParam (p, "dt_on");
+                const juce::Point<float> bolt (14.0f, (float) tab.getHeight() * 0.5f);
+                tab.mouseDown (event (tab, bolt, bolt, false));
+                tab.mouseUp (event (tab, bolt, bolt, false));
+                const float after = getParam (p, "dt_on");
+                tab.mouseDown (event (tab, bolt, bolt, false));
+                tab.mouseUp (event (tab, bolt, bolt, false));
+                const bool pageKept = ed->tabButton (KaminariVocalEditor::TabEq).getToggleState() && ! tabB.getToggleState();
+                check ((before > 0.5f) != (after > 0.5f) && std::abs (getParam (p, "dt_on") - before) < 0.01f && pageKept,
+                       "tab lightning icon: a click switches Distortion " + juce::String (after > 0.5f ? "on" : "off")
+                       + ", a second click back; the EQ page stays shown");
+            }
             setParam (p, "lv_style", 1.0f);   // Vocal
             juce::MessageManager::getInstance()->runDispatchLoopUntil (20);
             const bool ratioOff = ! ed->compressionPanel().ratioKnob().isEnabled() && ed->compressionPanel().ratioKnob().value.getText() == "Auto";

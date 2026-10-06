@@ -64,6 +64,11 @@ KaminariVocalEditor::KaminariVocalEditor (KaminariVocalProcessor& p)
         root.addChildComponent (b);
         root.addChildComponent (*panels[(size_t) t]);
     }
+    {
+        const char* powerIds[] = { "tn_on", "eq_on", "mb_on", "lv_on", "fl_on", "dt_on", "ds_on", "rs_on" };
+        for (int t = 0; t < TabSends; ++t)
+            tabs[(size_t) t]->setPowerParameter (*p.apvts.getParameter (powerIds[t]), &p.undoManager);
+    }
     auto grText = [this] (int m) { return [this, m]
     {
         const float g = proc.moduleGr[(size_t) m].load();
@@ -368,8 +373,22 @@ void KaminariVocalEditor::TabButton::paintButton (juce::Graphics& g, bool hover,
     }
     else
     {
-        g.setColour (accent);
-        g.fillPath (boltPath (b.withWidth (10).toFloat().withSizeKeepingCentre (9.0f, 13.0f)));
+        // the module's on/off switch: bright when on, dim when bypassed; a ring on hover, smaller while pressed
+        const bool live = power == nullptr || isPowerOn();
+        auto icon = b.withWidth (10).toFloat().withSizeKeepingCentre (9.0f, 13.0f);
+        if (boltDown) icon = icon.withSizeKeepingCentre (7.5f, 11.0f);
+        if (boltHover || boltDown)
+        {
+            g.setColour ((live ? accent : mist).withAlpha (boltDown ? 0.28f : 0.16f));
+            g.fillEllipse (icon.withSizeKeepingCentre (22.0f, 22.0f));
+        }
+        if (live)
+        {
+            g.setColour (accent.withAlpha (0.25f));
+            g.fillPath (boltPath (icon.expanded (1.5f)));
+        }
+        g.setColour (live ? (boltHover ? accent.brighter (0.3f) : accent) : steel.withAlpha (boltHover ? 0.9f : 0.6f));
+        g.fillPath (boltPath (icon));
     }
     b.removeFromLeft (16);
     g.setColour (white);
@@ -382,4 +401,60 @@ void KaminariVocalEditor::TabButton::paintButton (juce::Graphics& g, bool hover,
         g.setFont (font (12.0f, 0, 0.05f));
         g.drawText (info(), b.withTrimmedLeft (w + 8), juce::Justification::centredLeft);
     }
+}
+
+void KaminariVocalEditor::TabButton::setPowerParameter (juce::RangedAudioParameter& p, juce::UndoManager* um)
+{
+    power = &p;
+    powerAtt = std::make_unique<juce::ParameterAttachment> (p, [this] (float) { repaint(); }, um);
+}
+
+void KaminariVocalEditor::TabButton::mouseMove (const juce::MouseEvent& e)
+{
+    const bool h = power != nullptr && boltArea().contains (e.getPosition());
+    if (h != boltHover) { boltHover = h; repaint(); }
+    juce::TextButton::mouseMove (e);
+}
+
+void KaminariVocalEditor::TabButton::mouseExit (const juce::MouseEvent& e)
+{
+    if (boltHover) { boltHover = false; repaint(); }
+    juce::TextButton::mouseExit (e);
+}
+
+void KaminariVocalEditor::TabButton::mouseDown (const juce::MouseEvent& e)
+{
+    if (power != nullptr && boltArea().contains (e.getPosition()))
+    {
+        boltDown = true;
+        repaint();
+        return;   // the icon switches the module; it does not change the page
+    }
+    juce::TextButton::mouseDown (e);
+}
+
+void KaminariVocalEditor::TabButton::mouseDrag (const juce::MouseEvent& e)
+{
+    if (boltDown) return;
+    juce::TextButton::mouseDrag (e);
+}
+
+void KaminariVocalEditor::TabButton::mouseUp (const juce::MouseEvent& e)
+{
+    if (boltDown)
+    {
+        boltDown = false;
+        if (boltArea().contains (e.getPosition()) && powerAtt != nullptr)
+            powerAtt->setValueAsCompleteGesture (isPowerOn() ? 0.0f : 1.0f);
+        repaint();
+        return;
+    }
+    juce::TextButton::mouseUp (e);
+}
+
+juce::String KaminariVocalEditor::TabButton::getTooltip()
+{
+    if (boltHover && power != nullptr)
+        return getButtonText() + (isPowerOn() ? ": on. Click the lightning to bypass it." : ": bypassed. Click the lightning to switch it on.");
+    return juce::TextButton::getTooltip();
 }
