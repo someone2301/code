@@ -12,6 +12,7 @@
 #include "dsp/Oversampled.h"
 #include "dsp/SpectrumAnalyser.h"
 #include "dsp/History.h"
+#include "sends/ReturnFx.h"
 
 // Kaminari Vocal processor.
 //
@@ -77,6 +78,11 @@ public:
     SpectrumAnalyser analyserPre, analyserPost;
     std::atomic<int> analyserMode { 3 };   // 0 Pre, 1 Post, 2 Off, 3 Pre and Post together
     std::atomic<int> analyserResolution { SpectrumProcessor::High }, analyserSpeed { SpectrumProcessor::Fast };
+    // Reverb (0) and Delay (1) returns: EQ band being auditioned (-1 = none; not saved), ducking read-out,
+    // spectrum of the return before and after its EQ
+    std::atomic<int> returnEqSolo[2] { -1, -1 };
+    std::array<std::atomic<float>, 2> duckGr {};
+    SpectrumAnalyser retAnalyserPre[2], retAnalyserPost[2];
     std::atomic<int> eqSolo { -1 };         // band being auditioned (-1 = none); not saved
 
     // Level histories for the Compression and De-ess displays (about 2.7 ms per entry at 48 kHz).
@@ -151,7 +157,11 @@ private:
     kv::Oversampled<kv::DeEsser> deesser;
     int mbOs = 0, dsOs = 0, rsOs = 0;
     std::array<juce::SmoothedValue<float>, numModules> moduleFade;   // 10 ms bypass crossfades (EQ, Multiband, Resonance)
-    juce::AudioBuffer<float> work, dryCopy, soloIn, scDetector;
+    juce::AudioBuffer<float> work, dryCopy, soloIn, scDetector, routeBuf;
+    kv::ReturnEq returnEq[2];
+    kv::Ducker ducker[2];
+    kv::ReturnEqSettings readReturnEq (int r) const;
+    kv::DuckSettings readDuck (int r) const;
     kv::Biquad soloBp[2];
     juce::ValueTree abState[2];
     int abSlot = 0;

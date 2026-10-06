@@ -1003,6 +1003,88 @@ int main (int argc, char** argv)
         check (ok, "Distortion: every style and oversampling setting stays finite and bounded at full drive and bias");
     }
 
+    // ---- Reverb / Delay returns: EQ, ducking, routing ------------------------------------------------------------------
+    {
+        auto toneThrough = [] (kv::ReturnEqSettings s, double f)
+        {
+            kv::ReturnEq eq;
+            eq.prepare (sr);
+            juce::AudioBuffer<float> b (2, 24000);
+            for (int i = 0; i < b.getNumSamples(); ++i)
+                for (int c = 0; c < 2; ++c) b.setSample (c, i, 0.25f * (float) std::sin (2.0 * kv::pi * f * i / sr));
+            for (int start = 0; start < b.getNumSamples(); start += block)
+                eq.process (b.getWritePointer (0, start), b.getWritePointer (1, start), std::min (block, b.getNumSamples() - start), s);
+            return toneDb (b, 0, f, 12000, 24000) - 20.0f * std::log10 (0.25f);
+        };
+        kv::ReturnEqSettings hp; hp.band[0] = { true, 2000.0f, 0.0f, 1.0f };
+        kv::ReturnEqSettings bell; bell.band[1] = { true, 1000.0f, 9.0f, 1.0f };
+        kv::ReturnEqSettings lp; lp.band[3] = { true, 1000.0f, 0.0f, 1.0f };
+        kv::ReturnEqSettings soloS = bell; soloS.solo = 1;
+        const float hpLow = toneThrough (hp, 200.0), hpHigh = toneThrough (hp, 8000.0), bellGain = toneThrough (bell, 1000.0),
+                    lpHigh = toneThrough (lp, 8000.0), soloFar = toneThrough (soloS, 8000.0), soloAt = toneThrough (soloS, 1000.0);
+        check (hpLow < -30.0f && std::abs (hpHigh) < 0.5f && std::abs (bellGain - 9.0f) < 0.3f && lpHigh < -30.0f && soloFar < -15.0f && std::abs (soloAt) < 1.0f,
+               "return EQ: high pass at 2 kHz " + juce::String (hpLow, 1) + " dB at 200 Hz / " + juce::String (hpHigh, 1) + " dB at 8 kHz; bell +9 dB gives "
+               + juce::String (bellGain, 1) + " dB; low pass at 1 kHz " + juce::String (lpHigh, 1) + " dB at 8 kHz; bell solo "
+               + juce::String (soloAt, 1) + " dB at 1 kHz, " + juce::String (soloFar, 1) + " dB at 8 kHz");
+
+        // ducking: the return drops by the depth while the vocal is loud, and recovers when it stops
+        kv::Ducker d;
+        d.prepare (sr);
+        kv::DuckSettings ds; ds.on = true; ds.threshDb = -30.0f; ds.depthDb = 12.0f; ds.attackMs = 5.0f; ds.releaseMs = 100.0f;
+        std::vector<float> l ((size_t) sr), r ((size_t) sr), key ((size_t) sr);
+        for (int i = 0; i < (int) sr; ++i) { l[(size_t) i] = r[(size_t) i] = 0.1f; key[(size_t) i] = i < (int) sr / 2 ? 0.5f * (float) std::sin (0.05 * i) : 0.0f; }
+        d.process (l.data(), r.data(), (int) sr, key.data(), key.data(), ds);
+        const float duckedDb = 20.0f * std::log10 (l[(size_t) sr / 2 - 10] / 0.1f), recoveredDb = 20.0f * std::log10 (l[(size_t) sr - 1] / 0.1f);
+        check (std::abs (duckedDb + 12.0f) < 0.5f && recoveredDb > -0.5f, "ducking: return " + juce::String (duckedDb, 1)
+               + " dB while the vocal is loud (depth 12 dB), " + juce::String (recoveredDb, 2) + " dB 0.5 s after it stops");
+
+        // routing: Delay into Reverb feeds the reverb even with nothing sent to it; Reverb into Delay at full amount stays bounded
+        auto reverbPeak = [] (int route, float amount)
+        {
+            KaminariVocalProcessor p;
+            neutral (p);
+            setParam (p, kvid::rvOn, 1.0f);
+            setParam (p, kvid::rvSend, p.apvts.getParameter (kvid::rvSend)->getNormalisableRange().start);   // Off: nothing sent
+            setParam (p, kvid::dlOn, 1.0f);
+            setParam (p, kvid::dlSend, 0.0f);
+            setParam (p, "fx_route", (float) route);
+            setParam (p, "fx_route_amt", amount);
+            prepare (p);
+            float peak = 0;
+            render (p, 2.0, vocal, [&] (int) { peak = std::max (peak, p.returnPeak[KaminariVocalProcessor::Reverb].load()); });
+            return peak;
+        };
+        const float routedOff = reverbPeak (0, 100.0f), routedOn = reverbPeak (1, 100.0f);
+        float loopPeak = 0;
+        bool finite = true;
+        {
+            KaminariVocalProcessor p;
+            neutral (p);
+            setParam (p, kvid::rvOn, 1.0f); setParam (p, kvid::rvSend, 6.0f); setParam (p, kvid::rvDecay, 20.0f);
+            setParam (p, kvid::dlOn, 1.0f); setParam (p, kvid::dlSend, 6.0f); setParam (p, kvid::dlFeedback, 100.0f);
+            setParam (p, "fx_route", 2.0f); setParam (p, "fx_route_amt", 100.0f);
+            prepare (p);
+            const auto res = render (p, 10.0, vocal, [&] (int) { loopPeak = std::max (loopPeak, p.returnPeak[KaminariVocalProcessor::Delay].load()); });
+            for (int i = 0; i < res.out.getNumSamples(); ++i) finite = finite && std::isfinite (res.out.getSample (0, i));
+        }
+        check (routedOff < 1.0e-6f && routedOn > 1.0e-3f && finite && loopPeak <= 1.0f,
+               "Delay into Reverb: reverb return " + juce::String (routedOn, 4) + " with no reverb send (" + juce::String (routedOff, 6)
+               + " with routing off); Reverb into Delay at 100 % with 100 % feedback stays bounded for 10 s (delay return peak "
+               + juce::String (loopPeak, 3) + ")");
+
+        // ducking in the plug-in: a loud vocal ducks the reverb return by the depth
+        {
+            KaminariVocalProcessor p;
+            neutral (p);
+            setParam (p, kvid::rvOn, 1.0f); setParam (p, kvid::rvSend, 0.0f);
+            setParam (p, "rv_duck_on", 1.0f); setParam (p, "rv_duck_thresh", -40.0f); setParam (p, "rv_duck_depth", 15.0f);
+            prepare (p);
+            float gr = 0;
+            render (p, 1.0, sine (300.0, -6.0f), [&] (int) { gr = std::max (gr, p.duckGr[0].load()); });
+            check (gr > 14.0f && gr <= 15.01f, "Reverb ducking from the vocal: " + juce::String (gr, 1) + " dB reduction (depth 15 dB)");
+        }
+    }
+
     // ---- Compression side-chain detection bands ----------------------------------------------------------------------
     {
         auto compLevel = [] (std::function<void (KaminariVocalProcessor&)> sc)
@@ -1389,6 +1471,16 @@ int main (int argc, char** argv)
             shot (1, kvid::dlMode, 1.0f, "adv_delay_dual.png");
             shot (1, kvid::dlMode, 2.0f, "adv_delay_pingpong.png");
             shot (2, kvid::wdType, 1.0f, "adv_widener_side.png");
+            // Reverb return EQ and Delay ducking / routing views
+            setParam (p, "rv_eq1_on", 1.0f); setParam (p, "rv_eq1_freq", 180.0f);
+            setParam (p, "rv_eq2_on", 1.0f); setParam (p, "rv_eq2_freq", 450.0f); setParam (p, "rv_eq2_gain", -4.0f);
+            setParam (p, "rv_eq4_on", 1.0f); setParam (p, "rv_eq4_freq", 7000.0f);
+            ed->sendsView().showView (1);
+            shot (0, kvid::rvMode, 0.0f, "adv_reverb_eq.png");
+            setParam (p, "dl_duck_on", 1.0f); setParam (p, "fx_route", 1.0f);
+            ed->sendsView().showView (2);
+            shot (1, kvid::dlMode, 0.0f, "adv_delay_duck.png");
+            ed->sendsView().showView (0);
         }
     }
 

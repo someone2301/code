@@ -425,6 +425,33 @@ namespace kvp
         addFloat  (kvid::dlDiffSize, "Delay Diffusion Size", { 0.0f, 100.0f, 0.1f }, 50.0f, pctText);
         addChoice (kvid::dlDiffLoop, "Delay Diffusion Position", { "Post", "Loop" }, 0);
 
+        // Reverb and Delay returns: EQ, ducking, wet gain (DESIGN.md 2.8.4); Delay / Reverb routing
+        for (auto [pre, name] : { std::pair<const char*, const char*> { "rv_", "Reverb" }, { "dl_", "Delay" } })
+        {
+            const String p (pre), n (name);
+            auto qText = [] (float v, int) { return String (v, 2); };
+            const char* bandNames[] = { "High Pass", "Bell 1", "Bell 2", "Low Pass" };
+            const float freqs[] = { 100.0f, 400.0f, 3000.0f, 10000.0f };
+            for (int b = 1; b <= 4; ++b)
+            {
+                const String bp = p + "eq" + String (b) + "_", bn = n + " EQ " + bandNames[b - 1] + " ";
+                addBool ((bp + "on").toRawUTF8(), bn + "On", false);
+                addFloat ((bp + "freq").toRawUTF8(), bn + "Freq", logRange (20.0f, 20000.0f), freqs[b - 1], hzText, {}, freqFromText);
+                if (b == 2 || b == 3)
+                    addFloat ((bp + "gain").toRawUTF8(), bn + "Gain", { -18.0f, 18.0f, 0.01f }, 0.0f, dbText);
+                addFloat ((bp + "q").toRawUTF8(), bn + "Q", logRange (0.1f, 18.0f), 1.0f, qText);
+            }
+            addBool ((p + "duck_on").toRawUTF8(), n + " Ducking On", false);
+            addFloat ((p + "duck_thresh").toRawUTF8(), n + " Ducking Threshold", { -60.0f, 0.0f, 0.1f }, -30.0f, dbText);
+            addFloat ((p + "duck_depth").toRawUTF8(), n + " Ducking Depth", { 0.0f, 30.0f, 0.1f }, 9.0f, dbText);
+            addFloat ((p + "duck_attack").toRawUTF8(), n + " Ducking Attack", logRange (0.1f, 200.0f), 10.0f, msText);
+            addFloat ((p + "duck_release").toRawUTF8(), n + " Ducking Release", logRange (10.0f, 2000.0f), 250.0f, msText);
+            addChoice ((p + "duck_source").toRawUTF8(), n + " Ducking Source", { "Vocal", "Raw Input" }, 0);
+            addFloat ((p + "wet_gain").toRawUTF8(), n + " Wet Gain", { -24.0f, 12.0f, 0.01f }, 0.0f, dbText);
+        }
+        addChoice ("fx_route", "Delay / Reverb Routing", { "Off", "Delay into Reverb", "Reverb into Delay" }, 0);
+        addFloat  ("fx_route_amt", "Delay / Reverb Routing Amount", { 0.0f, 100.0f, 0.1f }, 30.0f, pctText);
+
         // Widener send
         addBool   (kvid::wdOn, "Widener Send On", false);
         addFloat  (kvid::wdSend, "Widener Send", sendRange, -12.0f, sendText, {}, sendFromText);

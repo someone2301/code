@@ -1197,7 +1197,7 @@ namespace kvui
                 for (float x = 0.0f; x <= a.getWidth(); x += 2.0f)
                 {
                     const float y = juce::jlimit (-20.0f, a.getHeight() + 20.0f, yForDb (magnitudeDb (b, freqForX (x), fs)));
-                    if (p.isEmpty()) p.startNewSubPath (x, y); else p.lineTo (x, y);
+                    if (x < 1.0f) p.startNewSubPath (x, y); else p.lineTo (x, y);
                 }
                 juce::Path fill (p);
                 fill.lineTo (a.getRight(), yForDb (0.0));
@@ -1219,7 +1219,7 @@ namespace kvui
                     for (int i = 0; i < numBands; ++i)
                         if (const auto b = band (i); b.active()) db += magnitudeDb (b, freqForX (x), fs);
                     const float y = juce::jlimit (-20.0f, a.getHeight() + 20.0f, yForDb (db));
-                    if (total.isEmpty()) total.startNewSubPath (x, y); else total.lineTo (x, y);
+                    if (x < 1.0f) total.startNewSubPath (x, y); else total.lineTo (x, y);
                 }
                 g.setColour (white.withAlpha (0.9f));
                 g.strokePath (total, juce::PathStrokeType (1.6f));

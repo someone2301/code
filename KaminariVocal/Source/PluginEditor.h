@@ -34,6 +34,7 @@ public:
     kvui::FlangerPage& flangerPanel() { return flangerPage; }
     kvui::DistortionPage& distortionPanel() { return distortionPage; }
     kvui::CompressionPage& compressionPanel() { return compressionPage; }
+    kvui::SendsPage& sendsView() { return sendsPage; }
     kvui::MultibandPage& multibandPanel() { return multibandPage; }
     kvui::ResonancePage& resonancePanel() { return resonancePage; }
     kvui::TunePage& tunePage() { return tunePage_; }
