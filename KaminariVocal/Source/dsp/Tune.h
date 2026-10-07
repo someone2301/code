@@ -365,6 +365,7 @@ namespace kv
         {
             generateMarks();
             const long long m = nIn - 1 - latency;   // input time of the sample played now
+            if (m < 0) { wet[0] = wet[1] = 0.0f; return; }   // the lookahead is still filling (after a reset)
             const Frame* fm = frameAt (m);
             const bool v = fm != nullptr && fm->voiced;
             const float vib = vibrato (s, v);

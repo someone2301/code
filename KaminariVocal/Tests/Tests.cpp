@@ -192,6 +192,84 @@ int main (int argc, char** argv)
 {
     juce::ScopedJuceInitialiser_GUI init;
 
+    // ---- optional benchmark (KV_BENCH=1): audio cost per block and drawing cost per frame -------------------------
+    if (std::getenv ("KV_BENCH") != nullptr)
+    {
+        auto runDsp = [] (const char* name, std::function<void (KaminariVocalProcessor&)> setup)
+        {
+            constexpr int bs = 128;
+            KaminariVocalProcessor p;
+            setup (p);
+            p.setPlayConfigDetails (2, 2, sr, bs);
+            p.prepareToPlay (sr, bs);
+            juce::AudioBuffer<float> buf (2, bs); juce::MidiBuffer midi;
+            const int blocks = (int) (20.0 * sr / bs);
+            std::vector<double> t ((size_t) blocks);
+            long n = 0;
+            for (int b = 0; b < blocks; ++b)
+            {
+                for (int i = 0; i < bs; ++i, ++n) { const float v = vocal (0, n); buf.setSample (0, i, v); buf.setSample (1, i, v); }
+                const auto t0 = juce::Time::getHighResolutionTicks();
+                p.processBlock (buf, midi);
+                t[(size_t) b] = juce::Time::highResolutionTicksToSeconds (juce::Time::getHighResolutionTicks() - t0);
+            }
+            double sum = 0; for (double v : t) sum += v;
+            std::sort (t.begin(), t.end());
+            const double budget = bs / sr;
+            std::printf ("[BENCH] %-46s mean %5.1f %%  99.9th pct %5.1f %%  worst %5.1f %% of the 128-sample block time\n", name,
+                         100.0 * sum / blocks / budget, 100.0 * t[(size_t) (blocks * 0.999)] / budget, 100.0 * t.back() / budget);
+        };
+        auto busy = [] (KaminariVocalProcessor& p)
+        {
+            p.presets.loadChainPreset ("Pop Lead");
+            for (auto* id : { "tn_on", "eq_on", "mb_on", "lv_on", "fl_on", "dt_on", "ds_on", "rs_on" }) setParam (p, id, 1.0f);
+            for (int k = 0; k < numSends; ++k) { setParam (p, sendOn[k], 1.0f); setParam (p, sendLevel[k], -10.0f); }
+        };
+        runDsp ("default session", [] (KaminariVocalProcessor&) {});
+        runDsp ("Tune only, Tracking", [] (KaminariVocalProcessor& p) { neutral (p); setParam (p, "tn_on", 1.0f); });
+        runDsp ("Tune only, High quality (Deep)", [] (KaminariVocalProcessor& p) { neutral (p); setParam (p, "tn_on", 1.0f); setParam (p, "tn_quality", 1.0f); setParam (p, "tn_range", 3.0f); });
+        runDsp ("every module + 3 sends, Tracking", busy);
+        runDsp ("every module + 3 sends, High quality", [&] (KaminariVocalProcessor& p) { busy (p); setParam (p, "tn_quality", 1.0f); });
+        runDsp ("every module + sends + 4x oversampling (4)", [&] (KaminariVocalProcessor& p)
+        { busy (p); for (auto* id : { "dt_os", "mb_os", "ds_os", "rs_os" }) setParam (p, id, 2.0f); });
+
+        // drawing: one frame of each animated view, software renderer
+        auto timePaint = [] (const char* name, juce::Component& c, float scale, std::function<void()> tick)
+        {
+            juce::Image img (juce::Image::ARGB, juce::roundToInt (c.getWidth() * scale), juce::roundToInt (c.getHeight() * scale), true);
+            const int frames = 120;
+            double total = 0, worst = 0;
+            for (int f = 0; f < frames; ++f)
+            {
+                if (tick) tick();
+                juce::Graphics g (img);
+                g.addTransform (juce::AffineTransform::scale (scale));
+                const auto t0 = juce::Time::getHighResolutionTicks();
+                c.paintEntireComponent (g, true);
+                const double dt = juce::Time::highResolutionTicksToSeconds (juce::Time::getHighResolutionTicks() - t0);
+                total += dt; worst = std::max (worst, dt);
+            }
+            std::printf ("[BENCH] draw %-41s mean %5.2f ms  worst %5.2f ms per frame (%.0f %% of one 60 Hz frame)\n", name,
+                         1000.0 * total / frames, 1000.0 * worst, 100.0 * (total / frames) / (1.0 / 60.0));
+        };
+        KaminariVocalProcessor p;
+        prepare (p);
+        setParam (p, "mb1_thresh", -50.0f);
+        LightningSlider h (*p.apvts.getParameter ("mb1_thresh"), p.hostTempo, "Threshold", true);
+        h.setCompact (true);
+        h.setBounds (0, 0, 150, 180);
+        timePaint ("one hammer at full pull (1x)", h, 1.0f, [&] { h.advanceAnimation (16.7); });
+        timePaint ("one hammer at full pull (2x Retina)", h, 2.0f, [&] { h.advanceAnimation (16.7); });
+        busy (p);
+        std::unique_ptr<KaminariVocalEditor> ed (dynamic_cast<KaminariVocalEditor*> (p.createEditor()));
+        ed->showTab (false, KaminariVocalEditor::TabTune);
+        timePaint ("whole window, Basic view (1x)", *ed, 1.0f, nullptr);
+        timePaint ("whole window, Basic view (2x Retina)", *ed, 2.0f, nullptr);
+        ed->showTab (true, KaminariVocalEditor::TabEq);
+        timePaint ("whole window, EQ page (2x Retina)", *ed, 2.0f, nullptr);
+        return 0;
+    }
+
     // ---- routing and levels ---------------------------------------------------------------------------------------
     {
         KaminariVocalProcessor p;

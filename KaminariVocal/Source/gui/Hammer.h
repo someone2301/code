@@ -139,6 +139,11 @@ public:
         const bool glowMoved = std::abs (g - glow) > 0.004f;
         if (glowMoved) glow = g;
         const bool animating = intensity() > 0.0f || ! bolts.empty() || ! particles.empty();
+        // Frame pacing: while a frame takes longer than about 2.5 ms to draw (slow graphics, several hammers moving),
+        // the lightning is redrawn on every other display frame (30 fps on a 60 Hz screen) so the host's interface
+        // stays responsive. The motion is time-based, so it keeps the same speed.
+        if (animating && paintMsAvg > 2.5 && (++frameParity & 1) != 0)
+            return;
         if (animating) tick (nowMs);
         else animMs = nowMs;
         if (animating || (glowMoved && norm > 0.0f))
@@ -147,6 +152,16 @@ public:
 
     //==================================================================================================================
     void paint (juce::Graphics& g) override
+    {
+        const auto paintStart = juce::Time::getHighResolutionTicks();
+        paintBody (g);
+        const double ms = 1000.0 * juce::Time::highResolutionTicksToSeconds (juce::Time::getHighResolutionTicks() - paintStart);
+        paintMsAvg += (ms - paintMsAvg) * 0.1;
+    }
+
+    double averagePaintMs() const noexcept { return paintMsAvg; }
+
+    void paintBody (juce::Graphics& g)
     {
         auto b = getLocalBounds().toFloat();
         if (captionHeight > 0.0f)
@@ -853,6 +868,12 @@ private:
         g.saveState();
         if (! auraOuter.isEmpty()) g.reduceClipRegion (auraOuter);
         const float depth = frontLayer ? 1.0f : 0.5f;
+        // The wide, faint glow is the costly part to rasterise, so it is drawn once for all of this layer's bolts (one
+        // path, average strength); each bolt's body and core keep their own flicker.
+        juce::Path glowPath;
+        float glowAlpha = 0.0f, glowWidth = 0.0f;
+        int count = 0;
+        drawn.clear();
         for (auto& b : bolts)
         {
             if (b.front != frontLayer) continue;
@@ -862,12 +883,21 @@ private:
             alpha *= depth;
             if (alpha <= 0.02f) continue;
             const float w = b.width * (b.layer == Surge ? 1.0f + 0.4f * surge : 1.0f) * (frontLayer ? 1.0f : 0.75f);
-            g.setColour (colours.bolt.withAlpha (0.14f * alpha));
-            g.strokePath (b.path, stroke (w * 7.0f));
-            g.setColour (colours.bolt.withAlpha (0.7f * alpha));
-            g.strokePath (b.path, stroke (w * 2.6f));
-            g.setColour (colours.core.withAlpha (alpha));
-            g.strokePath (b.path, stroke (w * 0.9f));
+            glowPath.addPath (b.path);
+            glowAlpha += alpha; glowWidth += w; ++count;
+            drawn.push_back ({ &b, alpha, w });
+        }
+        if (count > 0)
+        {
+            g.setColour (colours.bolt.withAlpha (0.14f * glowAlpha / (float) count));
+            g.strokePath (glowPath, stroke (7.0f * glowWidth / (float) count));
+        }
+        for (auto& d : drawn)
+        {
+            g.setColour (colours.bolt.withAlpha (0.7f * d.alpha));
+            g.strokePath (d.bolt->path, stroke (d.width * 2.6f));
+            g.setColour (colours.core.withAlpha (d.alpha));
+            g.strokePath (d.bolt->path, stroke (d.width * 0.9f));
         }
         g.restoreState();
     }
@@ -905,6 +935,8 @@ private:
     }
 
     std::vector<Bolt> bolts;
+    struct DrawnBolt { const Bolt* bolt; float alpha, width; };
+    std::vector<DrawnBolt> drawn;   // reused each frame (no allocation while animating)
     std::vector<Particle> particles;
     juce::Random rng;
     double animMs = 0, nextSurgeMs = 0;
@@ -923,6 +955,8 @@ private:
     juce::Path body, detail;
 
     float norm = 0.0f, dragNorm = 0.0f, lastY = 0.0f, glow = HostTempo::steadyGlow;
+    double paintMsAvg = 0.0;
+    unsigned frameParity = 0;
     bool dragging = false;
 
     juce::VBlankAttachment vblank { this, std::function<void()> ([this] { updateGlow (juce::Time::getMillisecondCounterHiRes()); }) };
