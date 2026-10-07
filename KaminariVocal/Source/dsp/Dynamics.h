@@ -46,7 +46,7 @@ namespace kv
         {
             fs = (float) sampleRate;
             for (auto& d : look) d.prepare ((int) (0.021 * fs) + 4);
-            makeup.prepare (fs, 200.0f);
+            makeup.prepare (fs, 300.0f);
             reset();
         }
 
@@ -57,13 +57,38 @@ namespace kv
             rms[0] = rms[1] = 0;
             for (auto& ch : scState) for (auto& b : ch) for (auto& z : b) z = {};
             makeup.snap (0.0f);
+            inPow = outPow = 0.0; activeSec = 0.0f; fastPow = 0.0f; agCount = 0;
         }
 
-        // Static makeup used by Auto Gain (DESIGN.md 2.4): half the reduction a 0 dBFS signal gets, at most 12 dB.
+        // Starting point for Auto Gain before any audio has been measured: half the reduction a -12 dBFS signal
+        // gets, at most 12 dB.
         static float staticMakeup (const CompressorSettings& s)
         {
-            const float g = std::min (s.rangeDb, downwardGr (0.0f, s.threshDb, s.ratio, s.kneeDb));
+            const float g = std::min (s.rangeDb, downwardGr (-12.0f, s.threshDb, s.ratio, s.kneeDb));
             return std::min (12.0f, 0.5f * g);
+        }
+
+        // Auto Gain (loudness match): the makeup is the level difference between the input and the compressed signal,
+        // averaged over the last couple of seconds in which the vocal was actually sounding (pauses and tails below
+        // -50 dBFS are ignored). The compressed vocal therefore comes out as loud as it went in, whatever the
+        // threshold, ratio or style. The first second adapts faster.
+        void updateAutoGain (float in, float compressed)
+        {
+            const float p = in * in;
+            fastPow = p + fastC * (fastPow - p);   // 50 ms level for the gate
+            if (fastPow > gatePow)
+            {
+                activeSec += 1.0f / fs;
+                const double c = activeSec < 1.0f ? warmC : slowC;
+                inPow = p + c * (inPow - p);
+                outPow = compressed * compressed + c * (outPow - compressed * compressed);
+            }
+            if (++agCount >= 64)
+            {
+                agCount = 0;
+                if (activeSec > 0.05f && outPow > 1.0e-12)
+                    makeup.setTarget (std::clamp (10.0f * (float) std::log10 (inPow / outPow), 0.0f, 24.0f));
+            }
         }
 
         // detectorOut (optional, n samples): the mono signal the detector hears, after the side-chain bands and level
@@ -101,7 +126,9 @@ namespace kv
             const float wetGain = dbToGain (s.wetGainDb);
             const float dryGain = s.dryDb <= -60.0f ? 0.0f : dbToGain (s.dryDb);
             const float outGain = dbToGain (s.outGainDb);
-            makeup.setTarget (s.autoGain ? staticMakeup (s) : 0.0f);
+            if (! s.autoGain) { makeup.setTarget (0.0f); activeSec = 0.0f; inPow = outPow = 0.0; }
+            else if (activeSec <= 0.05f) makeup.setTarget (staticMakeup (s));
+            fastC = coeffMs (50.0f, fs); warmC = std::exp (-1.0 / (0.3 * fs)); slowC = std::exp (-1.0 / (2.5 * fs));
             const int la = std::clamp (s.lookaheadSamples, 0, look[0].capacity() - 2);
             float maxGr = 0.0f;
 
@@ -161,6 +188,13 @@ namespace kv
                 maxGr = std::max (maxGr, gr);
 
                 const float g = dbToGain (-gr + makeup.next());
+                if (s.autoGain)
+                {
+                    // measured on the delayed input (what the gain is applied to) against the reduced signal
+                    const float in0 = la > 0 ? look[0].readInt (la - 1) : x[0], in1 = la > 0 ? look[1].readInt (la - 1) : x[1];
+                    const float louder = std::abs (in0) > std::abs (in1) ? in0 : in1;
+                    updateAutoGain (louder, louder * dbToGain (-gr));
+                }
                 for (int c = 0; c < 2; ++c)
                 {
                     look[c].push (x[c]);
@@ -183,6 +217,10 @@ namespace kv
         float fs = 48000.0f;
         DelayLine look[2];
         Smoother makeup;
+        double inPow = 0.0, outPow = 0.0, warmC = 0.0, slowC = 0.0;
+        float fastPow = 0.0f, fastC = 0.0f, activeSec = 0.0f;
+        int agCount = 0;
+        static constexpr float gatePow = 1.0e-5f;   // -50 dBFS
         struct ScState { double z1 = 0, z2 = 0; };
         EqDesign scDesign[CompressorSettings::numScBands];
         ScState scState[2][CompressorSettings::numScBands][4];

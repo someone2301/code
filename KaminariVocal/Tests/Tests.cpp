@@ -772,6 +772,33 @@ int main (int argc, char** argv)
         check (p.moduleGr[KaminariVocalProcessor::ModCompression].load() > 8.0f, "Compression reports its gain reduction to the meter");
     }
     {
+        // Compression Auto Gain matches the loudness: with light and heavy settings and every style, the vocal comes
+        // out as loud as it went in (measured over the last two seconds of a four-second phrase)
+        auto rmsDb = [] (const juce::AudioBuffer<float>& b, int from, int to)
+        {
+            double e = 0;
+            for (int i = from; i < to; ++i) e += (double) b.getSample (0, i) * b.getSample (0, i);
+            return 10.0 * std::log10 (e / (to - from) + 1e-20);
+        };
+        struct Setting { float thresh, ratio; int style; };
+        double worst = 0;
+        juce::String detail;
+        for (auto st : { Setting { -18.0f, 2.0f, 0 }, Setting { -35.0f, 8.0f, 0 }, Setting { -30.0f, 4.0f, 1 }, Setting { -30.0f, 4.0f, 2 },
+                         Setting { -30.0f, 4.0f, 3 }, Setting { -30.0f, 4.0f, 4 } })
+        {
+            KaminariVocalProcessor p;
+            neutral (p);
+            setParam (p, "lv_on", 1.0f); setParam (p, "lv_thresh", st.thresh); setParam (p, "lv_ratio", st.ratio);
+            setParam (p, "lv_style", (float) st.style); setParam (p, "lv_auto_gain", 1.0f); setParam (p, "lv_range", 40.0f);
+            prepare (p);
+            const auto r = render (p, 4.0, vocal);
+            const double d = rmsDb (r.out, (int) (2.0 * sr), (int) (4.0 * sr)) - rmsDb (r.in, (int) (2.0 * sr), (int) (4.0 * sr));
+            worst = std::max (worst, std::abs (d));
+            detail << juce::String (d, 1) << " ";
+        }
+        check (worst < 1.5, "Compression Auto Gain keeps the vocal as loud as the input in every style (differences in dB: " + detail.trim() + ")");
+    }
+    {
         // De-ess: 7 kHz is reduced by about its range, 300 Hz is untouched (split band)
         KaminariVocalProcessor p;
         neutral (p);
