@@ -487,7 +487,7 @@ namespace kvui
             {
                 tuning = std::make_unique<TuneRangeView> (p);
                 addAndMakeVisible (*tuning);
-                for (auto* id : { "tn_key", "tn_scale", "tn_range" })
+                for (auto* id : { "tn_key", "tn_scale" })
                 {
                     auto* cb = tuneBoxes.add (new juce::ComboBox());
                     auto* prm = dynamic_cast<juce::AudioParameterChoice*> (p.apvts.getParameter (id));
@@ -578,41 +578,41 @@ namespace kvui
             {
                 g.setColour (mist);
                 g.setFont (font (10.0f, 1, 0.1f));
-                const char* labels[] = { "KEY", "SCALE", "RANGE" };
+                const char* labels[] = { "KEY", "SCALE" };
                 for (int i = 0; i < tuneBoxes.size(); ++i)
-                    g.drawText (labels[i], tuneBoxes[i]->getX(), tuneBoxes[i]->getY() - 14, 60, 12, juce::Justification::centredLeft);
+                    g.drawText (labels[i], tuneBoxes[i]->getX(), tuneBoxes[i]->getY() - 13, 60, 12, juce::Justification::centredLeft);
             }
         }
+
+        // Every card gives its hammer the same area: the controls below it take the same height on every card.
+        static constexpr int controlsHeight = 112;
 
         void resized() override
         {
             auto b = getLocalBounds().reduced (10, 8);
             power.setBounds (b.getX(), b.getY() + 2, 28, 28);
             b.removeFromTop (36);
+            const auto art = b.removeFromTop (juce::jmax (40, b.getHeight() - controlsHeight));
+            hammer.setBounds (art.withSizeKeepingCentre (juce::jmin (art.getWidth(), 140), art.getHeight()));
             auto bottom = b.removeFromBottom (24);
             open.setBounds (bottom);
             b.removeFromBottom (4);
             if (module == KaminariVocalProcessor::ModTune)
             {
+                // Retune Speed line, tuning view, KEY / SCALE
                 auto row = b.removeFromBottom (24);
-                b.removeFromBottom (16);
-                const int w = (row.getWidth() - 8) / 3;
+                b.removeFromBottom (14);
+                const int w = (row.getWidth() - 4) / 2;
                 for (auto* cb : tuneBoxes) { cb->setBounds (row.removeFromLeft (w).reduced (1, 0)); row.removeFromLeft (4); }
-                tuning->setBounds (b.removeFromBottom (29).reduced (2, 0));
-                b.removeFromBottom (2);
-                infoArea = b.removeFromBottom (20);
-                hammer.setBounds (b.withSizeKeepingCentre (juce::jmin (b.getWidth(), 140), b.getHeight()));
+                tuning->setBounds (b.removeFromBottom (28).reduced (2, 0));
+                infoArea = b.removeFromBottom (18);
                 return;
             }
-            else
-            {
-                footerArea = b.removeFromBottom (18);
-                b.removeFromBottom (2);
-                grArea = b.removeFromBottom (20);
-            }
+            footerArea = b.removeFromBottom (18);
+            b.removeFromBottom (2);
+            grArea = b.removeFromBottom (20);
             b.removeFromBottom (4);
             infoArea = b.removeFromBottom (38);
-            hammer.setBounds (b.withSizeKeepingCentre (juce::jmin (b.getWidth(), 140), b.getHeight()));
         }
 
         PowerButton power;

@@ -302,12 +302,12 @@ void KaminariVocalEditor::layoutRoot()
         body.removeFromTop (12);
         auto sends = body.removeFromBottom (64);
         body.removeFromBottom (12);
-        // the Tune card is wider: it also holds Key, Scale and Range
+        // all module cards (and so their hammers) are the same size
         const int nc = (int) cards.size(), gap = 8;
-        const float unit = (float) (body.getWidth() - (nc - 1) * gap) / ((float) nc + 0.3f);
+        const float unit = (float) (body.getWidth() - (nc - 1) * gap) / (float) nc;
         for (size_t i = 0; i < cards.size(); ++i)
         {
-            const int w = i + 1 == cards.size() ? body.getWidth() : juce::roundToInt (unit * (i == 0 ? 1.3f : 1.0f));
+            const int w = i + 1 == cards.size() ? body.getWidth() : juce::roundToInt (unit);
             cards[i]->setBounds (body.removeFromLeft (w));
             body.removeFromLeft (gap);
         }

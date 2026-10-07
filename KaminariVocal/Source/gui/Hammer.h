@@ -344,7 +344,7 @@ private:
         auto b = getLocalBounds().toFloat();
         b.removeFromTop (captionHeight);
         b.removeFromBottom ((float) valueHeight + (valueHeight > 0 ? 2.0f : 0.0f));
-        b.removeFromTop (juce::jmin (10.0f, b.getHeight() * 0.07f));   // room above the head for the aura's flame
+        b.removeFromTop (juce::jmin (16.0f, b.getHeight() * 0.1f));   // room above the head for the aura's flame
         return b.reduced (0.0f, 2.0f);
     }
 
@@ -442,7 +442,7 @@ private:
     //==================================================================================================================
     // Charged-up effect: aura, lightning and particles
 
-    enum Layer { Crawl, Branch, Surge };
+    enum Layer { Crawl, Branch, Wrap, Surge };
 
     struct Bolt
     {
@@ -463,6 +463,15 @@ private:
 
     float rand01() { return rng.nextFloat(); }
     float randIn (float lo, float hi) { return lo + (hi - lo) * rng.nextFloat(); }
+
+    // Grip and pommel area (below the head).
+    juce::Rectangle<float> gripBox() const
+    {
+        const auto a = artArea();
+        const auto head = headBounds();
+        const float gw = juce::jlimit (5.0f, 9.0f, head.getWidth() * 0.12f);
+        return juce::Rectangle<float>::leftTopRightBottom (a.getCentreX() - gw, head.getBottom(), a.getCentreX() + gw, a.getBottom());
+    }
 
     // A point on the hammer's outline (head sides and top, grip, pommel), with the outward direction there.
     std::pair<juce::Point<float>, float> pointOnHammer (bool headBias)
@@ -511,7 +520,7 @@ private:
 
     void spawnBolt (int layer, float I)
     {
-        if (bolts.size() >= 70) return;
+        if (bolts.size() >= 110) return;
         const auto a = artArea();
         const float reach = juce::jmax (a.getWidth(), a.getHeight());
         Bolt b;
@@ -522,12 +531,38 @@ private:
         {
             case Crawl:
             {
-                // small arcs that skitter over and just off the hammer
-                auto [p, ang] = pointOnHammer (true);
-                addJagged (b.path, p, ang + juce::MathConstants<float>::pi * randIn (0.4f, 0.6f) * (rand01() < 0.5f ? 1.0f : -1.0f),
-                           reach * randIn (0.05f, 0.11f) * (0.7f + 0.6f * I), 3 + rng.nextInt (3), 2.0f, 0);
-                b.life = randIn (55.0f, 130.0f) * faster;
-                b.width = randIn (0.8f, 1.2f);
+                // small arcs crackling all over the hammer: on the head and grip as well as just off their edges
+                juce::Point<float> p;
+                float ang;
+                if (rand01() < 0.55f)
+                {
+                    const auto box = rand01() < 0.6f ? headBounds() : gripBox();
+                    p = { randIn (box.getX(), box.getRight()), randIn (box.getY(), box.getBottom()) };
+                    ang = randIn (0.0f, juce::MathConstants<float>::twoPi);
+                }
+                else
+                {
+                    auto [q, a0] = pointOnHammer (true);
+                    p = q;
+                    ang = a0 + juce::MathConstants<float>::pi * randIn (0.4f, 0.6f) * (rand01() < 0.5f ? 1.0f : -1.0f);
+                }
+                addJagged (b.path, p, ang, reach * randIn (0.05f, 0.12f) * (0.7f + 0.6f * I), 3 + rng.nextInt (3), 2.2f, rand01() < 0.25f ? 1 : 0);
+                b.life = randIn (45.0f, 120.0f) * faster;
+                b.width = randIn (0.7f, 1.15f);
+                break;
+            }
+            case Wrap:
+            {
+                // a bolt across the hammer from one side to the other, as if wrapped around it
+                const bool onHead = rand01() < 0.55f;
+                const auto box = onHead ? headBounds() : gripBox();
+                const bool fromLeft = rand01() < 0.5f;
+                const float span = box.getWidth() + randIn (14.0f, 30.0f) * (0.6f + 0.6f * I);
+                const juce::Point<float> p { fromLeft ? box.getX() - span * 0.2f : box.getRight() + span * 0.2f, randIn (box.getY(), box.getBottom()) };
+                addJagged (b.path, p, (fromLeft ? 0.0f : juce::MathConstants<float>::pi) + randIn (-0.35f, 0.35f), span * 1.25f,
+                           6 + rng.nextInt (4), 2.8f, 1);
+                b.life = randIn (70.0f, 160.0f) * faster;
+                b.width = randIn (0.9f, 1.4f);
                 break;
             }
             case Branch:
@@ -540,9 +575,21 @@ private:
             }
             default:
             {
-                // surge: long bolts thrown well clear of the hammer
-                auto [p, ang] = pointOnHammer (rand01() < 0.6f);
-                addJagged (b.path, p, ang, reach * randIn (0.32f, 0.55f) * (0.75f + 0.5f * I), 8 + rng.nextInt (5), 4.5f, 2);
+                // surge: either a long bolt thrown well clear of the hammer, or one running the hammer's length
+                if (rand01() < 0.45f)
+                {
+                    const auto a2 = artArea();
+                    const bool up = rand01() < 0.6f;
+                    const juce::Point<float> p { a2.getCentreX() + randIn (-headBounds().getWidth() * 0.4f, headBounds().getWidth() * 0.4f),
+                                                 up ? a2.getBottom() : a2.getY() };
+                    addJagged (b.path, p, (up ? -1.0f : 1.0f) * juce::MathConstants<float>::halfPi + randIn (-0.2f, 0.2f), a2.getHeight() * 1.05f,
+                               10 + rng.nextInt (5), 4.0f, 2);
+                }
+                else
+                {
+                    auto [p, ang] = pointOnHammer (rand01() < 0.6f);
+                    addJagged (b.path, p, ang, reach * randIn (0.32f, 0.55f) * (0.75f + 0.5f * I), 8 + rng.nextInt (5), 4.5f, 2);
+                }
                 b.life = randIn (180.0f, 380.0f) * faster;
                 b.width = randIn (1.5f, 2.2f);
                 break;
@@ -589,8 +636,9 @@ private:
             acc += rate * dt * randIn (0.4f, 1.6f);
             while (acc >= 1.0f) { acc -= 1.0f; make(); }
         };
-        emit (accCrawl,  10.0f + 150.0f * I,          [&] { spawnBolt (Crawl, I); });
-        emit (accBranch, 1.5f + 34.0f * I * I,      [&] { spawnBolt (Branch, I); });
+        emit (accCrawl,  24.0f + 230.0f * I,        [&] { spawnBolt (Crawl, I); });
+        emit (accWrap,   2.0f + 22.0f * I,          [&] { spawnBolt (Wrap, I); });
+        emit (accBranch, 2.0f + 36.0f * I * I,      [&] { spawnBolt (Branch, I); });
         emit (accSpark,  5.0f + 40.0f * I,          [&] { spawnParticle (I, false); });
         emit (accWisp,   1.5f + 9.0f * I,           [&] { spawnParticle (I, true); });
 
@@ -605,59 +653,92 @@ private:
         }
     }
 
-    // DBZ-style aura: flame-shaped, white inside, blue at the edge with an outline, licking upwards.
-    void paintAura (juce::Graphics& g, float I, float pulse)
+    // Super Saiyan 2 style aura: a jagged flame of sharp tongues that lean upwards and flicker fast, following the
+    // hammer's silhouette (wide around the head, narrow along the grip), in three layers (translucent blue, lighter
+    // blue, white core) with crisp outlines. Tongue tips are kept inside the control (shortened, never cut off).
+    juce::Path auraLayer (float pad, int tongues, float tongueLen, float t, int seedOffset) const
     {
         const auto a = artArea();
         const auto head = headBounds();
-        const float t = (float) (animMs * 0.001);
-        const float rx = head.getWidth() * 0.5f + 6.0f + 16.0f * I, ry = a.getHeight() * 0.5f + 4.0f + 10.0f * I;
-        const juce::Point<float> c { a.getCentreX(), a.getCentreY() + 2.0f };
-        juce::Path aura;
-        constexpr int n = 72;
-        for (int k = 0; k <= n; ++k)
+        const auto room = getLocalBounds().toFloat().reduced (2.0f);
+        const float cx = a.getCentreX();
+        const float gripHalf = juce::jlimit (5.0f, 9.0f, head.getWidth() * 0.12f) + 4.0f;
+        // half-width of the silhouette at height y (+ pad): the head, then a short taper to the grip
+        auto halfWidth = [&] (float y)
         {
-            const float th = juce::MathConstants<float>::twoPi * (float) k / (float) n;
-            const float up = std::max (0.0f, -std::sin (th));   // 1 at the top
-            const float flick = 0.10f * std::sin (6.0f * th + t * 9.0f) + 0.07f * std::sin (11.0f * th - t * 14.0f)
-                              + 0.05f * std::sin (17.0f * th + t * 23.0f);
-            const float r = 1.0f + (0.35f + 0.6f * I) * flick + up * up * (0.25f + 0.35f * I) * (0.8f + 0.4f * std::sin (t * 6.0f + th * 3.0f));
-            const juce::Point<float> pt { c.x + rx * r * std::cos (th), c.y + ry * r * std::sin (th) - up * up * ry * 0.25f * I };
-            if (k == 0) aura.startNewSubPath (pt); else aura.lineTo (pt);
-        }
-        aura.closeSubPath();
+            const float taper = juce::jlimit (0.0f, 1.0f, (y - head.getBottom()) / (head.getHeight() * 0.6f));
+            return pad + head.getWidth() * 0.5f + (gripHalf - head.getWidth() * 0.5f) * taper * 0.75f;
+        };
+        const float top = head.getY() - pad * 0.6f, bottom = a.getBottom() + pad * 0.4f;
+        // contour: right side bottom -> top, over the top, left side top -> bottom, under the pommel
+        std::vector<juce::Point<float>> pts;
+        constexpr int side = 24, cap = 10;
+        for (int k = 0; k <= side; ++k) { const float y = bottom + (top - bottom) * (float) k / side; pts.push_back ({ cx + halfWidth (y), y }); }
+        for (int k = 1; k < cap; ++k)
         {
-            // keep the whole aura (and its outer glow) inside the component, so no edge is cut off
-            const auto room = getLocalBounds().toFloat().reduced (5.0f + 4.0f * I);
-            const auto pb = aura.getBounds();
-            const float k = juce::jmin (1.0f, room.getWidth() / juce::jmax (1.0f, pb.getWidth()),
-                                        room.getHeight() / juce::jmax (1.0f, pb.getHeight()));
-            aura.applyTransform (juce::AffineTransform::scale (k, k, c.x, c.y));
-            const auto fb = aura.getBounds();
-            aura.applyTransform (juce::AffineTransform::translation (juce::jmax (0.0f, room.getX() - fb.getX()) - juce::jmax (0.0f, fb.getRight() - room.getRight()),
-                                                                     juce::jmax (0.0f, room.getY() - fb.getY()) - juce::jmax (0.0f, fb.getBottom() - room.getBottom())));
+            const float th = juce::MathConstants<float>::pi * (float) k / cap;
+            const float w = halfWidth (top);
+            pts.push_back ({ cx + w * std::cos (th), top - pad * 0.5f * std::sin (th) });
         }
-        const float bright = juce::jlimit (0.0f, 1.0f, (0.35f + 0.55f * I) * (0.8f + 0.2f * pulse) + 0.35f * surge);
+        for (int k = 0; k <= side; ++k) { const float y = top + (bottom - top) * (float) k / side; pts.push_back ({ cx - halfWidth (y), y }); }
+        for (int k = 1; k < cap; ++k)
+        {
+            const float th = juce::MathConstants<float>::pi * (float) k / cap;
+            const float w = halfWidth (bottom);
+            pts.push_back ({ cx - w * std::cos (th), bottom + pad * 0.3f * std::sin (th) });
+        }
+        const int n = (int) pts.size();
+        juce::Path p;
+        const int step = juce::jmax (1, n / tongues);
+        for (int k = 0; k < n; k += step)
+        {
+            const auto v = pts[(size_t) k];
+            if (k == 0) p.startNewSubPath (v); else p.lineTo (v);
+            // tongue halfway to the next valley: out along the contour's normal, leaning up like a flame
+            const int m = std::min (n - 1, k + step / 2);
+            const auto b = pts[(size_t) m];
+            const auto tangent = pts[(size_t) std::min (n - 1, m + 1)] - pts[(size_t) std::max (0, m - 1)];
+            juce::Point<float> nrm { tangent.y, -tangent.x };
+            nrm = nrm / std::max (0.001f, nrm.getDistanceFromOrigin());
+            if ((b - juce::Point<float> (cx, a.getCentreY())).getDotProduct (nrm) < 0.0f) nrm = -nrm;   // outward
+            juce::Point<float> dir { nrm.x * 0.6f, nrm.y * 0.6f - 0.8f };
+            dir = dir / std::max (0.001f, dir.getDistanceFromOrigin());
+            const float h = (float) ((k * 7919 + seedOffset * 104729) % 1000) / 1000.0f;   // fixed per tongue
+            const float flick = 0.55f + 0.45f * std::sin (t * (17.0f + 9.0f * h) + h * 40.0f) * std::sin (t * (5.0f + 3.0f * h) + h * 13.0f);
+            const float upness = juce::jlimit (0.0f, 1.0f, 0.5f - 0.5f * nrm.y);          // taller where the contour faces up
+            const float len = tongueLen * (0.45f + 0.75f * upness) * (0.45f + 0.75f * flick);
+            auto tip = b + dir * len;
+            tip = { juce::jlimit (room.getX(), room.getRight(), tip.x), juce::jlimit (room.getY(), room.getBottom(), tip.y) };
+            p.lineTo (tip);
+        }
+        p.closeSubPath();
+        return p;
+    }
 
-        // outer glow, then the body of the aura (blue at the edge), then a white inner flame around the hammer
-        g.setColour (colours.bolt.withAlpha (0.12f * bright));
-        g.strokePath (aura, juce::PathStrokeType (10.0f + 8.0f * I, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
-        juce::ColourGradient fill (colours.core.withAlpha (0.30f * bright), c.x, c.y,
-                                   colours.bolt.withAlpha (0.42f * bright), c.x + rx * 1.05f, c.y, true);
-        fill.addColour (0.6, colours.bolt.withAlpha (0.22f * bright));
-        g.setGradientFill (fill);
-        g.fillPath (aura);
-        juce::Path inner (aura);
-        inner.applyTransform (juce::AffineTransform::scale (0.66f, 0.82f, c.x, c.y));
-        const float coreY = headBounds().getCentreY();
-        juce::ColourGradient core (colours.core.withAlpha (0.7f * bright), c.x, coreY,
-                                   colours.core.withAlpha (0.0f), c.x + rx * 0.85f, coreY, true);
-        g.setGradientFill (core);
-        g.fillPath (inner);
-        g.setColour (colours.bolt.brighter (0.2f).withAlpha (0.9f * bright));
-        g.strokePath (aura, juce::PathStrokeType (1.6f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
-        g.setColour (colours.core.withAlpha (0.35f * bright));
-        g.strokePath (aura, juce::PathStrokeType (0.6f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+    void paintAura (juce::Graphics& g, float I, float pulse)
+    {
+        const float t = (float) (animMs * 0.001);
+        const float bright = juce::jlimit (0.0f, 1.0f, (0.4f + 0.55f * I) * (0.8f + 0.2f * pulse) + 0.35f * surge);
+        const float tongue = 8.0f + 18.0f * I + 6.0f * surge;
+        const juce::Path outer = auraLayer (6.0f + 6.0f * I, 26, tongue, t, 1);
+        const juce::Path mid   = auraLayer (3.0f + 4.0f * I, 22, tongue * 0.7f, t * 1.3f, 2);
+        const juce::Path core  = auraLayer (1.0f + 2.0f * I, 18, tongue * 0.45f, t * 1.7f, 3);
+
+        const auto st = [] (float w) { return juce::PathStrokeType (w, juce::PathStrokeType::mitered, juce::PathStrokeType::rounded); };
+        g.setColour (colours.bolt.withAlpha (0.10f * bright));
+        g.strokePath (outer, st (6.0f));                                    // soft glow outside the outline
+        g.setColour (colours.bolt.withAlpha (0.28f * bright));
+        g.fillPath (outer);
+        g.setColour (colours.bolt.brighter (0.25f).withAlpha (0.9f * bright));
+        g.strokePath (outer, st (1.5f));
+        g.setColour (colours.bolt.brighter (0.5f).withAlpha (0.34f * bright));
+        g.fillPath (mid);
+        g.setColour (colours.core.withAlpha (0.55f * bright));
+        g.strokePath (mid, st (1.0f));
+        g.setColour (colours.core.withAlpha (0.6f * bright));
+        g.fillPath (core);
+        g.setColour (colours.core.withAlpha (0.85f * bright));
+        g.strokePath (core, st (0.8f));
     }
 
     void paintBolts (juce::Graphics& g)
@@ -715,7 +796,7 @@ private:
     std::vector<Particle> particles;
     juce::Random rng;
     double animMs = 0, nextSurgeMs = 0;
-    float surge = 0, accCrawl = 0, accBranch = 0, accSpark = 0, accWisp = 0;
+    float surge = 0, accCrawl = 0, accWrap = 0, accBranch = 0, accSpark = 0, accWisp = 0;
 
     bool inverted = false;
     juce::RangedAudioParameter& param;
