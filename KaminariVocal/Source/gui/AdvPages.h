@@ -537,9 +537,16 @@ namespace kvui
             gain = std::make_unique<RangeKnob> (p.apvts, pre + "gain", "Gain", "-30", "+30");
             q = std::make_unique<RangeKnob> (p.apvts, pre + "q", "Q", "0.025", "40");
             auto* fp = p.apvts.getParameter (pre + "freq");
-            freq->setValueText ([fp]
+            // a cut filter picked from the list starts from a flat (Butterworth) corner instead of the bell's Q of 1
+            type->onUserChange = [&p, pre] (int t)
+            {
+                if ((t == kv::LowCut || t == kv::HighCut) && std::abs (plain (p.apvts, pre + "q") - 1.0f) < 0.001f)
+                    setParamPlain (p.apvts, pre + "q", 0.71f);
+            };
+            freq->setValueText ([fp, this]
             {
                 const float f = fp->convertFrom0to1 (fp->getValue());
+                if (! (showNotes && showNotes())) return kvp::freqText (f);   // note and cents only with the keyboard shown
                 const float m = 69.0f + 12.0f * std::log2 (f / 440.0f);
                 const int n = juce::roundToInt (m);
                 return kvp::freqText (f) + dot() + noteName (n) + " " + (m - n >= 0 ? "+" : "") + juce::String (juce::roundToInt ((m - n) * 100)) + " ct";
@@ -613,6 +620,7 @@ namespace kvui
         int bandNo = 0, target = 0;
         juce::String usedId;
         APVTS* state = nullptr;
+        std::function<bool()> showNotes;   // note and cents beside the frequency (set by the editor: keyboard shown)
     };
 
     // The EQ editor used by every EQ in the plug-in: graph (EqCurve), keyboard (EqPiano), floating band panel and a
@@ -642,9 +650,10 @@ namespace kvui
             pianoToggle.setClickingTogglesState (true);
             pianoToggle.setToggleState (true, juce::dontSendNotification);
             pianoToggle.setTooltip ("Show the keyboard under the graph: click or drag along the keys to sweep the selected band from note to note.");
-            pianoToggle.onClick = [this] { piano.setVisible (pianoToggle.getToggleState()); resized(); repaint(); };
+            pianoToggle.onClick = [this] { piano.setVisible (pianoToggle.getToggleState()); select (selected); repaint(); };
             piano.setVisible (true);
             curve.onSelect = [this] (int b) { select (b); };
+            panel.showNotes = [this] { return pianoToggle.getToggleState(); };
             select (firstUsed());
             startTimerHz (6);
         }
@@ -879,7 +888,7 @@ namespace kvui
     public:
         explicit MultibandPage (KaminariVocalProcessor& p)
             : AdvFrame (p, "Multiband", "Bands only where needed" + dot() + "compress or expand, downward or upward", "mb_on", "multiband"),
-              display (p), slope (p.apvts, "mb_slope", { "6", "12", "24" }, "Crossover slope in dB/oct"),
+              display (p), slope (p.apvts, "mb_slope", { "6 dB/oct", "12 dB/oct", "24 dB/oct" }, "Crossover slope"),
               detector (p.apvts, "mb_detector", { "Peak", "Smooth" }),
               os (p.apvts, "mb_os", { "Off", "2x", "4x" }, "Oversampling: runs the bands at 2x or 4x the session rate. Adds latency while Multiband is on."),
               analyzer ([this] { return display.analyzerMode; }, [this] (int m) { display.analyzerMode = m; }, "In", "Out")
@@ -934,7 +943,7 @@ namespace kvui
             r.removeFromLeft (6);
             removeBand.setBounds (r.removeFromLeft (110));
             r.removeFromLeft (50);
-            slope.setBounds (r.removeFromLeft (96));
+            slope.setBounds (r.removeFromLeft (220));
             r.removeFromLeft (66);
             detector.setBounds (r.removeFromLeft (110));
             r.removeFromLeft (92);
@@ -1130,7 +1139,6 @@ namespace kvui
         explicit CompressionPage (KaminariVocalProcessor& p)
             : AdvFrame (p, "Compression", "Style, timing, parallel Dry, auto gain", "lv_on", "compression"),
               display (p), scEq (p, KaminariVocalProcessor::EqSideChain),
-              view ({ "Level", "Side-chain EQ" }, "Compression display"),
               thresh (p.apvts, "lv_thresh", "Threshold", "-50 dB", "0 dB"),
               ratio (p.apvts, "lv_ratio", "Ratio", "1:1", "20:1"),
               attack (p.apvts, "lv_attack", "Attack", "fast", "slow"),
@@ -1158,14 +1166,25 @@ namespace kvui
               })
         {
             for (auto* c : std::initializer_list<juce::Component*> { &display, &thresh, &ratio, &attack, &release, &mix, &out, &dry, &wet, &style,
-                                                                     &knee, &range, &lookahead, &hold, &scLevel, &link, &detector, &autoRelease, &autoGain,
-                                                                     &view })
+                                                                     &knee, &range, &lookahead, &hold, &scLevel, &link, &detector, &autoRelease, &autoGain })
                 addAndMakeVisible (c);
             addChildComponent (scEq);
-            view.setSelected (0);
-            view.buttons[1]->setTooltip ("Side-chain detection EQ: shapes what the compressor reacts to (the audio is not filtered). "
-                                         "Same editor as the main EQ: click to add a band, drag, wheel = Q.");
-            view.onChange = [this] (int v) { showSideChain (v == 1); };
+            // view switch in the same place and style as the Sends page's Sound / EQ / Duck & Route
+            const char* names[] = { "COMPRESSOR", "SIDE-CHAIN EQ" };
+            const char* tips[] = { "Level display and the compressor's controls.",
+                                   "Side-chain detection EQ: shapes what the compressor reacts to (the audio is not filtered). "
+                                   "Same editor as the main EQ: click to add a band, drag, wheel = Q." };
+            for (int v = 0; v < 2; ++v)
+            {
+                auto* b = viewButtons.add (new juce::TextButton (names[v]));
+                b->setRadioGroupId (93);
+                b->setClickingTogglesState (true);
+                b->setTooltip (tips[v]);
+                b->setConnectedEdges (v == 0 ? juce::Button::ConnectedOnRight : juce::Button::ConnectedOnLeft);
+                b->onClick = [this, v] { if (viewButtons[v]->getToggleState()) showSideChain (v == 1); };
+                addAndMakeVisible (b);
+            }
+            viewButtons[0]->setToggleState (true, juce::dontSendNotification);
             for (auto* k : { &thresh, &ratio, &attack, &release, &mix, &out, &dry, &wet }) k->setLNF (&lnf);
             styleAtt.sendInitialUpdate();
         }
@@ -1177,7 +1196,7 @@ namespace kvui
         void showSideChain (bool sc)
         {
             scShown = sc;
-            view.setSelected (sc ? 1 : 0);
+            for (int v = 0; v < viewButtons.size(); ++v) viewButtons[v]->setToggleState ((v == 1) == sc, juce::dontSendNotification);
             display.setVisible (! sc);
             scEq.setVisible (sc);
             for (auto* c : mainControls()) c->setVisible (! sc);
@@ -1195,13 +1214,20 @@ namespace kvui
             g.setColour (mist);
             g.setFont (font (11.0f, 2, 0.1f));
             g.drawText ("SIDE CHAIN", sideChain.getX() + 12, sideChain.getY() + 6, 200, 14, juce::Justification::centredLeft);
-            g.drawText ("DISPLAY", view.getX(), view.getY() - 16, 120, 14, juce::Justification::centredLeft);
+            g.setFont (font (11.0f, 1, 0.1f));
+            g.drawText (scShown ? "SIDE-CHAIN EQ" + dot() + "shapes what the detector hears, the audio is not filtered" + dot() + "click to add a band, drag nodes, wheel = Q"
+                                : "LEVEL" + dot() + "transfer curve, gain-reduction history and meters",
+                        viewRow.getX(), viewRow.getY(), viewRow.getWidth() - 240, viewRow.getHeight(), juce::Justification::centredLeft);
             g.drawText ("DETECTOR", detector.getX(), detector.getY() - 16, 120, 14, juce::Justification::centredLeft);
         }
 
         void layoutContent (juce::Rectangle<int> b) override
         {
             const int scH = 78;
+            viewRow = b.removeFromTop (30);
+            auto vr = viewRow;
+            for (int v = viewButtons.size(); --v >= 0;) viewButtons[v]->setBounds (vr.removeFromRight (120));
+            b.removeFromTop (8);
             const auto displayArea = b.removeFromTop (b.getHeight() - scH - 10 - 210 - 10);
             display.setBounds (displayArea);
             b.removeFromTop (10);
@@ -1236,7 +1262,6 @@ namespace kvui
             link.setBounds (sc.removeFromLeft (200).withHeight (44));
             sc.removeFromLeft (40);
             detector.setBounds (sc.removeFromLeft (130).withHeight (26).translated (0, 6));
-            view.setBounds (sc.removeFromRight (240).withHeight (26).translated (0, 6));
             scEq.setBounds (displayArea.getUnion (controls));
         }
 
@@ -1244,7 +1269,8 @@ namespace kvui
         ModuleLNF lnf;
         CompDisplay display;
         EqEditor scEq;
-        Segmented view;
+        juce::OwnedArray<juce::TextButton> viewButtons;
+        juce::Rectangle<int> viewRow;
         bool scShown = false;
         std::vector<juce::Component*> mainControls()
         {

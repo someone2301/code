@@ -1521,6 +1521,19 @@ int main (int argc, char** argv)
                        "tab lightning icon: a click switches Distortion " + juce::String (after > 0.5f ? "on" : "off")
                        + ", a second click back; the EQ page stays shown");
             }
+            // EQ band panel: note and cents beside the frequency only while the keyboard is shown; slopes read dB/oct
+            {
+                auto& edq = ed->eqPage().editor;
+                setParam (p, "eq1_used", 1.0f);
+                edq.select (0);
+                const bool withPiano = edq.panel.freq->value.getText().contains ("ct");
+                edq.pianoToggle.setToggleState (false, juce::sendNotificationSync);
+                const bool withoutPiano = ! edq.panel.freq->value.getText().contains ("ct");
+                edq.pianoToggle.setToggleState (true, juce::sendNotificationSync);
+                const bool unit = p.apvts.getParameter ("eq1_slope")->getCurrentValueAsText().endsWith ("dB/oct");
+                check (withPiano && withoutPiano && unit, "EQ band panel: note and cents shown only with the keyboard on; slope reads "
+                       + p.apvts.getParameter ("eq1_slope")->getCurrentValueAsText());
+            }
             setParam (p, "lv_style", 1.0f);   // Vocal
             juce::MessageManager::getInstance()->runDispatchLoopUntil (20);
             const bool ratioOff = ! ed->compressionPanel().ratioKnob().isEnabled() && ed->compressionPanel().ratioKnob().value.getText() == "Auto";

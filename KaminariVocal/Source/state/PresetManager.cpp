@@ -152,6 +152,9 @@ bool PresetManager::setPlainValue (juce::RangedAudioParameter& p, const juce::va
     if (auto* c = dynamic_cast<juce::AudioParameterChoice*> (&p))
     {
         int index = value.isString() ? c->choices.indexOf (value.toString()) : (int) value;
+        if (index < 0 && value.isString())   // older presets store a choice without its unit ("12" for "12 dB/oct")
+            for (int k = 0; k < c->choices.size() && index < 0; ++k)
+                if (c->choices[k].upToFirstOccurrenceOf (" ", false, false) == value.toString()) index = k;
         if (index < 0)
             return false;
         norm = c->convertTo0to1 ((float) juce::jlimit (0, c->choices.size() - 1, index));

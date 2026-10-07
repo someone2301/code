@@ -38,6 +38,14 @@ namespace kvui
     }
 
     // Caption + combo box bound to a choice parameter.
+    // Combo box that can tell a choice the user picked from one made by automation, presets or the host.
+    class UserComboBox : public juce::ComboBox
+    {
+    public:
+        void showPopup() override { userPicking = true; juce::ComboBox::showPopup(); }
+        bool userPicking = false;
+    };
+
     class ChoiceBox : public juce::Component
     {
     public:
@@ -61,6 +69,12 @@ namespace kvui
             addAndMakeVisible (caption);
             addAndMakeVisible (box);
             att = std::make_unique<APVTS::ComboBoxAttachment> (state, paramId, box);
+            box.onChange = [this]
+            {
+                if (! box.userPicking) return;
+                box.userPicking = false;
+                if (onUserChange) onUserChange (box.getSelectedItemIndex());
+            };
         }
 
         void resized() override
@@ -70,7 +84,9 @@ namespace kvui
             box.setBounds (b.removeFromTop (26));
         }
 
-        juce::ComboBox box;
+        // Called only when the user picks an item from the list (after the parameter has changed).
+        std::function<void (int)> onUserChange;
+        UserComboBox box;
         juce::Label caption;
 
     private:

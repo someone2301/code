@@ -200,7 +200,7 @@ namespace kvp
         const float eqFreqs[8] = { 80, 200, 500, 1000, 2500, 5000, 10000, 15000 };
         StringArray types, slopes;
         for (auto* t : kv::eqTypeNames) types.add (t);
-        for (int sl : kv::eqSlopes) slopes.add (String (sl));
+        for (int sl : kv::eqSlopes) slopes.add (String (sl) + " dB/oct");
         for (int b = 1; b <= 8; ++b)
         {
             const String p = "eq" + String (b) + "_", n = "EQ " + String (b) + " ";
