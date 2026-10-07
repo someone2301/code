@@ -106,7 +106,8 @@ int KaminariVocalProcessor::computeLatency() const
                  + osLat ("mb_on", "mb_os", [] (const KaminariVocalProcessor& p, int f) { return p.multiband.latencyFor (f); })
                  + osLat ("ds_on", "ds_os", [] (const KaminariVocalProcessor& p, int f) { return p.deesser.latencyFor (f); })
                  + osLat ("rs_on", "rs_os", [] (const KaminariVocalProcessor& p, int f) { return p.resonance.latencyFor (f); });
-    return kv::Tune::latencyFor (fs) + la + os;
+    const int tuneLat = kv::Tune::latencyFor (fs, juce::roundToInt (raw ("tn_quality")->load()), juce::roundToInt (raw ("tn_range")->load()));
+    return tuneLat + la + os;
 }
 
 void KaminariVocalProcessor::readEqSettings (kv::EqBandSettings (&out)[kv::Equalizer::numBands]) const
@@ -154,6 +155,7 @@ void KaminariVocalProcessor::readModuleSettings()
     else
         kv::scaleNotes (i ("tn_key"), scale, t.notes);
     t.range = i ("tn_range");
+    t.quality = i ("tn_quality");
     t.speedMs = f ("tn_speed");
     t.humanize = f ("tn_humanize") / 100.0f;
     t.correct = b ("tn_correct");

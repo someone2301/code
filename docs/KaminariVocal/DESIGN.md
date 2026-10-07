@@ -25,12 +25,12 @@ Not reused: the FET/opto compressor models (they are modeled on specific hardwar
 | Topic | Decision |
 | --- | --- |
 | Relation to old plug-in | Kaminari Vocal **replaces** Channel Strip. Phase 1 deletes `ChannelStrip/` and creates `KaminariVocal/` with a new plug-in code. Sessions saved with Channel Strip will not load Kaminari Vocal. |
-| Latency budget | Total reported plug-in latency of **≤ 128 samples at 48 kHz** (2.67 ms), target ~96. The earlier 74-sample figure is superseded. |
-| Pitch correction character | Classic, period-based, low-latency correction (not a modern formant-preserving mode). Best quality that fits the budget. |
+| Latency budget | Tune Tracking mode: **192 samples at 48 kHz** (4 ms), for recording and monitoring. Tune High quality mode: lookahead of about 18–46 ms by Vocal Range, for mixing. Earlier figures (74, 96 samples) are superseded. |
+| Pitch correction character | Two modes (`tn_quality`). Tracking: low-latency period-based shifter with continuous detection and extrapolation. High quality: lookahead, time-aligned correction and formant-preserving PSOLA. |
 | Colors | Navy and white base, one electric ice-blue accent, amber for warnings, red only for clipping. |
 | Platform | Intel Mac (2018 hardware), macOS Sequoia. Formats: VST3, AU, AAX. Architecture x86_64 (universal optional). |
 | Host categories | EQ, Dynamics, Pitch Correction. VST3: `Fx EQ Dynamics "Pitch Shift"`. AAX: `EQ Dynamics PitchShift` (bit flags, combined). AU has no category list; Logic files it under the manufacturer name. |
-| Reported latency | 96 samples at 48 kHz for now. To be revisited in Phase 6 (see section 4). |
+| Reported latency | Tune: 192 samples at 48 kHz in Tracking mode; in High quality mode `ceil(2.5 · fs / lowest range frequency + 0.004 · fs)` (1283 samples for Middle at 48 kHz). See section 4. |
 | Identity | Product **Kaminari Vocal**, company **Kaminari Audio**. Manufacturer code `Kmni`, plug-in code `KmVc`, bundle ID `com.kaminariaudio.kaminarivocal`. Codes are permanent after the first shared build. A name search found no audio company or plug-in using either name; no trademark search has been done. |
 
 ### 0.3 Platform facts that affect the plan
@@ -117,11 +117,18 @@ Host bypass uses JUCE's `getBypassParameter` with a crossfaded bypass (not a sep
 | `tn_key` | Key | choice | C, C♯/D♭ … B | C | | B |
 | `tn_scale` | Scale | choice | Chromatic, Major, Natural Minor, Harmonic Minor, Melodic Minor, Major Pentatonic, Minor Pentatonic, Blues, Dorian, Mixolydian, Custom | Chromatic | | B |
 | `tn_range` | Vocal Range | choice | High (175–1100 Hz), Middle (110–700 Hz), Low (80–520 Hz), Deep (60–350 Hz) | Middle | | B |
+| `tn_quality` | Mode | choice | Tracking, High quality | Tracking | | A |
 | `tn_speed` | Retune Speed | float, skewed | 0 … 400 | 40 | ms | B (lightning slider, inverted: more strikes = faster) |
 | `tn_humanize` | Humanize | float | 0 … 100 | 20 | % | A |
 | `tn_note_0` … `tn_note_11` | Note C … B | bool | | per scale | | A |
 
-Retune Speed is how quickly a note is pulled to the target (0 ms = instant, hard-tuned sound). Humanize slows correction only on held notes, so sustained notes keep natural movement while short notes are still corrected.
+Retune Speed is how quickly a note is pulled to the target (0 ms = instant, hard-tuned sound). It also sets how much of the singer's own vibrato stays: the correction aims at the note's slow-moving centre, and at 0 ms it follows every instant (`flatten = exp(-speed / 30 ms)`). Humanize slows correction only on held notes, so sustained notes keep natural movement while short notes are still corrected.
+
+Mode (`tn_quality`, session setting, not stored in module presets):
+- **Tracking** (default, 4 ms). YIN on a 12 kHz copy every 16 decimated samples, with voicing hysteresis (0.15 to start a note, 0.25 to continue), octave protection against the running period, and a 3-point median. Between analyses the correction is extrapolated from the pitch slope to the sample being played. The shifter reads a delay line at the pitch ratio and splices one period back or forward at the lag of best normalised correlation, with a 0.6-period crossfade. Formants move with the pitch, as with any resampling shifter.
+- **High quality** (lookahead). Each analysis frame is time-stamped at the centre of the samples it compared, so the correction is applied to the exact audio it describes. Pitch marks are placed one period apart on the largest peak of each low-passed cycle. TD-PSOLA takes a two-period Hann grain at each mark and places grains one corrected period apart (fractional positions, normalised overlap-add). The output period comes from the same frames as the correction, so hard tune lands on the note, and the spectral envelope (formants) stays where it was. Unvoiced parts pass through unshifted.
+
+Measured (48 kHz, test harness and unit tests): hard tune of ±40 cent vibrato leaves about 1 cent RMS (Tracking) and under 1 cent (High quality); a one-semitone shift moves the formants by about 8 % in Tracking and about 0 % in High quality.
 
 Scale behavior: choosing a named scale writes the 12 `tn_note_*` values. If the user edits a note afterwards, `tn_scale` is set to Custom. The note map is saved with presets and sessions.
 
@@ -632,13 +639,13 @@ Two levels, both with factory and user presets:
 Bus layouts: mono → mono, mono → stereo (the input is processed as dual mono, so the sends' stereo returns stay stereo), and stereo → stereo.
 
 Reported latency:
-- Tune's fixed 96 samples at 48 kHz, always reported, also with Tune off.
+- Tune's fixed delay, always reported, also with Tune off: 192 samples at 48 kHz in Tracking mode, more in High quality mode (by Vocal Range).
 - Plus the Compression lookahead and the De-ess lookahead.
 - Changes are reported to the host from the message thread.
 
 | Module | Implemented | Postponed |
 | --- | --- | --- |
-| Tune | YIN pitch detection on a decimated copy, nearest note of key/scale (or the 12 note switches when Scale = Custom) with hysteresis, Retune Speed, Humanize on held notes, period-locked delay-line shifter around a fixed 96-sample delay | formant handling, measured delay statistics per range (Phase 6), lower base latency trials |
+| Tune | YIN pitch detection on a decimated copy, nearest note of key/scale (or the 12 note switches when Scale = Custom) with hysteresis, Retune Speed, Humanize on held notes, Tracking mode (correlation-matched splicing shifter around a fixed 4 ms delay) and High quality mode (lookahead, formant-preserving PSOLA) | measured delay statistics per range (Phase 6) |
 | EQ | 8 bands, 9 shapes, cut slopes 6–48 dB/oct, smoothed coefficients, output gain, interactive graph | dynamic EQ, per-band stereo placement, auto gain, gain scale, natural/linear phase, analyzer, EQ Match, piano scale |
 | Multiband | 1–6 bands, compress/expand, downward/upward range, per-band gain and solo, 6/12/24 dB/oct band filters, peak/smooth detector | lookahead, oversampling, free trigger range, sidechain, linear phase |
 | Compression | 5 styles, threshold, ratio, attack, release, auto release, knee, range, hold, lookahead, peak/smooth detector, mix 0–200 %, dry, wet gain, side-chain level, stereo link, auto gain (`lv_auto_gain`, new ID), output | 8-band detector EQ, external sidechain, oversampling, audition |
@@ -794,12 +801,13 @@ After the channel modules: pre-fader tap → Out Gain → post-fader tap → dry
 
 ## 4. Latency budget
 
-Reported latency is constant in time (2.0 ms) for the Tune module and zero for all other modules. It is reported whether or not Tune is enabled, so toggling Tune never changes host delay compensation or causes a click. The dry path inside Tune is delayed by the same amount.
+Reported latency is constant in time for the Tune module (4 ms in Tracking mode; in High quality mode it depends on Vocal Range and changes only when Mode or Vocal Range changes) and zero for the other modules in their default settings. It is reported whether or not Tune is enabled, so toggling Tune never changes host delay compensation or causes a click. The dry path inside Tune is delayed by the same amount.
 
 | Module | 44.1 kHz | **48 kHz** | 88.2 kHz | 96 kHz | 192 kHz | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
 | Input gain, meters | 0 | **0** | 0 | 0 | 0 | |
-| Tune | 88 | **96** | 176 | 192 | 384 | fixed 2.0 ms base delay |
+| Tune, Tracking | 176 | **192** | 353 | 384 | 768 | fixed 4.0 ms base delay |
+| Tune, High quality | | **878 / 1283 / 1692 / 2192** | | | | High / Middle / Low / Deep range at 48 kHz (18 / 27 / 35 / 46 ms) |
 | EQ | 0 | **0** | 0 | 0 | 0 | minimum-phase IIR |
 | Multiband | 0 | **0** | 0 | 0 | 0 | subtractive bands; lookahead/oversampling off |
 | Compression | 0 | **0** | 0 | 0 | 0 | no lookahead |
@@ -913,7 +921,7 @@ White on navy-900 has a contrast ratio above 15:1; mist on navy-900 is above 7:1
 - Meters: segmented "charge" bars with 2 px gaps.
 - Section dividers: a thin line with a single small zig-zag break at the left edge.
 - EQ curve: 2 px `bolt` stroke with a 6 px 20 %-alpha glow; no animated effects.
-- Latency badge: bolt icon + "96 smp · 2.0 ms"; turns amber with a "+" if oversampling adds latency.
+- Latency badge: bolt icon + "192 smp · 4.0 ms" (Tune Tracking mode); turns amber with a "+" if oversampling adds latency.
 
 ### 6.3 Typography and spacing
 

@@ -169,6 +169,7 @@ namespace kvp
         addChoice ("tn_scale", "Scale", { "Chromatic", "Major", "Natural Minor", "Harmonic Minor", "Melodic Minor", "Major Pentatonic",
                                           "Minor Pentatonic", "Blues", "Dorian", "Mixolydian", "Custom" }, 0);
         addChoice ("tn_range", "Vocal Range", { "High", "Middle", "Low", "Deep" }, 1);
+        addChoice ("tn_quality", "Tune Mode", { "Tracking", "High quality" }, 0);
         addFloat  ("tn_speed", "Retune Speed", { 0.0f, 400.0f, 0.1f, 0.4f }, 40.0f, [] (float v, int) { return String (roundToInt (v)) + " ms"; });
         addFloat  ("tn_humanize", "Humanize", { 0.0f, 100.0f, 0.1f }, 20.0f, pctText);
         static const char* noteNames[] = { "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B" };

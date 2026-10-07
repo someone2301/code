@@ -190,6 +190,7 @@ namespace kvui
         explicit TunePage (KaminariVocalProcessor& p)
             : AdvFrame (p, "Tune", "Real-time pitch correction", "tn_on", "tune"),
               range (p.apvts, "tn_range", "VOCAL RANGE", hintFor ("tn_range")),
+              quality (p.apvts, "tn_quality", "MODE", hintFor ("tn_quality")),
               key (p.apvts, "tn_key", "KEY", hintFor ("tn_key")),
               scale (p.apvts, "tn_scale", "SCALE", hintFor ("tn_scale")),
               speed (p.apvts, "tn_speed", "Retune Speed", {}, {}, hintFor ("tn_speed")),
@@ -213,7 +214,7 @@ namespace kvui
               correctAtt (*p.apvts.getParameter ("tn_correct"), [this] (float) { updateVisibility(); }),
               syncAtt (*p.apvts.getParameter ("tn_trem_sync"), [this] (float) { updateVisibility(); })
         {
-            for (auto* c : std::initializer_list<juce::Component*> { &range, &key, &scale, &speed, &humanize, &meter, &piano, &holdButton,
+            for (auto* c : std::initializer_list<juce::Component*> { &range, &quality, &key, &scale, &speed, &humanize, &meter, &piano, &holdButton,
                                                                      &correct, &vibPower, &tremPower, &tremOptions, &detune })
                 addAndMakeVisible (c);
             for (auto* k : { &vibDepth, &vibRate, &vibDelay, &vibRise, &vibVariation, &tremDepth, &tremRate, &tremStereo })
@@ -222,7 +223,7 @@ namespace kvui
                 k->setLNF (&lnf);
                 k->setLabelOverhang (2);
             }
-            for (auto* cb : { &range, &key, &scale })
+            for (auto* cb : { &range, &quality, &key, &scale })
             {
                 cb->caption.setFont (font (10.5f, 1, 0.1f));
                 cb->caption.setText (cb->caption.getText().toUpperCase(), juce::dontSendNotification);
@@ -260,14 +261,14 @@ namespace kvui
             drawGroup (g, strip, navy800);
             g.setColour (mist);
             g.setFont (font (10.5f, 1, 0.1f));
-            g.drawText ("CORRECTION", strip.getRight() - 250, strip.getY() + 10, 130, 14, juce::Justification::centredRight);
+            g.drawText ("LATENCY", latencyArea.getX(), strip.getY() + 10, latencyArea.getWidth(), 14, juce::Justification::centred);
             g.drawText ("TRACKING", strip.getRight() - 106, strip.getY() + 10, 90, 14, juce::Justification::centred);
             const double sr = proc.getSampleRate() > 0 ? proc.getSampleRate() : 48000.0;
-            const int lat = kv::Tune::latencyFor (sr);
+            const int lat = kv::Tune::latencyFor (sr, choiceIndex (proc.apvts, "tn_quality"), choiceIndex (proc.apvts, "tn_range"));
             g.setColour (white);
             g.setFont (font (12.5f, 0));
             g.drawText (juce::String (lat) + " smp" + dot() + juce::String (1000.0 * lat / sr, 1) + " ms",
-                        strip.getRight() - 250, strip.getY() + 28, 130, 16, juce::Justification::centredRight);
+                        latencyArea.getX(), strip.getY() + 28, latencyArea.getWidth(), 16, juce::Justification::centred);
             g.setColour (voiced ? accent : navy600);
             g.fillEllipse ((float) strip.getRight() - 90.0f, (float) strip.getY() + 32.0f, 9.0f, 9.0f);
             g.setColour (white);
@@ -316,10 +317,12 @@ namespace kvui
         {
             strip = b.removeFromTop (60);
             auto s = strip.reduced (12, 6);
-            range.setBounds (s.removeFromLeft (170)); s.removeFromLeft (16);
-            key.setBounds (s.removeFromLeft (80)); s.removeFromLeft (16);
-            scale.setBounds (s.removeFromLeft (150)); s.removeFromLeft (16);
-            detune.setBounds (s.removeFromLeft (150).withTrimmedTop (2));
+            range.setBounds (s.removeFromLeft (128)); s.removeFromLeft (12);
+            key.setBounds (s.removeFromLeft (70)); s.removeFromLeft (12);
+            scale.setBounds (s.removeFromLeft (140)); s.removeFromLeft (12);
+            detune.setBounds (s.removeFromLeft (140).withTrimmedTop (2)); s.removeFromLeft (12);
+            quality.setBounds (s.removeFromLeft (128));
+            latencyArea = { quality.getRight() + 10, strip.getY(), strip.getRight() - 110 - (quality.getRight() + 10), strip.getHeight() };
             piano.setBounds (b.removeFromBottom (72));
             b.removeFromBottom (28);
             layoutGroups (b.removeFromBottom (138), { &vibGrp, &tremGrp }, 92);
@@ -342,7 +345,8 @@ namespace kvui
         void timerCallback() override
         {
             const bool v = proc.tune.detectedMidi.load() >= 0;
-            if (v != voiced) { voiced = v; repaint (strip); }
+            const int lm = choiceIndex (proc.apvts, "tn_quality") * 8 + choiceIndex (proc.apvts, "tn_range");
+            if (v != voiced || lm != latencyMode) { voiced = v; latencyMode = lm; repaint (strip); }
             const bool vibOn = choiceIndex (proc.apvts, "tn_vib_on") != 0, tremOn = choiceIndex (proc.apvts, "tn_trem_on") != 0;
             const float vc = proc.tune.vibratoCents.load(), tg = proc.tune.tremoloGain.load();
             const auto vt = vibOn ? (std::abs (vc) < 0.5f ? juce::String ("waiting for a note") : (vc > 0 ? "+" : "") + juce::String (juce::roundToInt (vc)) + " ct now") : juce::String ("off");
@@ -367,7 +371,8 @@ namespace kvui
             }
         }
 
-        ChoiceBox range, key, scale;
+        ChoiceBox range, quality, key, scale;
+        int latencyMode = -1;
         RangeKnob speed, humanize;
         CentsMeter meter;
         Piano piano;
@@ -385,7 +390,7 @@ namespace kvui
         SendGroup vibGrp { "VIBRATO", { &vibDepth, &vibRate, &vibDelay, &vibRise, &vibVariation } },
                   tremGrp { "TREMOLO", { &tremDepth, &tremRate, &tremStereo }, nullptr, 0, &tremOptions, 130, 108, 4 };
         juce::String vibText, tremText;
-        juce::Rectangle<int> strip;
+        juce::Rectangle<int> strip, latencyArea;
         bool voiced = false;
         juce::ParameterAttachment scaleAtt, keyAtt, correctAtt, syncAtt;
     };

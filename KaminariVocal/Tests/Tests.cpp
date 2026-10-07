@@ -601,7 +601,7 @@ int main (int argc, char** argv)
         KaminariVocalProcessor p;
         neutral (p);
         prepare (p);
-        check (p.getLatencySamples() == 96, "reported latency is 96 samples at 48 kHz (Tune's fixed delay), also with Tune off");
+        check (p.getLatencySamples() == 192, "reported latency is 192 samples (4 ms) at 48 kHz (Tune's Tracking delay), also with Tune off");
         const auto r = render (p, 0.5, vocal);
         check (maxDiff (r) == 0.0f, "all modules off: the output is the input delayed by exactly the reported latency");
 
@@ -610,7 +610,7 @@ int main (int argc, char** argv)
         juce::AudioBuffer<float> buf (2, block); juce::MidiBuffer midi; buf.clear();
         p.processBlock (buf, midi);
         juce::MessageManager::getInstance()->runDispatchLoopUntil (20);
-        check (p.getLatencySamples() == 96 + 240, "Compression lookahead 5 ms adds 240 samples to the reported latency");
+        check (p.getLatencySamples() == 192 + 240, "Compression lookahead 5 ms adds 240 samples to the reported latency");
     }
     {
         KaminariVocalProcessor p;
@@ -747,6 +747,123 @@ int main (int argc, char** argv)
         prepare (p);
         r = render (p, 0.5, sine (in, -12.0f));
         check (maxDiff (r) == 0.0f, "Tune off: the signal passes unchanged (delayed by the reported latency)");
+    }
+
+    // ---- tune: Tracking and High quality modes ---------------------------------------------------------------------
+    {
+        // pitch in 25 ms frames from zero crossings, in cents relative to ref
+        auto track = [] (const juce::AudioBuffer<float>& b, int from, int to, double ref)
+        {
+            std::vector<double> c;
+            const int frame = (int) (0.025 * sr);
+            for (int i = from; i + frame <= to; i += frame / 2)
+                if (const double f = zeroCrossFreq (b, 0, i, i + frame); f > 0) c.push_back (1200.0 * std::log2 (f / ref));
+            return c;
+        };
+        auto meanOf = [] (const std::vector<double>& v) { double m = 0; for (double x : v) m += x; return v.empty() ? 0.0 : m / (double) v.size(); };
+        auto rmsAbout = [] (const std::vector<double>& v, double ref) { double e = 0; for (double x : v) e += (x - ref) * (x - ref); return v.empty() ? 1e9 : std::sqrt (e / (double) v.size()); };
+        // A4 + 30 cents with +-40 cents of 5.5 Hz vibrato (phase from the first-order integral of the frequency)
+        auto vibratoTone = [] (long n)
+        {
+            const double t = (double) n / sr, f0 = 440.0 * std::pow (2.0, 0.30 / 12.0), d = 40.0 * std::log (2.0) / 1200.0, r = 5.5;
+            return 0.25f * (float) std::sin (2 * kv::pi * f0 * (t - d * std::cos (2 * kv::pi * r * t) / (2 * kv::pi * r)));
+        };
+        const char* modeName[] = { "Tracking", "High quality" };
+        for (int q = 0; q < 2; ++q)
+        {
+            const juce::String mode = juce::String (modeName[q]) + ": ";
+            KaminariVocalProcessor p;
+            neutral (p);
+            setParam (p, "tn_quality", (float) q);
+            prepare (p);
+            const int expectLat = kv::Tune::latencyFor (sr, q, 1);
+            check (p.getLatencySamples() == expectLat, mode + "reported latency " + juce::String (p.getLatencySamples()) + " samples ("
+                   + juce::String (1000.0 * p.getLatencySamples() / sr, 1) + " ms)");
+            auto r = render (p, 0.5, vocal);
+            check (maxDiff (r) == 0.0f, mode + "Tune off passes the signal unchanged");
+
+            setParam (p, "tn_on", 1.0f); setParam (p, "tn_speed", 0.0f); setParam (p, "tn_humanize", 0.0f);
+            for (const double startCents : { 30.0, -30.0, -8.0 })
+            {
+                prepare (p);
+                r = render (p, 1.0, sine (440.0 * std::pow (2.0, startCents / 1200.0), -12.0f));
+                const double c = 1200.0 * std::log2 (zeroCrossFreq (r.out, 0, 12000, 48000) / 440.0);
+                check (std::abs (c) < 3.0, mode + "hard tune pulls A4 " + juce::String (startCents, 0) + " cents to " + juce::String (c, 1) + " cents");
+            }
+            // hard tune flattens the singer's vibrato
+            prepare (p);
+            r = render (p, 2.0, [&] (int, long n) { return vibratoTone (n); });
+            const auto hard = track (r.out, 24000, 90000, 440.0);
+            check (rmsAbout (hard, 0.0) < 6.0, mode + "hard tune flattens +-40 cent vibrato to " + juce::String (rmsAbout (hard, 0.0), 1) + " cents RMS");
+            // natural speed: the note centre is corrected, the vibrato is kept
+            setParam (p, "tn_speed", 60.0f);
+            prepare (p);
+            r = render (p, 3.0, [&] (int, long n) { return vibratoTone (n); });
+            const auto nat = track (r.out, 48000, 138000, 440.0);
+            const double centre = meanOf (nat), depth = std::sqrt (2.0) * rmsAbout (nat, centre);
+            check (std::abs (centre) < 6.0 && depth > 28.0 && depth < 52.0, mode + "Retune Speed 60 ms centres the note at " + juce::String (centre, 1)
+                   + " cents and keeps the vibrato (" + juce::String (juce::roundToInt (depth)) + " of 40 cents)");
+        }
+        {
+            // switching the mode changes the reported latency (from the message thread)
+            KaminariVocalProcessor p;
+            neutral (p);
+            prepare (p);
+            setParam (p, "tn_quality", 1.0f);
+            setParam (p, "tn_range", 3.0f);
+            juce::AudioBuffer<float> buf (2, block); juce::MidiBuffer midi; buf.clear();
+            p.processBlock (buf, midi);
+            juce::MessageManager::getInstance()->runDispatchLoopUntil (20);
+            check (p.getLatencySamples() == kv::Tune::latencyFor (sr, 1, 3) && kv::Tune::latencyFor (sr, 1, 3) < (int) (0.05 * sr),
+                   "High quality with Deep range reports " + juce::String (p.getLatencySamples()) + " samples (under 50 ms)");
+            setParam (p, "tn_quality", 0.0f);
+            p.processBlock (buf, midi);
+            juce::MessageManager::getInstance()->runDispatchLoopUntil (20);
+            check (p.getLatencySamples() == 192, "back to Tracking: 192 samples");
+        }
+        {
+            // High quality keeps the formants where they are; Tracking moves them with the pitch (like resampling)
+            auto voice = [] (long n)
+            {
+                const double t = (double) n / sr, f0 = 150.0;
+                double s = 0;
+                for (int k = 1; k * f0 < 4000.0; ++k)
+                {
+                    const double f = k * f0;
+                    const double env = std::exp (-std::pow ((f - 700.0) / 150.0, 2)) + 0.6 * std::exp (-std::pow ((f - 1200.0) / 180.0, 2)) + 0.02;
+                    s += env * std::sin (2 * kv::pi * f * t);
+                }
+                return 0.15f * (float) s;
+            };
+            auto centroid = [] (const juce::AudioBuffer<float>& b, double f0)
+            {
+                double num = 0, den = 0;
+                for (int k = 1; k * f0 < 1600.0; ++k)
+                {
+                    const double fh = k * f0;
+                    if (fh < 400.0) continue;
+                    double best = -400.0;
+                    for (double ff = fh * 0.99; ff <= fh * 1.01; ff += 0.5) best = std::max (best, (double) toneDb (b, 0, ff, 24000, 72000));
+                    const double a2 = std::pow (10.0, best / 10.0);
+                    num += fh * a2; den += a2;
+                }
+                return num / std::max (1e-30, den);
+            };
+            double shift[2] {};
+            for (int q = 0; q < 2; ++q)
+            {
+                KaminariVocalProcessor p;
+                neutral (p);
+                setParam (p, "tn_quality", (float) q);
+                setParam (p, "tn_on", 1.0f); setParam (p, "tn_correct", 0.0f); setParam (p, "tn_detune", 100.0f);
+                setParam (p, "tn_range", 2.0f);
+                prepare (p);
+                const auto r = render (p, 2.0, [&] (int, long n) { return voice (n); });
+                shift[q] = 100.0 * (centroid (r.out, 150.0 * std::pow (2.0, 1.0 / 12.0)) / centroid (r.in, 150.0) - 1.0);
+            }
+            check (std::abs (shift[1]) < 3.0 && shift[0] > 4.0, "a semitone up moves the formants by " + juce::String (shift[1], 1)
+                   + " % in High quality (Tracking: " + juce::String (shift[0], 1) + " %, plain resampling: 5.9 %)");
+        }
     }
     {
         // the whole chain with a busy chain preset stays finite and bounded
