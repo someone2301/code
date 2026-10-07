@@ -276,7 +276,7 @@ public:
             kvfx::paintOrb (g, c, r, col, i == selected, s[i].on);
             if (i == selected)
                 nodeFx.paint (g, c, r, col, animMs);
-            g.setColour (i == selected ? navy950 : navy950.withAlpha (0.9f));
+            g.setColour (white);
             g.setFont (uiFont (10.0f, true));
             g.drawText (juce::String (i + 1), juce::Rectangle<float> (2 * r, 2 * r).withCentre (c.translated (0.0f, 0.5f)), juce::Justification::centred);
             if (i == solo)

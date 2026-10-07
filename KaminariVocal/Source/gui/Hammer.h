@@ -386,7 +386,7 @@ private:
         auto b = getLocalBounds().toFloat();
         b.removeFromTop (captionHeight);
         b.removeFromBottom ((float) valueHeight + (valueHeight > 0 ? 2.0f : 0.0f));
-        b.removeFromTop (juce::jmin (16.0f, b.getHeight() * 0.1f));   // room above the head for the aura's flame
+        b.removeFromTop (juce::jmin (26.0f, b.getHeight() * 0.16f));   // room above the head for the aura's flame
         return b.reduced (0.0f, 2.0f);
     }
 
@@ -804,7 +804,12 @@ private:
             const float h = (float) ((k * 7919 + seedOffset * 104729) % 1000) / 1000.0f;   // fixed per tongue
             const float flick = 0.55f + 0.45f * std::sin (t * (17.0f + 9.0f * h) + h * 40.0f) * std::sin (t * (5.0f + 3.0f * h) + h * 13.0f);
             const float upness = juce::jlimit (0.0f, 1.0f, 0.5f - 0.5f * nrm.y);          // taller where the contour faces up
-            const float len = tongueLen * (0.45f + 0.75f * upness) * (0.45f + 0.75f * flick);
+            float len = tongueLen * (0.45f + 0.75f * upness) * (0.45f + 0.75f * flick);
+            // near the control's edge the tongue gets shorter (keeps its point) instead of being flattened
+            if (dir.y < -0.01f) len = std::min (len, (b.y - room.getY()) / -dir.y);
+            if (dir.x > 0.01f)  len = std::min (len, (room.getRight() - b.x) / dir.x);
+            if (dir.x < -0.01f) len = std::min (len, (b.x - room.getX()) / -dir.x);
+            len = std::max (0.0f, len);
             auto tip = b + dir * len;
             tip = { juce::jlimit (room.getX(), room.getRight(), tip.x), juce::jlimit (room.getY(), room.getBottom(), tip.y) };
             p.lineTo (tip);

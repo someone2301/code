@@ -46,26 +46,28 @@ namespace kvfx
         g.strokePath (p, st (width * 0.9f));
     }
 
-    // Glossy orb for an EQ node: lit from the upper left, coloured body, darker rim, specular highlight.
+    // Glass orb for an EQ node: see-through inside (the graph shows through), a coloured rim that thickens towards the
+    // edge, a faint inner glow and a small specular highlight, so it reads as a sphere without hiding what is behind it.
     inline void paintOrb (juce::Graphics& g, juce::Point<float> c, float r, juce::Colour colour, bool bright, bool on)
     {
-        const auto body = on ? colour : juce::Colour (0xff5d6a88);
-        // soft halo
-        juce::ColourGradient halo (body.withAlpha (bright ? 0.45f : 0.22f), c.x, c.y, body.withAlpha (0.0f), c.x + r * 2.0f, c.y, true);
-        g.setGradientFill (halo);
-        g.fillEllipse (juce::Rectangle<float> (r * 4.0f, r * 4.0f).withCentre (c));
-        // sphere
-        juce::ColourGradient sphere (juce::Colour (0xfff4f7fc).withAlpha (bright ? 0.95f : 0.75f), c.x - r * 0.35f, c.y - r * 0.4f,
-                                     body.darker (0.9f), c.x + r * 0.9f, c.y + r * 0.9f, true);
-        sphere.addColour (0.35, body.brighter (bright ? 0.25f : 0.0f));
-        sphere.addColour (0.8, body.darker (0.35f));
-        g.setGradientFill (sphere);
-        g.fillEllipse (juce::Rectangle<float> (2 * r, 2 * r).withCentre (c));
-        // rim and specular highlight
-        g.setColour (body.brighter (0.6f).withAlpha (0.9f));
-        g.drawEllipse (juce::Rectangle<float> (2 * r, 2 * r).withCentre (c), 1.0f);
-        g.setColour (juce::Colours::white.withAlpha (bright ? 0.85f : 0.6f));
-        g.fillEllipse (juce::Rectangle<float> (r * 0.7f, r * 0.42f).withCentre ({ c.x - r * 0.32f, c.y - r * 0.5f }));
+        const auto rim = on ? colour : juce::Colour (0xff5d6a88);
+        const auto area = juce::Rectangle<float> (2 * r, 2 * r).withCentre (c);
+        // translucent body: clear in the middle, tinted towards the edge (like looking through glass)
+        juce::ColourGradient glass (juce::Colour (0xff0b1a33).withAlpha (bright ? 0.35f : 0.45f), c.x, c.y,
+                                    rim.withAlpha (bright ? 0.55f : 0.35f), c.x + r, c.y, true);
+        glass.addColour (0.65, rim.withAlpha (bright ? 0.18f : 0.1f));
+        g.setGradientFill (glass);
+        g.fillEllipse (area);
+        // rim and a fainter inner ring
+        g.setColour (rim.brighter (bright ? 0.4f : 0.2f));
+        g.drawEllipse (area.reduced (0.6f), bright ? 1.8f : 1.5f);
+        g.setColour (rim.withAlpha (0.35f));
+        g.drawEllipse (area.reduced (2.6f), 0.8f);
+        // specular highlight (upper left) and a soft reflection at the bottom
+        g.setColour (juce::Colours::white.withAlpha (bright ? 0.75f : 0.5f));
+        g.fillEllipse (juce::Rectangle<float> (r * 0.6f, r * 0.34f).withCentre ({ c.x - r * 0.33f, c.y - r * 0.52f }));
+        g.setColour (rim.brighter (0.5f).withAlpha (0.25f));
+        g.fillEllipse (juce::Rectangle<float> (r * 0.9f, r * 0.28f).withCentre ({ c.x, c.y + r * 0.62f }));
     }
 
     // Plasma-ball lightning on the selected EQ node: arcs crawling over the orb's surface and filaments inside it, all
