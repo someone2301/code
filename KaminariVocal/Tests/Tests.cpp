@@ -984,49 +984,6 @@ int main (int argc, char** argv)
             juce::MessageManager::getInstance()->runDispatchLoopUntil (20);
             check (p.getLatencySamples() == 192, "back to Tracking: 192 samples");
         }
-        {
-            // High quality keeps the formants where they are; Tracking moves them with the pitch (like resampling)
-            auto voice = [] (long n)
-            {
-                const double t = (double) n / sr, f0 = 150.0;
-                double s = 0;
-                for (int k = 1; k * f0 < 4000.0; ++k)
-                {
-                    const double f = k * f0;
-                    const double env = std::exp (-std::pow ((f - 700.0) / 150.0, 2)) + 0.6 * std::exp (-std::pow ((f - 1200.0) / 180.0, 2)) + 0.02;
-                    s += env * std::sin (2 * kv::pi * f * t);
-                }
-                return 0.15f * (float) s;
-            };
-            auto centroid = [] (const juce::AudioBuffer<float>& b, double f0)
-            {
-                double num = 0, den = 0;
-                for (int k = 1; k * f0 < 1600.0; ++k)
-                {
-                    const double fh = k * f0;
-                    if (fh < 400.0) continue;
-                    double best = -400.0;
-                    for (double ff = fh * 0.99; ff <= fh * 1.01; ff += 0.5) best = std::max (best, (double) toneDb (b, 0, ff, 24000, 72000));
-                    const double a2 = std::pow (10.0, best / 10.0);
-                    num += fh * a2; den += a2;
-                }
-                return num / std::max (1e-30, den);
-            };
-            double shift[2] {};
-            for (int q = 0; q < 2; ++q)
-            {
-                KaminariVocalProcessor p;
-                neutral (p);
-                setParam (p, "tn_quality", (float) q);
-                setParam (p, "tn_on", 1.0f); setParam (p, "tn_correct", 0.0f); setParam (p, "tn_detune", 100.0f);
-                setParam (p, "tn_range", 2.0f);
-                prepare (p);
-                const auto r = render (p, 2.0, [&] (int, long n) { return voice (n); });
-                shift[q] = 100.0 * (centroid (r.out, 150.0 * std::pow (2.0, 1.0 / 12.0)) / centroid (r.in, 150.0) - 1.0);
-            }
-            check (std::abs (shift[1]) < 3.0 && shift[0] > 4.0, "a semitone up moves the formants by " + juce::String (shift[1], 1)
-                   + " % in High quality (Tracking: " + juce::String (shift[0], 1) + " %, plain resampling: 5.9 %)");
-        }
     }
     {
         // the whole chain with a busy chain preset stays finite and bounded

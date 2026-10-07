@@ -13,18 +13,20 @@
 //       voicing hysteresis (a stricter threshold to start a note than to continue it, three misses to end it) and a
 //       3-point median against single outliers. The pitch is extrapolated from the analysis window's centre to the
 //       sample being played, so fast vibrato is followed without lag.
-//     - correction: the target note is chosen from the note's centre pitch (so vibrato does not flip notes). Retune
-//       Speed also sets how much of the singer's vibrato is kept: 0 ms corrects every instant (flat, hard tune),
-//       slower settings move the note's centre and keep the vibrato. Humanize: slower correction on held notes.
+//     - correction: at a note's start the target follows the voice at once; on a held note it is chosen from the
+//       note's vibrato-free centre, so vibrato does not flip notes; a new note is taken as soon as the voice clearly
+//       leaves the old one. Fast glides between notes pass through (the correction relaxes above ~18 semitones per
+//       second). Retune Speed also sets how much of the singer's vibrato is kept: 0 ms corrects every instant (flat,
+//       hard tune), slower settings move the note's centre and keep the vibrato. Humanize: slower correction on held
+//       notes. Timing matched to reference renders of a real vocal by an established tuner.
 //     - shifting: a delay-line read head moving at the pitch ratio; when it drifts out of its window it splices one
 //       period away, at the lag whose waveform best matches (normalised cross-correlation), with a raised-cosine
 //       crossfade.
-//   High quality (switchable, 18 to 46 ms by vocal range): for mixing.
-//     - the same analysis, but every correction is time-aligned with the audio (lookahead): notes are corrected from
-//       their first period, with no scoop.
-//     - shifting: pitch-synchronous overlap-add (PSOLA): pitch marks on each period, two-period Hann grains re-spaced
-//       at the corrected period and normalised. The grains are not resampled, so the formants (the vowel and the
-//       voice's character) stay where they are.
+//   High quality (switchable, about 9 to 21 ms by vocal range): for mixing.
+//     - the same analysis and shifter, but every correction is time-aligned with the audio (lookahead): the pitch
+//       and correction of the exact sample being played are used, with no prediction, so notes are corrected from
+//       their first period and transitions land exactly. (A PSOLA shifter was tried here; on a real vocal it was
+//       measurably rougher, so it was dropped.)
 // With Tune off the signal is delayed by the reported latency of the selected mode.
 //
 // Vibrato and tremolo (DESIGN.md 2.2.1) are part of Tune and need Tune on; "Correct pitch" off keeps them without
@@ -88,12 +90,13 @@ namespace kv
 
         static double lowestFreq (int range) { static const double f[4] = { 175, 110, 80, 60 }; return f[std::clamp (range, 0, 3)]; }
 
-        // Reported latency in samples. Tracking: 4 ms. High quality: 2.5 of the range's longest periods (the grains
-        // reach one period either side of a pitch mark that may lie half a period ahead) plus 4 ms.
+        // Reported latency in samples. Tracking: 4 ms. High quality: 1.1 of the range's longest periods plus 3 ms, enough
+        // for an analysis frame describing the sample being played to exist (its window centre lags by about one
+        // longest period plus a hop).
         static int latencyFor (double fs, int quality = Tracking, int range = 1)
         {
             if (quality != HighQuality) return (int) std::lround (192.0 * fs / 48000.0);
-            return (int) std::ceil (2.5 * fs / lowestFreq (range) + 0.004 * fs);
+            return (int) std::ceil (1.1 * fs / lowestFreq (range) + 0.003 * fs);
         }
 
         void prepare (double sampleRate)
@@ -105,11 +108,6 @@ namespace kv
             const int maxLatency = latencyFor (sampleRate, HighQuality, 3);
             for (auto& d : line) d.prepare (maxLatency + 4 * pmaxAll + 256);
             ring.assign (4096, 0.0f);
-            lpSize = 1; while (lpSize < maxLatency + 4 * pmaxAll + 1024) lpSize <<= 1;
-            lpRing.assign ((size_t) lpSize, 0.0f);
-            olaSize = 1; while (olaSize < 8 * pmaxAll + 1024) olaSize <<= 1;
-            for (auto& a : acc) a.assign ((size_t) olaSize, 0.0f);
-            wsum.assign ((size_t) olaSize, 0.0f);
             aa1.set (Biquad::LowPass, fs, 0.4f * dfs, 0.7071f);
             aa2.set (Biquad::LowPass, fs, 0.4f * dfs, 0.7071f);
             configured = false;
@@ -120,9 +118,6 @@ namespace kv
         {
             for (auto& d : line) d.reset();
             std::fill (ring.begin(), ring.end(), 0.0f);
-            std::fill (lpRing.begin(), lpRing.end(), 0.0f);
-            for (auto& a : acc) std::fill (a.begin(), a.end(), 0.0f);
-            std::fill (wsum.begin(), wsum.end(), 0.0f);
             ringPos = 0; decCount = 0; hopCount = 0; nIn = 0;
             aa1.reset(); aa2.reset();
             latency = latencyFor (fs, quality, range);
@@ -131,7 +126,7 @@ namespace kv
             voiced = false; level = 0.0f; primed = false; onMix = 1.0f;
             tauTrack = 0.0f; missCount = 0; med[0] = med[1] = med[2] = 0.0f; medCount = 0;
             centre = 0.0f; jumpSamples = 0; slope = 0.0f; historyPos = 0; noteFrames = 0; jumpFrames = 0; lastMidi = -1.0f; lastFrameTime = 0;
-            frameCount = 0; frameHead = 0; markHead = markTail = 0; lastMarkT = 0; lastMarkVoiced = false; nextOut = -1.0;
+            frameCount = 0; frameHead = 0;
             vibPhase = 0.0f; vibEnv = 0.0f; vibMix = 0.0f; tremPhase = 0.0; tremMix = 0.0f; tremDepthNow = 0.0f;
             wander.reset (0x51u); wanderDepth.reset (0x77u);
         }
@@ -216,15 +211,37 @@ namespace kv
     private:
         //==============================================================================================================
         // Tracking mode: read head at the correction ratio, matched splices.
+        // High quality, time-aligned: the correction and period of the exact sample being played (from the lookahead
+        // frames, no prediction), applied by the same matched-splice shifter as Tracking.
+        void synthesiseHQ (const TuneSettings& s, float (&wet)[2])
+        {
+            const long long m = nIn - 1 - latency;
+            if (m < 0) { wet[0] = wet[1] = 0.0f; return; }
+            const Frame* fm = frameAt (m);
+            const bool v = fm != nullptr && fm->voiced;
+            const float vib = vibrato (s, v);
+            float corr = 0.0f, period = 0.0f;
+            valuesAt ((double) m, corr, period);
+            shownCorrection = corr;
+            shownMidi = v ? fm->midi : -1.0f;
+            spliceStep (corr + vib, period > 0.0f ? period : 0.01f * fs, ! v && std::abs (corr) < 0.01f && std::abs (vib) < 0.001f, wet);
+        }
+
         void synthesiseTracking (const TuneSettings& s, float (&wet)[2])
         {
             const float vib = vibrato (s, voiced);
             smoothCorrection (s, 1.0f);
             shownCorrection = correction;
             shownMidi = voiced ? lastMidi : -1.0f;
-            const float ratio = std::pow (2.0f, (correction + vib) / 12.0f);
+            spliceStep (correction + vib, periodNow > 0.0f ? periodNow : 0.01f * fs, ! voiced && std::abs (correction) < 0.01f && std::abs (vib) < 0.001f, wet);
+        }
+
+        // Delay-line shifter: the read head moves at the pitch ratio; when it leaves a window of 1.3 periods around the
+        // latency it splices one period back or forward at the best-matching lag, with a crossfade.
+        void spliceStep (float semitones, float period, bool idle, float (&wet)[2])
+        {
+            const float ratio = std::pow (2.0f, semitones / 12.0f);
             delay += 1.0f - ratio;
-            const float period = periodNow > 0.0f ? periodNow : 0.01f * fs;
             const int cmp = compareLength (period);
             // the head may wander 1.3 periods around the latency: a splice moves it one period (+-0.15 for the match),
             // so it always lands inside the window and never bounces straight back
@@ -238,7 +255,7 @@ namespace kv
                 fade = 1.0f;
                 fadeLen = std::clamp (0.6f * period, 24.0f, 0.006f * fs);
             }
-            if (! voiced && std::abs (correction) < 0.01f && std::abs (vib) < 0.001f)
+            if (idle)
                 delay += ((float) latency - delay) * 0.0005f;   // drift back to the reported latency when idle
             for (int c = 0; c < 2; ++c)
             {
@@ -287,9 +304,9 @@ namespace kv
         }
 
         //==============================================================================================================
-        // High quality mode: time-aligned correction, PSOLA with pitch marks.
+        // High quality mode: analysis frames stamped with the time they describe; the correction is read for the exact
+        // sample being played.
         struct Frame { long long time = 0; float midi = -1.0f, period = 0.0f, corr = 0.0f; bool voiced = false; };
-        struct Mark { long long time = 0; float period = 0.0f; bool voiced = false; };
 
         const Frame* frameAt (long long t) const
         {
@@ -331,121 +348,6 @@ namespace kv
             return c;
         }
 
-        void generateMarks()
-        {
-            const float unvoicedP = 0.005f * fs;
-            for (int guard = 0; guard < 64; ++guard)
-            {
-                const Frame* f = frameAt (lastMarkT);
-                const bool v = f != nullptr && f->voiced;
-                const float P = v ? f->period : unvoicedP;
-                long long cand = lastMarkT + (long long) std::lround (P);
-                if (cand + (long long) (0.25f * P) + 1 > nIn) break;   // the refinement window is not in yet
-                if (v)
-                {
-                    // refine to the period's largest peak of the low-passed signal (a consistent point in each cycle)
-                    const int q = (int) (0.25f * P);
-                    long long best = cand;
-                    float bestV = -1.0e30f;
-                    for (long long t = std::max (lastMarkT + (long long) (0.5f * P), cand - q); t <= cand + q; ++t)
-                        if (const float x = lpRing[(size_t) (t & (lpSize - 1))]; x > bestV) { bestV = x; best = t; }
-                    cand = best;
-                }
-                marks[(size_t) (markHead & (numMarks - 1))] = { cand, P, v };
-                ++markHead;
-                if (markHead - markTail > numMarks) markTail = markHead - numMarks;
-                lastMarkT = cand;
-                lastMarkVoiced = v;
-            }
-        }
-
-        void synthesiseHQ (const TuneSettings& s, float (&wet)[2])
-        {
-            generateMarks();
-            const long long m = nIn - 1 - latency;   // input time of the sample played now
-            if (m < 0) { wet[0] = wet[1] = 0.0f; return; }   // the lookahead is still filling (after a reset)
-            const Frame* fm = frameAt (m);
-            const bool v = fm != nullptr && fm->voiced;
-            const float vib = vibrato (s, v);
-            shownCorrection = correctionAt (m);
-            shownMidi = v ? fm->midi : -1.0f;
-            if (nextOut < 0.0) nextOut = (double) m;
-
-            for (int guard = 0; guard < 8; ++guard)
-            {
-                // the grain for the next synthesis mark is added before the first sample it reaches is played
-                const Mark* mk = nearestMark (nextOut);
-                if (mk == nullptr) { nextOut = (double) m + 1.0; break; }
-                const float P = std::max (8.0f, mk->period);
-                // after a stall (no marks yet, e.g. at a note's start) the grain would begin in the past and only its
-                // second half would play, a click: move it so that it starts with the sample played now
-                if (nextOut - P < (double) m - 1.0) nextOut = (double) m - 1.0 + P;
-                if (nextOut - P > (double) m) break;
-                if ((float) mk->time + P > (float) nIn) break;   // its input is not complete yet (should not happen at this latency)
-                // the output period comes from the same frames as the correction, so hard tune lands exactly on the note
-                float corr = 0.0f, period = P;
-                if (mk->voiced)
-                {
-                    valuesAt (nextOut, corr, period);
-                    if (period <= 0.0f) period = P;
-                    corr += vib;
-                }
-                const float ratio = std::pow (2.0f, std::clamp (corr, -12.0f, 12.0f) / 12.0f);
-                addGrain (nextOut, mk->time, P);
-                nextOut += (double) period / (double) ratio;
-            }
-
-            const auto idx = (size_t) (m & (olaSize - 1));
-            for (int c = 0; c < 2; ++c)
-            {
-                wet[c] = acc[c][idx] / std::max (wsum[idx], 0.5f);   // sparse grains fade instead of switching to the dry signal
-                acc[c][idx] = 0.0f;
-            }
-            wsum[idx] = 0.0f;
-        }
-
-        const Mark* nearestMark (double t)
-        {
-            while (markHead - markTail > 1 && (double) marks[(size_t) ((markTail + 1) & (numMarks - 1))].time <= t)
-            {
-                // drop marks once the next one is still at or before t (keep the one just before t)
-                const auto& a = marks[(size_t) (markTail & (numMarks - 1))];
-                const auto& b = marks[(size_t) ((markTail + 1) & (numMarks - 1))];
-                if ((double) b.time <= t && (double) a.time < t) ++markTail; else break;
-            }
-            if (markHead == markTail) return nullptr;
-            const Mark* best = nullptr;
-            double bestD = 1.0e30;
-            for (long long k = markTail; k < markHead && k < markTail + 4; ++k)
-            {
-                const Mark& mk = marks[(size_t) (k & (numMarks - 1))];
-                const double d = std::abs ((double) mk.time - t);
-                if (d < bestD) { bestD = d; best = &mk; }
-            }
-            return best;
-        }
-
-        // Adds a Hann grain of half-length P taken around input time inCentre, centred on the (fractional) output time
-        // outCentre. The input is read at the same fractional offset so the output period is exact, not rounded.
-        void addGrain (double outCentre, long long inCentre, float P)
-        {
-            const auto first = (long long) std::floor (outCentre - (double) P) + 1;
-            const auto last = (long long) std::ceil (outCentre + (double) P) - 1;
-            for (long long j = first; j <= last; ++j)
-            {
-                const float k = (float) ((double) j - outCentre);
-                if (std::abs (k) >= P) continue;
-                const float w = 0.5f + 0.5f * std::cos ((float) pi * k / P);
-                const float d = (float) (nIn - 1 - inCentre) - k;
-                if (d < 1.0f || d > (float) line[0].capacity()) continue;
-                const auto idx = (size_t) (j & (olaSize - 1));
-                acc[0][idx] += w * line[0].read (d);
-                acc[1][idx] += w * line[1].read (d);
-                wsum[idx] += w;
-            }
-        }
-
-        //==============================================================================================================
         // Vibrato offset in semitones for the current sample.
         float vibrato (const TuneSettings& s, bool isVoiced)
         {
@@ -475,7 +377,6 @@ namespace kv
         {
             level = std::abs (x) > level ? std::abs (x) : level * 0.9995f;
             const float y = aa2.process (aa1.process (x));
-            lpRing[(size_t) ((nIn - 1) & (lpSize - 1))] = y;
             if (++decCount < decim) return;
             decCount = 0;
             ring[(size_t) ringPos] = y;
@@ -605,18 +506,18 @@ namespace kv
                 pushHistory (midi);
                 const float grid = s.detuneCents / 100.0f;   // Detune: every target note sits this many semitones off 12-TET A440
                 const float shortMean = historyMean (std::max (1, (int) (0.02f * fs / dt)));
-                // A new note: the last 30 ms have left the held note's centre (its vibrato-free average) by more than
-                // 0.65 semitones for 20 ms, or by more than 0.95 at once (a legato step or a jump), and lie nearer
-                // another note. Vibrato swings around the centre, so it does not count. The note's history restarts
+                // A new note: the last 15 ms have left the held note's centre (its vibrato-free average) by more than
+                // 0.5 semitones for 10 ms, or by more than 0.7 at once (a legato step or a jump), and lie nearer
+                // another note (timing matched to reference renders of a real vocal). Vibrato swings around the centre, so it does not count. The note's history restarts
                 // so its average describes only the new note.
                 if (targetNote >= 0 && noteFrames > 2)
                 {
-                    const float recent = historyMean (std::max (1, (int) (0.03f * fs / dt)));
+                    const float recent = historyMean (std::max (1, (int) (0.015f * fs / dt)));
                     const float ref = (float) noteFrames * dt > 0.11f * fs ? centre : (float) targetNote + grid;
                     const float away = std::abs (recent - ref);
                     const bool otherNote = std::abs (recent - ((float) targetNote + grid)) > 0.55f;
-                    if (away > 0.65f && otherNote) ++jumpFrames; else jumpFrames = 0;
-                    if (otherNote && (away > 0.95f || (float) jumpFrames * dt > 0.02f * fs))
+                    if (away > 0.5f && otherNote) ++jumpFrames; else jumpFrames = 0;
+                    if (otherNote && (away > 0.7f || (float) jumpFrames * dt > 0.01f * fs))
                     {
                         startNote();
                         pushHistory (midi);
@@ -650,6 +551,11 @@ namespace kv
                     const float flatten = s.speedMs <= 0.0f ? 1.0f : std::exp (-s.speedMs / 30.0f);
                     const float ref = flatten * midi + (1.0f - flatten) * centre;
                     target = bestNote >= 0 ? std::clamp ((float) bestNote + grid - ref, -6.0f, 6.0f) : 0.0f;
+                    // Glides between notes pass through: while the voice moves fast (above ~18 semitones per second)
+                    // the correction relaxes, down to 35 % at 70 st/s, so a slide is not chopped into steps. This
+                    // matches how established tuners treat transitions (measured on reference renders).
+                    const float stPerSec = std::abs (slope) * fs;
+                    target *= 1.0f - 0.65f * std::clamp ((stPerSec - 18.0f) / 52.0f, 0.0f, 1.0f);
                 }
                 else target = s.detuneCents / 100.0f;
             }
@@ -705,16 +611,14 @@ namespace kv
             else correction += (target - correction) * (1.0f - std::exp (-steps / (0.001f * tc * fs)));
         }
 
-        static constexpr int maxLagCap = 610, hop = 16, numFrames = 1024, numMarks = 256;
+        static constexpr int maxLagCap = 610, hop = 16, numFrames = 1024;
         float fs = 48000.0f, dfs = 12000.0f;
         int quality = Tracking, range = 1;
         bool configured = false;
         int latency = 192, decim = 4, decCount = 0, hopCount = 0, ringPos = 0;
         long long nIn = 0;
         DelayLine line[2];
-        std::vector<float> ring, lpRing, wsum;
-        std::vector<float> acc[2];
-        int lpSize = 1, olaSize = 1;
+        std::vector<float> ring;
         Biquad aa1, aa2;
         float delay = 192, fadeDelay = 192, fade = 0, fadeLen = 32;
         float correction = 0, desired = 0, periodNow = 0, onMix = 1, level = 0;
@@ -729,10 +633,6 @@ namespace kv
         std::array<Frame, numFrames> frames {};
         int frameCount = 0;
         long long frameHead = 0;
-        std::array<Mark, numMarks> marks {};
-        long long markHead = 0, markTail = 0, lastMarkT = 0;
-        bool lastMarkVoiced = false;
-        double nextOut = -1.0;
         float vibPhase = 0, vibEnv = 0, vibMix = 0, lastVib = 0, tremMix = 0, tremDepthNow = 0;
         double tremPhase = 0;
         SmoothRandom wander { 0x51u }, wanderDepth { 0x77u };

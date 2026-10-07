@@ -13,7 +13,7 @@ namespace kvui
             { "tn_humanize", "Slows correction on held notes so they keep natural movement." },
             { "tn_key", "Key of the song." }, { "tn_scale", "Notes the vocal is pulled to. Editing the note keys switches to Custom." },
             { "tn_range", "Expected pitch range of the singer; narrows detection for reliability." },
-            { "tn_quality", "Tracking: 4 ms latency for recording and monitoring. High quality: looks ahead (18 to 46 ms, by Vocal Range) and keeps the voice's formants for mixing." },
+            { "tn_quality", "Tracking: 4 ms latency for recording and monitoring. High quality: looks ahead (about 9 to 21 ms, by Vocal Range) so every correction lands exactly, for mixing." },
             { "_freq", "Frequency of the band." }, { "_gain", "Boost or cut." }, { "_q", "Width: higher is narrower." },
             { "_slope", "Steepness of a cut filter in dB per octave." }, { "_type", "Filter shape." },
             { "_used", "Adds or removes the band." }, { "eq_out_gain", "Level after the EQ." },
