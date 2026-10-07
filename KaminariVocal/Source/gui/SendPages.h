@@ -963,77 +963,6 @@ namespace kvui
         juce::Rectangle<int> descArea, groupArea, noteArea;
     };
 
-    //==================================================================================================================
-    // FLANGER
-    // Delay time of the left (accent) and right (amber) sweep over two LFO cycles, with the current position.
-    class SweepDisplay : public juce::Component, private juce::Timer
-    {
-    public:
-        explicit SweepDisplay (KaminariVocalProcessor& p) : proc (p), state (p.apvts) { setTitle ("Flanger sweep"); startTimerHz (30); }
-        ~SweepDisplay() override { stopTimer(); }
-        void paint (juce::Graphics& g) override
-        {
-            auto b = getLocalBounds().toFloat();
-            g.setColour (navy950);
-            g.fillRoundedRectangle (b, 5.0f);
-            g.setColour (navy600);
-            g.drawRoundedRectangle (b.reduced (0.5f), 5.0f, 1.0f);
-            const float base = plainValue (state, kvid::flDelay), depth = plainValue (state, kvid::flDepth) * 0.01f;
-            const float stereo = plainValue (state, kvid::flStereo) / 180.0f;
-            const int shape = juce::roundToInt (plainValue (state, kvid::flShape));
-            const float top = base + kv::Flanger::maxSweepMs * depth;
-            const float yMax = juce::jmax (2.0f, top * 1.15f);
-            auto plot = b.reduced (12.0f, 10.0f).withTrimmedTop (14.0f).withTrimmedBottom (12.0f);
-            g.setColour (navy800);
-            for (int k = 1; k < 4; ++k) g.drawVerticalLine (juce::roundToInt (plot.getX() + plot.getWidth() * (float) k / 4.0f), plot.getY(), plot.getBottom());
-            for (int c = 1; c >= 0; --c)
-            {
-                juce::Path path;
-                const int n = (int) plot.getWidth();
-                for (int i = 0; i <= n; ++i)
-                {
-                    const float ph = 2.0f * (float) i / (float) n + (c == 1 ? 0.5f * stereo : 0.0f);
-                    const float lfo = 0.5f + 0.5f * kv::lfoShape (shape, ph - 0.25f);
-                    const float d = base + kv::Flanger::maxSweepMs * depth * lfo;
-                    const float x = plot.getX() + (float) i, y = plot.getBottom() - plot.getHeight() * d / yMax;
-                    if (i == 0) path.startNewSubPath (x, y); else path.lineTo (x, y);
-                }
-                g.setColour (c == 0 ? accent : amber.withAlpha (0.85f));
-                g.strokePath (path, juce::PathStrokeType (c == 0 ? 2.0f : 1.4f));
-            }
-            // current LFO position (left channel), on both drawn cycles
-            const bool on = choiceIndex (state, kvid::flOn) != 0;
-            if (on)
-                for (int k = 0; k < 2; ++k)
-                {
-                    const float ph = pos + (float) k;
-                    const float lfo = 0.5f + 0.5f * kv::lfoShape (shape, ph - 0.25f);
-                    const float d = base + kv::Flanger::maxSweepMs * depth * lfo;
-                    const float x = plot.getX() + plot.getWidth() * ph / 2.0f, y = plot.getBottom() - plot.getHeight() * d / yMax;
-                    g.setColour (white);
-                    g.fillEllipse (x - 3.5f, y - 3.5f, 7.0f, 7.0f);
-                }
-            g.setFont (font (11.0f, 0));
-            g.setColour (mist);
-            const float notchLo = 500.0f / top, notchHi = 500.0f / base;   // first comb notch in Hz: 1 / (2 d), d in ms
-            g.drawText ("delay " + juce::String (base, 2) + juce::String (juce::CharPointer_UTF8 ("\xe2\x80\x93")) + juce::String (top, 2) + " ms"
-                        + dot() + "first notch " + kvp::freqText (notchLo) + juce::String (juce::CharPointer_UTF8 ("\xe2\x80\x93")) + kvp::freqText (notchHi),
-                        b.reduced (12.0f, 4.0f).removeFromTop (14.0f), juce::Justification::centredLeft);
-            g.setFont (font (10.0f, 1, 0.08f));
-            g.setColour (accent);
-            g.drawText ("LEFT", b.reduced (12.0f, 4.0f).removeFromBottom (12.0f), juce::Justification::centredLeft);
-            g.setColour (amber);
-            g.drawText ("RIGHT", b.reduced (12.0f, 4.0f).removeFromBottom (12.0f).withTrimmedLeft (34.0f), juce::Justification::centredLeft);
-            g.setColour (mist);
-            g.drawText ("2 cycles", b.reduced (12.0f, 4.0f).removeFromBottom (12.0f), juce::Justification::centredRight);
-        }
-    private:
-        void timerCallback() override { pos = proc.flanger.lfoNow.load(); repaint(); }
-        KaminariVocalProcessor& proc;
-        APVTS& state;
-        float pos = 0;
-    };
-
     class FlangerOptions : public juce::Component
     {
     public:
@@ -1055,12 +984,192 @@ namespace kvui
         SegParam shape;
     };
 
+    //==================================================================================================================
+    // FLANGER
+    // Real-time vectorscope of the flanger's output (goniometer: mid up, side across) with a fading persistence trail,
+    // and beside it a phase-correlation meter and left / right level meters.
+    class FlangerScope : public juce::Component, private juce::Timer
+    {
+    public:
+        explicit FlangerScope (KaminariVocalProcessor& p) : proc (p)
+        {
+            setTitle ("Flanger vectorscope");
+            setDescription ("Stereo image of the flanger's output: mid up, side across; correlation and left / right levels beside it.");
+            startTimerHz (60);
+        }
+        ~FlangerScope() override { stopTimer(); }
+
+        float correlation() const noexcept { return corr; }
+        int plottedFrames() const noexcept { return lastFrames; }
+
+        void paint (juce::Graphics& g) override
+        {
+            auto b = getLocalBounds().toFloat();
+            juce::ColourGradient bg (navy800.withAlpha (0.55f), b.getCentreX(), b.getY(), navy950, b.getCentreX(), b.getBottom(), false);
+            g.setGradientFill (bg);
+            g.fillRoundedRectangle (b, 8.0f);
+            g.setColour (navy600);
+            g.drawRoundedRectangle (b.reduced (0.5f), 8.0f, 1.0f);
+
+            const auto sq = scopeArea.toFloat();
+            const auto c = sq.getCentre();
+            const float R = sq.getWidth() * 0.5f;
+            // depth: a soft radial glow behind the scope and concentric rings
+            juce::ColourGradient halo (accent.withAlpha (0.10f), c.x, c.y, accent.withAlpha (0.0f), c.x + R * 1.1f, c.y, true);
+            g.setGradientFill (halo);
+            g.fillEllipse (sq.expanded (R * 0.1f));
+            g.setColour (navy950.withAlpha (0.85f));
+            g.fillEllipse (sq);
+            for (int ring = 1; ring <= 4; ++ring)
+            {
+                const float k = 0.25f * (float) ring;
+                g.setColour (navy600.withAlpha (ring == 4 ? 0.9f : 0.45f));
+                g.drawEllipse (juce::Rectangle<float> (2 * R * k, 2 * R * k).withCentre (c), ring == 4 ? 1.2f : 0.8f);
+            }
+            // axes: M vertical, S horizontal, L and R on the diagonals
+            g.setColour (navy600.withAlpha (0.6f));
+            g.drawLine (c.x, c.y - R, c.x, c.y + R, 0.8f);
+            g.drawLine (c.x - R, c.y, c.x + R, c.y, 0.8f);
+            const float d = R * 0.7071f;
+            g.drawLine (c.x - d, c.y - d, c.x + d, c.y + d, 0.6f);
+            g.drawLine (c.x + d, c.y - d, c.x - d, c.y + d, 0.6f);
+            g.setColour (mist);
+            g.setFont (font (11.0f, 2, 0.1f));
+            g.drawText ("M", juce::Rectangle<float> (20, 14).withCentre ({ c.x, c.y - R - 10.0f }), juce::Justification::centred);
+            g.drawText ("L", juce::Rectangle<float> (20, 14).withCentre ({ c.x - d - 8.0f, c.y - d - 8.0f }), juce::Justification::centred);
+            g.drawText ("R", juce::Rectangle<float> (20, 14).withCentre ({ c.x + d + 8.0f, c.y - d - 8.0f }), juce::Justification::centred);
+            g.drawText ("+S", juce::Rectangle<float> (24, 14).withCentre ({ c.x - R - 14.0f, c.y }), juce::Justification::centred);
+            g.drawText ("-S", juce::Rectangle<float> (24, 14).withCentre ({ c.x + R + 14.0f, c.y }), juce::Justification::centred);
+
+            // trail
+            if (trail.isValid())
+            {
+                g.saveState();
+                juce::Path clip;
+                clip.addEllipse (sq);
+                g.reduceClipRegion (clip);
+                g.drawImageAt (trail, scopeArea.getX(), scopeArea.getY());
+                g.restoreState();
+            }
+
+            // correlation meter
+            auto cm = corrArea.toFloat();
+            g.setColour (mist);
+            g.setFont (font (11.0f, 2, 0.1f));
+            g.drawText ("CORRELATION", cm.withY (cm.getY() - 18.0f).withHeight (14.0f), juce::Justification::centredLeft);
+            g.setColour (navy950);
+            g.fillRoundedRectangle (cm, 3.0f);
+            g.setColour (navy600);
+            g.drawRoundedRectangle (cm.reduced (0.5f), 3.0f, 1.0f);
+            g.drawVerticalLine ((int) cm.getCentreX(), cm.getY() + 2, cm.getBottom() - 2);
+            const float x = cm.getCentreX() + corr * (cm.getWidth() * 0.5f - 4.0f);
+            g.setColour (corr < 0.0f ? amber : accent);
+            g.fillRoundedRectangle (juce::Rectangle<float>::leftTopRightBottom (std::min (x, cm.getCentreX()), cm.getY() + 3, std::max (x, cm.getCentreX()), cm.getBottom() - 3), 2.0f);
+            g.setColour (white);
+            g.fillRect (juce::Rectangle<float> (x - 1.5f, cm.getY() + 1, 3.0f, cm.getHeight() - 2));
+            g.setColour (mist);
+            g.setFont (font (10.0f, 0));
+            g.drawText ("-1", cm.withY (cm.getBottom() + 3).withHeight (12), juce::Justification::centredLeft);
+            g.drawText ("0", cm.withY (cm.getBottom() + 3).withHeight (12), juce::Justification::centred);
+            g.drawText ("+1", cm.withY (cm.getBottom() + 3).withHeight (12), juce::Justification::centredRight);
+            g.setColour (white);
+            g.setFont (font (20.0f, 1));
+            g.drawText ((corr >= 0 ? "+" : "") + juce::String (corr, 2), cm.withY (cm.getBottom() + 22).withHeight (26), juce::Justification::centred);
+
+            // left / right meters
+            auto lm = levelArea.toFloat();
+            g.setColour (mist);
+            g.setFont (font (11.0f, 2, 0.1f));
+            g.drawText ("L / R", lm.withY (lm.getY() - 18.0f).withHeight (14.0f), juce::Justification::centredLeft);
+            for (int ch = 0; ch < 2; ++ch)
+            {
+                auto bar = lm.withWidth ((lm.getWidth() - 6.0f) * 0.5f).translated (ch == 0 ? 0.0f : (lm.getWidth() + 6.0f) * 0.5f, 0.0f);
+                g.setColour (navy950);
+                g.fillRoundedRectangle (bar, 3.0f);
+                const float db = juce::Decibels::gainToDecibels (level[ch], -60.0f);
+                const float h = bar.getHeight() * juce::jlimit (0.0f, 1.0f, (db + 60.0f) / 60.0f);
+                juce::ColourGradient lg (accent, bar.getCentreX(), bar.getBottom(), white, bar.getCentreX(), bar.getY(), false);
+                g.setGradientFill (lg);
+                g.fillRoundedRectangle (bar.withTop (bar.getBottom() - h), 3.0f);
+                g.setColour (mist);
+                g.setFont (font (10.0f, 1));
+                g.drawText (ch == 0 ? "L" : "R", bar.withY (bar.getBottom() + 3).withHeight (12), juce::Justification::centred);
+            }
+        }
+
+        void resized() override
+        {
+            auto b = getLocalBounds().reduced (16, 14);
+            auto side = b.removeFromRight (juce::jmin (230, b.getWidth() / 3));
+            const int s = juce::jmin (b.getWidth(), b.getHeight() - 24);
+            scopeArea = b.withSizeKeepingCentre (s, s).translated (0, 6);
+            side.removeFromTop (30);
+            corrArea = side.removeFromTop (18).reduced (4, 0);
+            side.removeFromTop (78);
+            levelArea = side.withTrimmedBottom (20).withSizeKeepingCentre (60, side.getHeight() - 20);
+            trail = juce::Image (juce::Image::ARGB, juce::jmax (1, scopeArea.getWidth()), juce::jmax (1, scopeArea.getHeight()), true);
+        }
+
+        // One frame: fade the trail, plot the new samples (also called by the tests).
+        void advance()
+        {
+            static constexpr int maxFrames = 4096;
+            float l[maxFrames], r[maxFrames];
+            const int n = proc.flangerScope.copySince (readPos, l, r, maxFrames);
+            lastFrames = n;
+            if (! trail.isValid()) return;
+            trail.multiplyAllAlphas (0.82f);   // fade: the trail lasts about a third of a second
+            if (n <= 0) { corr = corr * 0.95f; level[0] *= 0.9f; level[1] *= 0.9f; repaint(); return; }
+            double ll = 0, rr = 0, lr = 0;
+            float peak = 1.0e-6f;
+            for (int i = 0; i < n; ++i)
+            {
+                ll += (double) l[i] * l[i]; rr += (double) r[i] * r[i]; lr += (double) l[i] * r[i];
+                peak = std::max (peak, std::max (std::abs (l[i]), std::abs (r[i])));
+            }
+            const float c = (ll > 1e-12 && rr > 1e-12) ? (float) (lr / std::sqrt (ll * rr)) : 0.0f;
+            corr += (c - corr) * 0.15f;
+            for (int ch = 0; ch < 2; ++ch)
+            {
+                const float rms = (float) std::sqrt ((ch == 0 ? ll : rr) / n) * 1.4142f;
+                level[ch] = rms > level[ch] ? rms : level[ch] * 0.9f + rms * 0.1f;
+            }
+            // auto-gain so quiet material still fills the scope (slow, never above 8x)
+            gainTrack = std::max (peak, gainTrack * 0.995f);
+            const float k = std::min (8.0f, 0.9f / std::max (1.0e-4f, gainTrack));
+            const float R = trail.getWidth() * 0.5f;
+            juce::Graphics tg (trail);
+            juce::Path path;
+            const int stride = std::max (1, n / 1500);
+            for (int i = 0; i < n; i += stride)
+            {
+                const float m = (l[i] + r[i]) * 0.7071f * k, sd = (l[i] - r[i]) * 0.7071f * k;
+                const juce::Point<float> pt { R - sd * R, R - m * R };
+                if (i == 0) path.startNewSubPath (pt); else path.lineTo (pt);
+            }
+            tg.setColour (accent.withAlpha (0.18f));
+            tg.strokePath (path, juce::PathStrokeType (3.0f));
+            tg.setColour (white.withAlpha (0.55f));
+            tg.strokePath (path, juce::PathStrokeType (0.9f));
+            repaint();
+        }
+
+    private:
+        void timerCallback() override { advance(); }
+        KaminariVocalProcessor& proc;
+        juce::Image trail;
+        juce::Rectangle<int> scopeArea, corrArea, levelArea;
+        unsigned readPos = 0;
+        float corr = 0, gainTrack = 0.1f, level[2] {};
+        int lastFrames = 0;
+    };
+
     class FlangerPage : public AdvFrame
     {
     public:
         explicit FlangerPage (KaminariVocalProcessor& p)
             : AdvFrame (p, "Flanger", "Swept comb filter" + dot() + "after Compression, before Distortion", "fl_on", "flanger"),
-              sweep (p),
+              scope (p),
               rate (p.apvts, kvid::flRate, "Rate", "SLOW", "FAST", "Sweep speed when Sync is Free."),
               depth (p.apvts, kvid::flDepth, "Depth", "MIN", "MAX", "How far the delay sweeps (up to 6 ms above Delay)."),
               delay (p.apvts, kvid::flDelay, "Delay", "0.1", "10 MS", "Shortest delay of the sweep. Short = high, metallic notches; long = chorus-like."),
@@ -1072,7 +1181,7 @@ namespace kvui
               state (p.apvts),
               syncAtt (*p.apvts.getParameter (kvid::flSync), [this] (float) { update(); })
         {
-            for (auto* c : std::initializer_list<juce::Component*> { &sweep, &options })
+            for (auto* c : std::initializer_list<juce::Component*> { &scope, &options })
                 addAndMakeVisible (c);
             for (auto* k : knobs())
             {
@@ -1107,14 +1216,14 @@ namespace kvui
 
         void layoutContent (juce::Rectangle<int> b) override
         {
-            sweep.setBounds (b.removeFromTop (200));
-            b.removeFromTop (14);
-            layoutGroups (b.removeFromTop (160), { &sweepGrp, &delayGrp, &stereoGrp, &toneGrp, &outGrp }, 104, 16);
-            b.removeFromTop (10);
-            noteArea = b.removeFromTop (40);
+            noteArea = b.removeFromBottom (36);
+            b.removeFromBottom (8);
+            layoutGroups (b.removeFromBottom (160), { &sweepGrp, &delayGrp, &stereoGrp, &toneGrp, &outGrp }, 104, 16);
+            b.removeFromBottom (14);
+            scope.setBounds (b);   // the vectorscope takes all the remaining height
         }
 
-        SweepDisplay sweep;
+        FlangerScope scope;
         RangeKnob rate, depth, delay, feedback, stereo, hiCut, mix;
         FlangerOptions options;
 

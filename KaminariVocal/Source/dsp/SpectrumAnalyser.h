@@ -166,3 +166,41 @@ private:
     std::unique_ptr<juce::dsp::FFT> fft;
     std::vector<float> window, input, work, spectrum;
 };
+
+// Audio side: the most recent stereo samples (for the vectorscope). The GUI copies the newest frames at its own rate.
+class StereoScopeRing
+{
+public:
+    static constexpr int size = 1 << 14;
+
+    void push (const float* l, const float* r, int n) noexcept
+    {
+        auto w = writePos.load (std::memory_order_relaxed);
+        for (int i = 0; i < n; ++i, ++w)
+        {
+            ringL[(size_t) (w & (size - 1))].store (l[i], std::memory_order_relaxed);
+            ringR[(size_t) (w & (size - 1))].store (r[i], std::memory_order_relaxed);
+        }
+        writePos.store (w, std::memory_order_release);
+    }
+
+    // GUI thread: frames written since `since` (at most maxFrames, newest ones), oldest first. Returns the count
+    // and updates `since`.
+    int copySince (unsigned& since, float* l, float* r, int maxFrames) const noexcept
+    {
+        const auto w = writePos.load (std::memory_order_acquire);
+        int n = (int) std::min<unsigned> (w - since, (unsigned) std::min (maxFrames, size));
+        for (int i = 0; i < n; ++i)
+        {
+            const auto idx = (size_t) ((w - (unsigned) n + (unsigned) i) & (size - 1));
+            l[i] = ringL[idx].load (std::memory_order_relaxed);
+            r[i] = ringR[idx].load (std::memory_order_relaxed);
+        }
+        since = w;
+        return n;
+    }
+
+private:
+    std::array<std::atomic<float>, size> ringL {}, ringR {};
+    std::atomic<unsigned> writePos { 0 };
+};

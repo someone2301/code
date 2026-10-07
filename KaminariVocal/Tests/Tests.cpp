@@ -1534,6 +1534,20 @@ int main (int argc, char** argv)
                 check (withPiano && withoutPiano && unit, "EQ band panel: note and cents shown only with the keyboard on; slope reads "
                        + p.apvts.getParameter ("eq1_slope")->getCurrentValueAsText());
             }
+            // Flanger vectorscope: plots the flanger's output in real time
+            {
+                setParam (p, "fl_on", 1.0f);
+                ed->showTab (true, KaminariVocalEditor::TabFlanger);
+                juce::MessageManager::getInstance()->runDispatchLoopUntil (20);
+                auto& sc = ed->flangerPanel().scope;
+                sc.advance();
+                render (p, 0.3, vocal);
+                sc.advance();
+                const int frames = sc.plottedFrames();
+                check (frames > 1000 && sc.getHeight() > 300, "Flanger vectorscope: " + juce::String (frames) + " new frames plotted, "
+                       + juce::String (sc.getHeight()) + " px tall; correlation " + juce::String (sc.correlation(), 2));
+                setParam (p, "fl_on", 0.0f);
+            }
             setParam (p, "lv_style", 1.0f);   // Vocal
             juce::MessageManager::getInstance()->runDispatchLoopUntil (20);
             const bool ratioOff = ! ed->compressionPanel().ratioKnob().isEnabled() && ed->compressionPanel().ratioKnob().value.getText() == "Auto";

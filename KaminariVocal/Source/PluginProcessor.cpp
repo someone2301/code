@@ -312,6 +312,7 @@ void KaminariVocalProcessor::processModules (float* l, float* r, int n)
         if (active && flangerIdle) flanger.reset();
         flangerIdle = ! active;
         crossfaded (ModFlanger, [&] { flanger.process (l, r, l, r, n, flSettings); moduleGr[ModFlanger].store (flanger.lfoNow.load()); });
+        if (moduleOn[ModFlanger] || fade.isSmoothing()) flangerScope.push (l, r, n);
     }
     // Distortion: skipped entirely while off (no latency); restarts from a clean state
     {
