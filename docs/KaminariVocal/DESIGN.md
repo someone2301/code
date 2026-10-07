@@ -554,7 +554,7 @@ Per return (`rv_` and `dl_` prefixes; part of each send's module presets):
 | `xx_duck_source` | Source | Vocal (processed, what you hear), Raw Input (before the channel modules) | Vocal |
 | `xx_wet_gain` | Wet Gain (after ducking) | −24 … +12 dB | 0 dB |
 
-Global (chain presets only): `fx_route` Off / Delay into Reverb / Reverb into Delay (default Off) and `fx_route_amt` 0 … 100 % (default 30 %). One direction at a time, so the two returns can never form a loop. The source return is taken after its EQ and before ducking, follows its on/off fade, and is guarded like any return.
+Routing between the sends (chain presets only): `fx_rv_feed` (Off, Delay, Widener), `fx_dl_feed` (Off, Reverb, Widener), `fx_wd_feed` (Off, Reverb, Delay), each with an amount `fx_*_feed_amt` 0 … 100 % (default 30 %). Each send feeds at most one other; a feed that would close a loop is dropped (checked in the order Reverb, Delay, Widener) and flagged on the page, and the sends run so every source comes before its target. A source return is taken after its EQ and before ducking, follows its on/off fade, and is guarded like any return. The routing matrix is on the Reverb and Delay Duck & Route views and on the Widener's Route view.
 
 Order per return: effect → EQ (band solo replaces the output with the band's region, taken from the EQ's input) → routing tap → ducking → wet gain → on/off fade → return guard. The Sends page has Sound / EQ / Duck & Route views for Reverb and Delay; the EQ view is the shared EQ editor (2.19) with Before / After analyzer toggles.
 
@@ -744,6 +744,15 @@ layout, filters (`kv::EqDesign` / `kv::Equalizer`) and editor (`EqEditor`: `EqCu
 `EqBandPanel`, analyzer toggles, resolution and speed). Analyzer Pre and Post are two independent toggles everywhere
 (also Multiband and Resonance In / Out), so both can be shown at once. The selected band's node crackles with
 lightning in every EQ graph.
+
+### 2.21 Later revisions
+
+- EQ band panel: note and cents beside the frequency only while the keyboard (Piano) is shown; slope choices read "6 dB/oct" … "48 dB/oct" (presets that store the bare number still load); a cut picked from the type list starts with a flat corner (Q 0.71).
+- Compression page: Compressor / Side-chain EQ view switch at the top right, as on the Sends page.
+- Flanger page: the sweep graph is replaced by a large real-time vectorscope (mid up, side across, persistence trail) with a correlation meter and L / R meters.
+- De-ess: one all-round mode (Single Vocal removed); the display is a smooth scrolling view of 6 s (200 points per second, 60 fps): input level as a soft filled shape, the removed part (from the de-esser's own gain reduction), the reduction as a curve hanging from the top, threshold, time axis and meters.
+- Tune page: the note indicator sits on a recessed stage (glow that follows the correction, receding rings, rays, shadow, lit dial).
+- Hammer: cylindrical shading and a specular streak; glow around the filled part and a whiter fill as it is pulled further; bolts in front of or behind the hammer, rings orbiting the head and grip (far half behind, near half in front); all lightning clipped to the aura, re-jagging between frames.
 
 ### 2.20 Widener algorithms (revised)
 
