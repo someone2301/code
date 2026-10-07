@@ -483,6 +483,69 @@ int main (int argc, char** argv)
                "delay groove (full swing): echoes at 400 ms and 600 ms instead of 300 / 600 ms");
     }
 
+    // ---- widener quality: MicroShift is smooth (no splice warble), SideWidener has no regular comb ------------------
+    {
+        // a steady 1030 Hz tone through MicroShift: the level of each side stays steady over 8 s (a two-tap shifter
+        // that mixes taps 20 ms apart dips by many dB whenever they cancel)
+        kv::MicroShiftEngine ms;
+        ms.prepare ((float) sr);
+        kv::WidenerSettings ws;
+        const int total = (int) sr * 8;
+        std::vector<float> l ((size_t) total), r ((size_t) total), ol ((size_t) total), orr ((size_t) total);
+        for (int i = 0; i < total; ++i) l[(size_t) i] = r[(size_t) i] = 0.25f * (float) std::sin (2.0 * kv::pi * 1030.0 * i / sr);
+        for (int start = 0; start < total; start += block)
+            ms.process (l.data() + start, r.data() + start, ol.data() + start, orr.data() + start, std::min (block, total - start), ws);
+        float lo = 1e9f, hi = -1e9f;
+        const int frame = (int) (0.02 * sr);
+        for (int f = (int) sr; f + frame < total; f += frame)
+            for (auto* ch : { &ol, &orr })
+            {
+                double e = 0;
+                for (int i = f; i < f + frame; ++i) e += (double) (*ch)[(size_t) i] * (*ch)[(size_t) i];
+                const float db = 10.0f * std::log10 ((float) (e / frame) + 1e-12f);
+                lo = std::min (lo, db); hi = std::max (hi, db);
+            }
+        check (hi - lo < 2.0f, "MicroShift: a steady tone stays steady through every splice (level range " + juce::String (hi - lo, 2) + " dB over 7 s)");
+
+        // SideWidener per speaker (dry + side): a plain short delay leaves a comb of evenly spaced deep notches (a
+        // pitched, metallic colour); the allpass decorrelators leave only a few irregular ones. Count notches deeper
+        // than 12 dB from 200 Hz to 4 kHz in 1/24-octave steps, for the new Mode 1 and for a 3.5 ms delay.
+        auto countNotches = [] (std::function<float (const std::vector<float>&, int)> sideAt)
+        {
+            int notches = 0;
+            bool inNotch = false;
+            for (double f = 200.0; f < 4000.0; f *= std::pow (2.0, 1.0 / 24.0))
+            {
+                const int len = (int) (0.25 * sr);
+                std::vector<float> in ((size_t) len);
+                for (int i = 0; i < len; ++i) in[(size_t) i] = 0.25f * (float) std::sin (2.0 * kv::pi * f * i / sr);
+                double e = 0, ei = 0;
+                for (int i = len / 2; i < len; ++i) { const double y = in[(size_t) i] + sideAt (in, i); e += y * y; ei += (double) in[(size_t) i] * in[(size_t) i]; }
+                const bool deep = 10.0 * std::log10 (e / ei + 1e-12) < -12.0;
+                if (deep && ! inNotch) ++notches;
+                inNotch = deep;
+            }
+            return notches;
+        };
+        const int delayNotches = countNotches ([] (const std::vector<float>& in, int i) { const int d = (int) (0.0035 * sr); return i >= d ? in[(size_t) (i - d)] : 0.0f; });
+        const int apNotches = countNotches ([] (const std::vector<float>& in, int i)
+        {
+            static std::vector<float> outL;
+            kv::SideWidenerEngine sw;
+            if (i == (int) in.size() / 2)
+            {
+                sw.prepare ((float) sr);
+                kv::WidenerSettings s1; s1.type = kv::WidenerSettings::SideWidener; s1.swMode = 0; s1.swWidth = 1.0f; s1.swTone = 1.0f;
+                outL.assign (in.size(), 0.0f);
+                std::vector<float> outR (in.size());
+                sw.process (in.data(), in.data(), outL.data(), outR.data(), (int) in.size(), s1);
+            }
+            return outL[(size_t) i];
+        });
+        check (apNotches == 0 && delayNotches >= 5, "SideWidener Mode 1 at full width: " + juce::String (apNotches) + " notches deeper than 12 dB per speaker "
+               "from 200 Hz to 4 kHz (a full-level 3.5 ms delay: " + juce::String (delayNotches) + ", evenly spaced)");
+    }
+
     // ---- widener --------------------------------------------------------------------------------------------------
     {
         auto run = [] (int type, std::function<void (KaminariVocalProcessor&)> extra = nullptr)
