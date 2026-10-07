@@ -44,7 +44,7 @@ void KaminariVocalProcessor::prepareToPlay (double sampleRate, int samplesPerBlo
 
     tune.prepare (sampleRate);
     compHistory.setHop ((int) std::lround (sampleRate / 375.0));
-    deessHistory.setHop ((int) std::lround (sampleRate / 375.0));
+    deessHistory.setHop ((int) std::lround (sampleRate / 200.0));   // 1200 points = 6 s
     eq.prepare (sampleRate);
     multiband.prepare (sampleRate, block);
     compressor.prepare (sampleRate);
@@ -213,7 +213,7 @@ void KaminariVocalProcessor::readModuleSettings()
     if (moduleOn[ModDeEss])
     {
         d.threshDb = f ("ds_thresh"); d.rangeDb = f ("ds_range"); d.detLo = f ("ds_det_lo"); d.detHi = f ("ds_det_hi");
-        d.fullBand = i ("ds_detect") == 1; d.wideband = i ("ds_process") == 1; d.allround = i ("ds_mode") == 1;
+        d.fullBand = i ("ds_detect") == 1; d.wideband = i ("ds_process") == 1;
         d.stereoLink = f ("ds_stereo_link") / 100.0f; d.linkMode = i ("ds_link_mode");
         d.listen = b ("ds_listen"); d.audition = b ("ds_audition_trigger");
     }

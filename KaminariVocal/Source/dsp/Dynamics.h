@@ -211,7 +211,7 @@ namespace kv
     struct DeEsserSettings
     {
         float threshDb = -28, rangeDb = 8, detLo = 3500, detHi = 8600;
-        bool fullBand = false, wideband = false, allround = false;
+        bool fullBand = false, wideband = false;
         float stereoLink = 1.0f;
         int linkMode = 0;          // 0 Stereo, 1 Mid, 2 Side
         int lookaheadSamples = 0;
@@ -244,7 +244,7 @@ namespace kv
                 split[c].set (Biquad::LowPass, fs, lo, 0.707f);   // split follows the detector's low edge
             }
             const float aC = coeffMs (0.3f, fs);
-            const float relFast = coeffMs (s.allround ? 60.0f : 30.0f, fs), relSlow = coeffMs (s.allround ? 150.0f : 80.0f, fs);
+            const float relFast = coeffMs (60.0f, fs), relSlow = coeffMs (150.0f, fs);   // all-round timing (one mode)
             const int la = std::clamp (s.lookaheadSamples, 0, look[0].capacity() - 2);
             float maxGr = 0.0f;
 

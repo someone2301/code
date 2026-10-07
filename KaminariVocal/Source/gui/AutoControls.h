@@ -35,7 +35,6 @@ namespace kvui
             { "ds_det_hi", "Upper edge of the sibilance detection range." },
             { "ds_detect", "Voice Focus: band-pass detector. Full Band: everything above the low edge." },
             { "ds_process", "Split Band reduces only the highs; Wideband turns the whole vocal down." },
-            { "ds_mode", "Single Vocal reacts fast; Allround is slower and smoother." },
             { "ds_link_mode", "Process stereo, mid only or side only." }, { "ds_listen", "Hear the detector signal." },
             { "ds_audition_trigger", "Hear only what is removed." }, { "ds_lookahead", "Catches the start of esses. Adds latency." },
             { "rs_mode", "Soft: adaptive threshold. Hard: level-dependent." }, { "rs_depth", "Overall amount of resonance reduction." },

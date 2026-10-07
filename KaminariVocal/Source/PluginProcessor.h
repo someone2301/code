@@ -105,8 +105,9 @@ public:
     std::atomic<int> eqSolo { -1 };         // band being auditioned (-1 = none); not saved
 
     // Level histories for the Compression and De-ess displays (about 2.7 ms per entry at 48 kHz).
-    static constexpr int historySize = 360;
-    kv::LevelHistory<historySize> compHistory, deessHistory;
+    static constexpr int historySize = 360, deessHistorySize = 1200;
+    kv::LevelHistory<historySize> compHistory;
+    kv::LevelHistory<deessHistorySize> deessHistory;   // 6 s at 200 points per second
 
     // A/B comparison: two parameter snapshots; the active one is live.
     void selectAB (int slot);

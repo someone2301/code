@@ -1286,57 +1286,164 @@ namespace kvui
     };
 
     //==================================================================================================================
-    // DE-ESS: waveform with the de-essed parts highlighted, threshold line, meters.
+    // DE-ESS: a smooth, scrolling level display in the style of a modern de-esser: the input level as a soft filled
+    // shape, the part the de-esser removes highlighted between the input and output levels, the gain reduction as a
+    // smooth curve hanging from the top, the threshold line, and meters. 6 seconds of history.
     class DeEssDisplay : public juce::Component, private juce::Timer
     {
     public:
-        explicit DeEssDisplay (KaminariVocalProcessor& p) : proc (p) { setTitle ("De-ess display"); startTimerHz (30); }
+        static constexpr int N = KaminariVocalProcessor::deessHistorySize;
+        static constexpr float seconds = 6.0f, floorDb = -60.0f, grScaleDb = 24.0f;
+
+        explicit DeEssDisplay (KaminariVocalProcessor& p) : proc (p) { setTitle ("De-ess display"); startTimerHz (60); }
         ~DeEssDisplay() override { stopTimer(); }
+
+        // Smooths a series (5-point weighted average) so the curves read as one flowing line.
+        static void smooth (std::vector<float>& v)
+        {
+            std::vector<float> o (v.size());
+            for (size_t i = 0; i < v.size(); ++i)
+            {
+                float acc = 0, w = 0;
+                for (int k = -2; k <= 2; ++k)
+                {
+                    const auto j = (size_t) juce::jlimit (0, (int) v.size() - 1, (int) i + k);
+                    const float wk = 3.0f - (float) std::abs (k);
+                    acc += v[j] * wk; w += wk;
+                }
+                o[i] = acc / w;
+            }
+            v.swap (o);
+        }
+
+        // Path through points with quadratic curves via the midpoints (no corners).
+        static juce::Path flowing (const std::vector<juce::Point<float>>& pts)
+        {
+            juce::Path p;
+            if (pts.empty()) return p;
+            p.startNewSubPath (pts.front());
+            for (size_t i = 1; i + 1 < pts.size(); ++i)
+                p.quadraticTo (pts[i], (pts[i] + pts[i + 1]) * 0.5f);
+            p.lineTo (pts.back());
+            return p;
+        }
+
         void paint (juce::Graphics& g) override
         {
-            g.setColour (navy950);
-            g.fillRoundedRectangle (getLocalBounds().toFloat(), 4.0f);
-            auto b = getLocalBounds().reduced (6);
-            auto meters = b.removeFromRight (56);
+            auto all = getLocalBounds().toFloat();
+            juce::ColourGradient bg (navy800.withAlpha (0.5f), all.getCentreX(), all.getY(), navy950, all.getCentreX(), all.getBottom(), false);
+            g.setGradientFill (bg);
+            g.fillRoundedRectangle (all, 6.0f);
+            auto b = getLocalBounds().reduced (8);
+            auto meters = b.removeFromRight (64);
             auto scale = b.removeFromRight (34);
-            std::array<kv::LevelHistory<KaminariVocalProcessor::historySize>::Entry, (size_t) KaminariVocalProcessor::historySize> h;
-            proc.deessHistory.read (h);
-            const int n = KaminariVocalProcessor::historySize;
-            const float mid = (float) b.getCentreY(), half = b.getHeight() * 0.5f;
-            auto amp = [&] (float lin) { return juce::jlimit (0.0f, 1.0f, (juce::Decibels::gainToDecibels (lin, -48.0f) + 48.0f) / 48.0f) * half; };
-            g.setColour (navy800);
-            for (int db : { 0, -6, -12, -18, -24, -36, -48 })
+            b.removeFromBottom (16);   // time axis
+            const auto plot = b.toFloat();
+            auto yFor = [&] (float db) { return plot.getY() + juce::jlimit (0.0f, 1.0f, db / floorDb) * plot.getHeight(); };
+
+            // grid
+            g.setFont (font (10.0f, 0));
+            for (int db : { 0, -12, -24, -36, -48, -60 })
             {
-                const float y = b.getY() + (float) -db / 48.0f * b.getHeight();
-                g.drawHorizontalLine ((int) y, (float) b.getX(), (float) b.getRight());
-                g.setColour (mist);
-                g.setFont (font (10.0f, 0));
-                g.drawText (juce::String (db), scale.getX(), (int) y - 6, scale.getWidth() - 4, 12, juce::Justification::centredRight);
+                const float y = yFor ((float) db);
                 g.setColour (navy800);
+                g.drawHorizontalLine ((int) y, plot.getX(), plot.getRight());
+                g.setColour (mist.withAlpha (0.7f));
+                g.drawText (juce::String (db), scale.getX(), (int) y - 6, scale.getWidth() - 4, 12, juce::Justification::centredRight);
             }
-            for (int i = 0; i < n; ++i)
+            for (int s = 1; s < (int) seconds; ++s)
             {
-                const float x = b.getX() + b.getWidth() * (float) i / n;
-                const float a = amp (h[(size_t) i].in);
-                const bool essed = h[(size_t) i].gr > 0.5f;
-                g.setColour (essed ? accent.withAlpha (0.85f) : mist.withAlpha (0.45f));
-                g.fillRect (juce::Rectangle<float> (x, mid - a, juce::jmax (1.0f, b.getWidth() / (float) n - 0.4f), a * 2));
+                const float x = plot.getRight() - plot.getWidth() * (float) s / seconds;
+                g.setColour (navy800.withAlpha (0.6f));
+                g.drawVerticalLine ((int) x, plot.getY(), plot.getBottom());
+                g.setColour (mist.withAlpha (0.6f));
+                g.drawText ("-" + juce::String (s) + " s", (int) x - 20, (int) plot.getBottom() + 2, 40, 12, juce::Justification::centred);
             }
+
+            if (n > 1)
+            {
+                std::vector<juce::Point<float>> inPts, outPts, grPts;
+                inPts.reserve ((size_t) n); outPts.reserve ((size_t) n); grPts.reserve ((size_t) n);
+                for (int i = 0; i < n; ++i)
+                {
+                    const float x = plot.getX() + plot.getWidth() * (float) i / (float) (n - 1);
+                    inPts.push_back ({ x, yFor (inDb[(size_t) i]) });
+                    outPts.push_back ({ x, yFor (outDb[(size_t) i]) });
+                    grPts.push_back ({ x, plot.getY() + juce::jlimit (0.0f, 1.0f, grDb[(size_t) i] / grScaleDb) * plot.getHeight() * 0.38f });
+                }
+                // input level: soft filled shape
+                auto inLine = flowing (inPts);
+                juce::Path inFill (inLine);
+                inFill.lineTo (plot.getRight(), plot.getBottom());
+                inFill.lineTo (plot.getX(), plot.getBottom());
+                inFill.closeSubPath();
+                juce::ColourGradient inG (mist.withAlpha (0.42f), 0, plot.getY(), mist.withAlpha (0.08f), 0, plot.getBottom(), false);
+                g.setGradientFill (inG);
+                g.fillPath (inFill);
+                // the removed part: between the input and output levels
+                auto outLine = flowing (outPts);
+                juce::Path removed (inLine);
+                for (auto it = outPts.rbegin(); it != outPts.rend(); ++it) removed.lineTo (*it);
+                removed.closeSubPath();
+                juce::ColourGradient rg (accent.withAlpha (0.85f), 0, plot.getY(), accent.withAlpha (0.35f), 0, plot.getBottom(), false);
+                g.setGradientFill (rg);
+                g.fillPath (removed);
+                g.setColour (white.withAlpha (0.85f));
+                g.strokePath (outLine, juce::PathStrokeType (1.3f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+                // gain reduction hanging from the top
+                auto grLine = flowing (grPts);
+                juce::Path grFill (grLine);
+                grFill.lineTo (plot.getRight(), plot.getY());
+                grFill.lineTo (plot.getX(), plot.getY());
+                grFill.closeSubPath();
+                juce::ColourGradient gg (accent.withAlpha (0.55f), 0, plot.getY(), accent.withAlpha (0.05f), 0, plot.getY() + plot.getHeight() * 0.38f, false);
+                g.setGradientFill (gg);
+                g.fillPath (grFill);
+                g.setColour (accent);
+                g.strokePath (grLine, juce::PathStrokeType (1.8f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+            }
+
+            // threshold
             const float th = plain (proc.apvts, "ds_thresh");
-            const float ty = mid - juce::jlimit (0.0f, 1.0f, (th + 48.0f) / 48.0f) * half;
-            g.setColour (amber);
-            g.drawHorizontalLine ((int) ty, (float) b.getX(), (float) b.getRight());
-            auto m = meters.toFloat().reduced (4, 2);
+            const float ty = yFor (th);
+            g.setColour (amber.withAlpha (0.9f));
+            const float dashes[] = { 6.0f, 4.0f };
+            g.drawDashedLine (juce::Line<float> (plot.getX(), ty, plot.getRight(), ty), dashes, 2, 1.2f);
+            g.setFont (font (10.5f, 1));
+            g.drawText ("threshold " + minusSign (th, 0) + " dB", (int) plot.getRight() - 120, (int) ty - 15, 116, 12, juce::Justification::centredRight);
+
+            // meters: input, output, reduction
+            auto m = meters.toFloat().reduced (4, 2).withTrimmedBottom (16);
             const float w = (m.getWidth() - 8) / 3;
-            drawVMeter (g, m.removeFromLeft (w), juce::Decibels::gainToDecibels (h[(size_t) n - 1].in, -60.0f), false, mist);
+            drawVMeter (g, m.removeFromLeft (w), n > 0 ? inDb.back() : -60.0f, false, mist);
             m.removeFromLeft (4);
-            drawVMeter (g, m.removeFromLeft (w), juce::Decibels::gainToDecibels (h[(size_t) n - 1].out, -60.0f), false, white);
+            drawVMeter (g, m.removeFromLeft (w), n > 0 ? outDb.back() : -60.0f, false, white);
             m.removeFromLeft (4);
             drawVMeter (g, m, proc.moduleGr[KaminariVocalProcessor::ModDeEss].load(), true, accent);
         }
+
+        int points() const noexcept { return n; }
+
     private:
-        void timerCallback() override { repaint(); }
+        void timerCallback() override
+        {
+            std::array<kv::LevelHistory<N>::Entry, (size_t) N> h;
+            proc.deessHistory.read (h);
+            inDb.resize ((size_t) N); outDb.resize ((size_t) N); grDb.resize ((size_t) N);
+            for (int i = 0; i < N; ++i)
+            {
+                inDb[(size_t) i] = juce::Decibels::gainToDecibels (h[(size_t) i].in, floorDb);
+                outDb[(size_t) i] = juce::Decibels::gainToDecibels (h[(size_t) i].out, floorDb);
+                grDb[(size_t) i] = juce::jmax (0.0f, h[(size_t) i].gr);
+            }
+            smooth (inDb); smooth (outDb); smooth (grDb);
+            for (int i = 0; i < N; ++i) outDb[(size_t) i] = std::min (outDb[(size_t) i], inDb[(size_t) i]);
+            n = N;
+            repaint();
+        }
         KaminariVocalProcessor& proc;
+        std::vector<float> inDb, outDb, grDb;
+        int n = 0;
     };
 
     // Two-handle frequency range (2-20 kHz, log) for the de-esser detection band. Drag the band to move both edges.
@@ -1396,13 +1503,12 @@ namespace kvui
     {
     public:
         explicit DeEssPage (KaminariVocalProcessor& p)
-            : AdvFrame (p, "De-ess", "Highlighted parts are being de-essed" + dot() + "timing is automatic", "ds_on", "deess"),
+            : AdvFrame (p, "De-ess", "Highlighted: what the de-esser removes" + dot() + "6 s history" + dot() + "all-round timing", "ds_on", "deess"),
               display (p), range (p.apvts),
               thresh (p.apvts, "ds_thresh", "Threshold", "-60 dB", "0 dB"),
               rangeKnob (p.apvts, "ds_range", "Range", "0 dB", "24 dB"),
               link (p.apvts, "ds_stereo_link", "Stereo link", "0 %", "100 %"),
               lookahead (p.apvts, "ds_lookahead", "Lookahead", "0 ms", "15 ms"),
-              mode (p.apvts, "ds_mode", { "SINGLE VOCAL", "ALLROUND" }),
               process (p.apvts, "ds_process", { "SPLIT BAND", "WIDE BAND" }),
               detect (p.apvts, "ds_detect", { "VOICE FOCUS", "FULL BAND" }),
               linkMode (p.apvts, "ds_link_mode", { "STEREO", "MID", "SIDE" }),
@@ -1410,7 +1516,7 @@ namespace kvui
               trigger (p.apvts, "ds_audition_trigger", "Removed only", "Removed only", hintFor ("ds_audition_trigger")),
               os (p.apvts, "ds_os", { "OFF", "2X", "4X" }, "Oversampling: runs the de-esser at 2x or 4x the session rate. Adds latency while De-ess is on.")
         {
-            for (auto* c : std::initializer_list<juce::Component*> { &display, &range, &thresh, &rangeKnob, &link, &lookahead, &mode, &process,
+            for (auto* c : std::initializer_list<juce::Component*> { &display, &range, &thresh, &rangeKnob, &link, &lookahead, &process,
                                                                      &detect, &linkMode, &listen, &trigger, &os })
                 addAndMakeVisible (c);
             for (auto* k : { &thresh, &rangeKnob, &link, &lookahead }) k->setLNF (&lnf);
@@ -1428,18 +1534,18 @@ namespace kvui
             g.drawText (kvp::freqText (plain (proc.apvts, "ds_det_hi")), range.getRight() - 70, range.getBottom() + 4, 80, 18, juce::Justification::centredRight);
             g.setColour (mist);
             g.setFont (font (11.0f, 1, 0.1f));
-            for (auto* c : std::initializer_list<juce::Component*> { &mode, &process, &detect, &linkMode, &os })
+            for (auto* c : std::initializer_list<juce::Component*> { &process, &detect, &linkMode, &os })
             {
-                const char* t = c == &mode ? "MODE" : c == &process ? "PROCESSING" : c == &detect ? "DETECTION" : c == &os ? "OVERSAMPLING" : "CHANNELS";
+                const char* t = c == &process ? "PROCESSING" : c == &detect ? "DETECTION" : c == &os ? "OVERSAMPLING" : "CHANNELS";
                 g.drawText (t, c->getX() - 110, c->getY(), 100, c->getHeight(), juce::Justification::centredRight);
             }
         }
 
         void layoutContent (juce::Rectangle<int> b) override
         {
-            display.setBounds (b.removeFromTop (190));
-            b.removeFromTop (10);
-            controls = b.removeFromTop (230);
+            controls = b.removeFromBottom (230);
+            b.removeFromBottom (10);
+            display.setBounds (b);   // the display takes all the remaining height
             auto c = controls.reduced (16, 12);
             auto left = c.removeFromLeft (300);
             auto knobs = left.removeFromTop (130);
@@ -1452,8 +1558,8 @@ namespace kvui
             link.setBounds (right.removeFromTop (100));
             lookahead.setBounds (right.removeFromTop (100));
             c.removeFromLeft (130);
-            auto rows = c.withSizeKeepingCentre (c.getWidth(), 5 * 32 + 28);
-            for (auto* s : std::initializer_list<juce::Component*> { &mode, &process, &detect, &linkMode, &os })
+            auto rows = c.withSizeKeepingCentre (c.getWidth(), 4 * 32 + 28);
+            for (auto* s : std::initializer_list<juce::Component*> { &process, &detect, &linkMode, &os })
             {
                 s->setBounds (rows.removeFromTop (27).removeFromLeft (s == &linkMode || s == &os ? 210 : 230));
                 rows.removeFromTop (5);
@@ -1467,7 +1573,7 @@ namespace kvui
         DeEssDisplay display;
         FreqRange range;
         RangeKnob thresh, rangeKnob, link, lookahead;
-        SegParam mode, process, detect, linkMode;
+        SegParam process, detect, linkMode;
         ToggleBox listen, trigger;
         SegParam os;
         juce::Rectangle<int> controls;

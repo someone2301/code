@@ -300,7 +300,6 @@ namespace kvp
         addFloat  ("ds_det_hi", "De-Ess High Edge", logRange (2000.0f, 20000.0f), 8600.0f, hzText, freqFromText);
         addChoice ("ds_detect", "De-Ess Detection", { "Voice Focus", "Full Band" }, 0);
         addChoice ("ds_process", "De-Ess Processing", { "Split Band", "Wideband" }, 0);
-        addChoice ("ds_mode", "De-Ess Mode", { "Single Vocal", "Allround" }, 0);
         addFloat  ("ds_lookahead", "De-Ess Lookahead", { 0.0f, 15.0f, 0.01f }, 0.0f, [] (float v, int) { return v < 0.005f ? String ("Off") : String (v, 1) + " ms"; });
         addFloat  ("ds_stereo_link", "De-Ess Stereo Link", { 0.0f, 100.0f, 0.1f }, 100.0f, pctText);
         addChoice ("ds_link_mode", "De-Ess Link Mode", { "Stereo", "Mid", "Side" }, 0);
