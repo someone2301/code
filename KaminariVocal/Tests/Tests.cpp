@@ -1543,19 +1543,18 @@ int main (int argc, char** argv)
                 check (withPiano && withoutPiano && unit, "EQ band panel: note and cents shown only with the keyboard on; slope reads "
                        + p.apvts.getParameter ("eq1_slope")->getCurrentValueAsText());
             }
-            // Flanger vectorscope: plots the flanger's output in real time
+            // Widener vectorscope: plots the vocal with the widener's return in real time
             {
-                setParam (p, "fl_on", 1.0f);
-                ed->showTab (true, KaminariVocalEditor::TabFlanger);
+                setParam (p, kvid::wdOn, 1.0f);
+                ed->showAdvanced (true, 2);
                 juce::MessageManager::getInstance()->runDispatchLoopUntil (20);
-                auto& sc = ed->flangerPanel().scope;
+                auto& sc = ed->widenerPanel().scope;
                 sc.advance();
                 render (p, 0.3, vocal);
                 sc.advance();
                 const int frames = sc.plottedFrames();
-                check (frames > 1000 && sc.getHeight() > 300, "Flanger vectorscope: " + juce::String (frames) + " new frames plotted, "
+                check (frames > 1000 && sc.getHeight() > 250, "Widener vectorscope: " + juce::String (frames) + " new frames plotted, "
                        + juce::String (sc.getHeight()) + " px tall; correlation " + juce::String (sc.correlation(), 2));
-                setParam (p, "fl_on", 0.0f);
             }
             setParam (p, "lv_style", 1.0f);   // Vocal
             juce::MessageManager::getInstance()->runDispatchLoopUntil (20);
@@ -1659,10 +1658,10 @@ int main (int argc, char** argv)
             }
             // Flanger on (vectorscope moving) and De-ess working on bursts of hiss
             {
-                setParam (p, "fl_on", 1.0f);
-                ed->showTab (true, KaminariVocalEditor::TabFlanger);
-                for (int k = 0; k < 6; ++k) { render (p, 0.1, vocal); ed->flangerPanel().scope.advance(); }
-                save ("adv_flanger_on.png");
+                setParam (p, kvid::wdOn, 1.0f);
+                ed->showAdvanced (true, 2);
+                for (int k = 0; k < 6; ++k) { render (p, 0.1, vocal); ed->widenerPanel().scope.advance(); }
+                save ("adv_widener_scope.png");
                 setParam (p, "fl_on", 0.0f);
                 setParam (p, "ds_on", 1.0f); setParam (p, "ds_thresh", -40.0f); setParam (p, "ds_range", 12.0f);
                 ed->showTab (true, KaminariVocalEditor::TabDeEss);

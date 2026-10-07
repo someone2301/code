@@ -272,15 +272,13 @@ public:
             const auto c = nodePos (s[i]);
             const float r = i == selected ? 10.0f : 8.5f;
             const auto col = bandColour (i);
+            // each node is a small orb; the selected one carries plasma lightning, kept close around it
+            kvfx::paintOrb (g, c, r, col, i == selected, s[i].on);
             if (i == selected)
-                nodeFx.paint (g, c, r, col, animMs);   // lightning surging around the selected node
-            g.setColour (i == selected ? col : navy800);
-            g.fillEllipse (c.x - r, c.y - r, 2 * r, 2 * r);
-            g.setColour (s[i].on ? col.brighter (0.3f) : mist.withAlpha (0.6f));
-            g.drawEllipse (c.x - r, c.y - r, 2 * r, 2 * r, 1.6f);
-            g.setColour (i == selected ? navy950 : white);
+                nodeFx.paint (g, c, r, col, animMs);
+            g.setColour (i == selected ? navy950 : navy950.withAlpha (0.9f));
             g.setFont (uiFont (10.0f, true));
-            g.drawText (juce::String (i + 1), juce::Rectangle<float> (2 * r, 2 * r).withCentre (c), juce::Justification::centred);
+            g.drawText (juce::String (i + 1), juce::Rectangle<float> (2 * r, 2 * r).withCentre (c.translated (0.0f, 0.5f)), juce::Justification::centred);
             if (i == solo)
             {
                 g.setColour (juce::Colour (0xffffb547));

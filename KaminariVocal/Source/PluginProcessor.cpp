@@ -40,6 +40,7 @@ void KaminariVocalProcessor::prepareToPlay (double sampleRate, int samplesPerBlo
     soloIn.setSize (2, block, false, false, true);
     scDetector.setSize (1, block, false, false, true);
     routeBuf.setSize (2, block, false, false, true);
+    widenerOut.setSize (2, block, false, false, true);
     for (auto& f : feedBuf) f.setSize (2, block, false, false, true);
     retSoloIn.setSize (2, block, false, false, true);
 
@@ -313,7 +314,6 @@ void KaminariVocalProcessor::processModules (float* l, float* r, int n)
         if (active && flangerIdle) flanger.reset();
         flangerIdle = ! active;
         crossfaded (ModFlanger, [&] { flanger.process (l, r, l, r, n, flSettings); moduleGr[ModFlanger].store (flanger.lfoNow.load()); });
-        if (moduleOn[ModFlanger] || fade.isSmoothing()) flangerScope.push (l, r, n);
     }
     // Distortion: skipped entirely while off (no latency); restarts from a clean state
     {
@@ -601,6 +601,8 @@ void KaminariVocalProcessor::processBlock (juce::AudioBuffer<float>& buffer, juc
         returns.clear (0, n);
         returns.clear (1, n);
 
+        widenerOut.clear (0, n);
+        widenerOut.clear (1, n);
         std::array<bool, numSends> fed {};   // feedBuf[s] holds returns fed into send s this chunk
         for (int s = 0; s < numSends; ++s) { feedBuf[(size_t) s].clear (0, n); feedBuf[(size_t) s].clear (1, n); }
         for (int s : order)
@@ -684,6 +686,7 @@ void KaminariVocalProcessor::processBlock (juce::AudioBuffer<float>& buffer, juc
                         const float rb = routeBuf.getSample (c, i);
                         routeBuf.setSample (c, i, std::isfinite (rb) ? kv::returnGuard (rb) * f : 0.0f);
                     }
+                    if (s == Widener) widenerOut.setSample (c, i, y);
                     energy[(size_t) s] += (double) y * y;
                     blockPeak = juce::jmax (blockPeak, std::abs (y));
                     returns.addSample (c, i, y);
@@ -704,6 +707,10 @@ void KaminariVocalProcessor::processBlock (juce::AudioBuffer<float>& buffer, juc
                 idle[(size_t) s] = true;
             }
         }
+
+        // widener vectorscope: the vocal with the widener's return (what the widening does to the image)
+        for (int c = 0; c < 2; ++c) widenerOut.addFrom (c, 0, io[c], n);
+        widenerScope.push (widenerOut.getReadPointer (0), widenerOut.getReadPointer (1), n);
 
         // dry + returns. A mono output receives the average of both channels.
         for (int i = 0; i < n; ++i)

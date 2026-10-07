@@ -742,16 +742,15 @@ works on, taken from the compressor's input. In Vocal style the Ratio knob is sh
 Every EQ in the plug-in (main EQ, side-chain detection EQ, Reverb and Delay return EQs) uses the same parameters
 layout, filters (`kv::EqDesign` / `kv::Equalizer`) and editor (`EqEditor`: `EqCurve` graph, `EqPiano` keyboard, floating
 `EqBandPanel`, analyzer toggles, resolution and speed). Analyzer Pre and Post are two independent toggles everywhere
-(also Multiband and Resonance In / Out), so both can be shown at once. The selected band's node crackles with
-lightning in every EQ graph.
+(also Multiband and Resonance In / Out), so both can be shown at once. Every node is a small glossy orb; the selected one carries plasma-ball lightning (arcs on its surface, filaments inside)
+kept within a few pixels of it.
 
 ### 2.21 Later revisions
 
 - EQ band panel: note and cents beside the frequency only while the keyboard (Piano) is shown; slope choices read "6 dB/oct" … "48 dB/oct" (presets that store the bare number still load); a cut picked from the type list starts with a flat corner (Q 0.71).
 - Compression page: Compressor / Side-chain EQ view switch at the top right, as on the Sends page.
-- Flanger page: the sweep graph is replaced by a large real-time vectorscope (mid up, side across, persistence trail) with a correlation meter and L / R meters.
-- De-ess: one all-round mode (Single Vocal removed); the display is a smooth scrolling view of 6 s (200 points per second, 60 fps): input level as a soft filled shape, the removed part (from the de-esser's own gain reduction), the reduction as a curve hanging from the top, threshold, time axis and meters.
-- Tune page: the note indicator sits on a recessed stage (glow that follows the correction, receding rings, rays, shadow, lit dial).
+- Flanger page: no display (controls only). Widener page: a large real-time vectorscope of the vocal with the widener's return (mid up, side across, persistence trail) with a correlation meter and L / R meters, for MicroShift and SideWidener.
+- De-ess: one all-round mode (Single Vocal removed) and one detection (Voice Focus removed: the detector hears everything above the De-ess frequency, which is also where Split band starts; `ds_det_hi` and `ds_detect` are gone). The display is a smooth, mirrored waveform of 6 s (200 points per second, 60 fps) with the part the de-esser removes highlighted at its edges (from its own gain reduction), the reduction as a curve hanging from the top, the threshold on both halves, a time axis and meters.
 - Hammer: cylindrical shading and a specular streak; glow around the filled part and a whiter fill as it is pulled further; bolts in front of or behind the hammer, rings orbiting the head and grip (far half behind, near half in front); all lightning clipped to the aura, re-jagging between frames.
 
 ### 2.20 Widener algorithms (revised)

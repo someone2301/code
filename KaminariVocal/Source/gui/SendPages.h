@@ -755,249 +755,18 @@ namespace kvui
         int selected = 0;
     };
 
-    // MicroShift: the widened band above Focus. SideWidener: the side image around the unchanged mid.
-    class WidenerGraph : public juce::Component, private juce::Timer
+    // Real-time vectorscope (goniometer: mid up, side across) with a fading persistence trail, and beside it a
+    // phase-correlation meter and left / right level meters. Reads a StereoScopeRing filled by the processor.
+    class StereoScope : public juce::Component, private juce::Timer
     {
     public:
-        explicit WidenerGraph (APVTS& s) : state (s) { setTitle ("Widener display"); startTimerHz (15); }
-        ~WidenerGraph() override { stopTimer(); }
-        void paint (juce::Graphics& g) override
+        StereoScope (const StereoScopeRing& source, const juce::String& title) : ring (source)
         {
-            auto b = getLocalBounds().toFloat();
-            g.setColour (navy950);
-            g.fillRoundedRectangle (b, 5.0f);
-            g.setColour (navy600);
-            g.drawRoundedRectangle (b.reduced (0.5f), 5.0f, 1.0f);
-            const bool micro = juce::roundToInt (plainValue (state, kvid::wdType)) == kv::WidenerSettings::MicroShift;
-            auto plot = b.reduced (10.0f, 8.0f);
-            g.setFont (font (11.0f, 0));
-            if (micro)
-            {
-                plot.removeFromTop (16.0f);
-                auto axis = plot.removeFromBottom (14.0f);
-                const float focus = plainValue (state, kvid::msFocus);
-                const float amount = juce::jlimit (0.15f, 1.0f, (plainValue (state, kvid::msDetune) + plainValue (state, kvid::msDelay)) / 300.0f);
-                auto xOf = [&] (float hz) { return plot.getX() + plot.getWidth() * std::log (hz / 20.0f) / std::log (1000.0f); };
-                for (float hz : { 100.0f, 1000.0f, 10000.0f })
-                {
-                    g.setColour (navy800);
-                    g.drawVerticalLine (juce::roundToInt (xOf (hz)), plot.getY(), plot.getBottom());
-                    g.setColour (steel);
-                    g.drawText (hz >= 1000.0f ? juce::String ((int) (hz / 1000.0f)) + "k" : juce::String ((int) hz), juce::Rectangle<float> (xOf (hz) - 20.0f, axis.getY(), 40.0f, 14.0f), juce::Justification::centred);
-                }
-                juce::Path curve, fill;
-                const float top = plot.getBottom() - plot.getHeight() * (0.35f + 0.6f * amount);
-                for (int i = 0; i <= (int) plot.getWidth(); ++i)
-                {
-                    const float x = plot.getX() + (float) i;
-                    const float hz = 20.0f * std::pow (1000.0f, (float) i / plot.getWidth());
-                    const float r = hz / juce::jmax (20.0f, focus);
-                    const float mag = focus <= 20.5f ? 1.0f : (r * r) / std::sqrt (1.0f + r * r * r * r);   // 12 dB/oct high-pass
-                    const float y = plot.getBottom() - (plot.getBottom() - top) * mag;
-                    if (i == 0) { curve.startNewSubPath (x, y); fill.startNewSubPath (x, plot.getBottom()); }
-                    else curve.lineTo (x, y);
-                    fill.lineTo (x, y);
-                }
-                fill.lineTo (plot.getRight(), plot.getBottom());
-                fill.closeSubPath();
-                g.setColour (accent.withAlpha (0.16f));
-                g.fillPath (fill);
-                g.setColour (accent);
-                g.strokePath (curve, juce::PathStrokeType (1.6f));
-                g.setColour (mist);
-                g.drawText ("widened band (returned)", b.reduced (10.0f, 6.0f).removeFromTop (14.0f), juce::Justification::centredLeft);
-                g.drawText ("Focus " + kvp::freqText (focus), b.reduced (10.0f, 6.0f).removeFromTop (14.0f), juce::Justification::centredRight);
-            }
-            else
-            {
-                const float width = plainValue (state, kvid::swWidth) * 0.01f;
-                const float tone = plainValue (state, kvid::swTone) * 0.01f;
-                const auto base = juce::Point<float> (plot.getCentreX(), plot.getBottom() - 6.0f);
-                const float len = plot.getHeight() - 22.0f;
-                const int lines = 9;
-                const float spread = 0.15f + 1.25f * width;
-                for (int side = -1; side <= 1; side += 2)
-                    for (int k = 1; k <= lines; ++k)
-                    {
-                        const float a = side * spread * (float) k / (float) lines;
-                        const float l = len * (0.55f + 0.45f * (1.0f - (float) k / (float) lines * (1.0f - tone)));
-                        g.setColour (accent.withAlpha (0.25f + 0.6f * (float) k / (float) lines));
-                        g.drawLine (base.x, base.y, base.x + std::sin (a) * l, base.y - std::cos (a) * l, 1.0f);
-                    }
-                g.setColour (white);
-                g.drawLine (base.x, base.y, base.x, base.y - len, 2.0f);
-                g.setColour (mist);
-                g.drawText ("mid (dry, unchanged)", juce::Rectangle<float> (base.x + 6.0f, plot.getY(), 160.0f, 14.0f), juce::Justification::centredLeft);
-                g.drawText ("L +side", plot.removeFromBottom (14.0f), juce::Justification::centredLeft);
-                g.drawText ("R " + juce::String (juce::CharPointer_UTF8 ("\xe2\x88\x92")) + "side", b.reduced (10.0f, 8.0f).removeFromBottom (14.0f), juce::Justification::centredRight);
-            }
-        }
-    private:
-        void timerCallback() override
-        {
-            float sum = 0;
-            for (auto* id : { kvid::wdType, kvid::msFocus, kvid::msDetune, kvid::msDelay, kvid::swWidth, kvid::swTone })
-                sum = sum * 1.37f + state.getParameter (id)->getValue();
-            if (std::abs (sum - last) > 1.0e-7f) { last = sum; repaint(); }
-        }
-        APVTS& state;
-        float last = -1;
-    };
-
-    class WidenerPanel : public juce::Component
-    {
-    public:
-        explicit WidenerPanel (KaminariVocalProcessor& p)
-            : header (p, KaminariVocalProcessor::Widener, kvid::wdOn, kvid::wdSend, kvid::wdTap, "Widener", "widener"),
-              graph (p.apvts),
-              type (p.apvts, kvid::wdType, { "MicroShift", "SideWidener" }, "MicroShift and SideWidener are separate algorithms. Only the selected one runs."),
-              msStyle (p.apvts, kvid::msStyle, { "I", "II", "III" }, "I, II and III differ in pitch and delay variation, tone, saturation and de-glitching."),
-              msDetune (p.apvts, kvid::msDetune, "Detune", "MIN", "MAX", "Amount of continuously varying micro pitch shift. 100 % = the style's own amount."),
-              msDelay (p.apvts, kvid::msDelay, "Delay", "TIGHT", "LOOSE", "Amount of continuously varying delay. 100 % = the style's own amount."),
-              msFocus (p.apvts, kvid::msFocus, "Focus", "20 HZ", "10K", "Crossover: only content above this frequency is widened, keeping the low end stable."),
-              swMode (p.apvts, kvid::swMode, { "1", "2", "3" }, "Mode 1: subtle, no smear. Mode 3: widest, room-like smear. Mode 2: between."),
-              swWidth (p.apvts, kvid::swWidth, "Width", "MIN", "MAX", "Amount of side signal added. The mono sum is not affected."),
-              swTone (p.apvts, kvid::swTone, "Tone", "MID", "FULL", "0: widen the midrange only. 100: widen all frequencies."),
-              swOutput (p.apvts, kvid::swOutput, "Output", "-INF", "0 DB", "Level of the widened signal (-inf to 0 dB)."),
-              typeAttachment (*p.apvts.getParameter (kvid::wdType), [this] (float) { update(); }),
-              msStyleAttachment (*p.apvts.getParameter (kvid::msStyle), [this] (float) { update(); }),
-              swModeAttachment (*p.apvts.getParameter (kvid::swMode), [this] (float) { update(); }),
-              apvts (p.apvts)
-        {
-            for (auto* c : std::initializer_list<juce::Component*> { &header, &graph, &type, &msStyle, &msDetune, &msDelay, &msFocus,
-                                                                     &swMode, &swWidth, &swTone, &swOutput })
-                addAndMakeVisible (c);
-            for (auto* k : { &msDetune, &msDelay, &msFocus, &swWidth, &swTone, &swOutput })
-            {
-                k->setLNF (&lnf);
-                k->setLabelOverhang (2);
-            }
-            typeAttachment.sendInitialUpdate();
-        }
-
-        ~WidenerPanel() override
-        {
-            for (auto* k : { &msDetune, &msDelay, &msFocus, &swWidth, &swTone, &swOutput })
-                k->setLNF (nullptr);
-        }
-
-        void update()
-        {
-            micro = choiceIndex (apvts, kvid::wdType) == kv::WidenerSettings::MicroShift;
-            for (auto* c : std::initializer_list<juce::Component*> { &msStyle, &msDetune, &msDelay, &msFocus })
-                c->setVisible (micro);
-            for (auto* c : std::initializer_list<juce::Component*> { &swMode, &swWidth, &swTone, &swOutput })
-                c->setVisible (! micro);
-            if (micro)
-            {
-                description = kv::microShiftStyleDescription (choiceIndex (apvts, kvid::msStyle));
-                note = "Left is shifted up and right down by a few continuously varying cents, each with a varying short delay. "
-                       "No Mix control: the return is 100 % wet, so the send level sets the blend. Content below Focus is not returned.";
-            }
-            else
-            {
-                description = kv::sideWidenerModeDescription (choiceIndex (apvts, kvid::swMode));
-                note = "Returns only side signal (left +, right " + juce::String (juce::CharPointer_UTF8 ("\xe2\x88\x92"))
-                     + "), so the mono mix is unchanged. Bypass is the send's ON switch.";
-            }
-            resized();
-            repaint();
-        }
-
-        void paint (juce::Graphics& g) override
-        {
-            drawCaption (g, type, "TYPE" + dot() + "ONE AT A TIME");
-            g.setColour (white);
-            g.setFont (font (13.5f, 2));
-            g.drawText (description, descArea, juce::Justification::centredLeft, true);
-            drawTitledGroup (g, groupArea, micro ? "MICROSHIFT" : "SIDEWIDENER");
-            g.setColour (mist);
-            g.setFont (font (11.0f, 2, 0.12f));
-            const auto& sel = micro ? (juce::Component&) msStyle : (juce::Component&) swMode;
-            g.drawText (micro ? "STYLE" : "MODE", sel.getX(), sel.getBottom() + 4, sel.getWidth(), 14, juce::Justification::centred);
-            g.setColour (steel);
-            g.setFont (font (12.0f, 0));
-            g.drawFittedText (note, noteArea, juce::Justification::topLeft, 3, 1.0f);
-        }
-
-        void resized() override
-        {
-            auto b = getLocalBounds();
-            header.setBounds (b.removeFromTop (80));
-            b.removeFromTop (28);
-            auto r = b.removeFromTop (28);
-            type.setBounds (r.removeFromLeft (220));
-            r.removeFromLeft (18);
-            descArea = r;
-            b.removeFromTop (16);
-            auto body = b.removeFromTop (220);
-            graph.setBounds (body.removeFromRight (340));
-            body.removeFromRight (14);
-            groupArea = body;
-            auto inner = body.reduced (16, 0).withTrimmedTop (34).withTrimmedBottom (14);
-            auto sel = inner.removeFromLeft (170);
-            (micro ? (juce::Component&) msStyle : (juce::Component&) swMode).setBounds (sel.withSizeKeepingCentre (162, 66).translated (0, -10));
-            inner.removeFromLeft (10);
-            const int cell = inner.getWidth() / 3;
-            layoutRow (inner, { &msDetune, &msDelay, &msFocus, &swWidth, &swTone, &swOutput }, cell);
-            for (auto* k : { &msDetune, &msDelay, &msFocus, &swWidth, &swTone, &swOutput })
-                k->setBounds (k->getBounds().withSizeKeepingCentre (juce::jmin (cell - 10, 92), juce::jmin (k->getHeight(), 140)));
-            b.removeFromTop (12);
-            noteArea = b.removeFromTop (54);
-        }
-
-        ModuleLNF lnf;
-        SendHeader header;
-        WidenerGraph graph;
-        SegParam type;
-        LedButtons msStyle;
-        RangeKnob msDetune, msDelay, msFocus;
-        LedButtons swMode;
-        RangeKnob swWidth, swTone, swOutput;
-
-    private:
-        juce::ParameterAttachment typeAttachment, msStyleAttachment, swModeAttachment;
-        APVTS& apvts;
-        bool micro = true;
-        juce::String description, note;
-        juce::Rectangle<int> descArea, groupArea, noteArea;
-    };
-
-    class FlangerOptions : public juce::Component
-    {
-    public:
-        explicit FlangerOptions (APVTS& s)
-            : sync (s, kvid::flSync, "SYNC", "Free rate, or one sweep per bar or note value, locked to the host tempo."),
-              shape (s, kvid::flShape, { "SINE", "TRIANGLE" }, "Waveform of the sweep. Triangle sweeps evenly; sine lingers at the ends.")
-        {
-            addAndMakeVisible (sync);
-            addAndMakeVisible (shape);
-        }
-        void resized() override
-        {
-            auto b = getLocalBounds();
-            sync.setBounds (b.removeFromTop (42));
-            b.removeFromTop (8);
-            shape.setBounds (b.removeFromTop (26));
-        }
-        ChoiceBox sync;
-        SegParam shape;
-    };
-
-    //==================================================================================================================
-    // FLANGER
-    // Real-time vectorscope of the flanger's output (goniometer: mid up, side across) with a fading persistence trail,
-    // and beside it a phase-correlation meter and left / right level meters.
-    class FlangerScope : public juce::Component, private juce::Timer
-    {
-    public:
-        explicit FlangerScope (KaminariVocalProcessor& p) : proc (p)
-        {
-            setTitle ("Flanger vectorscope");
-            setDescription ("Stereo image of the flanger's output: mid up, side across; correlation and left / right levels beside it.");
+            setTitle (title);
+            setDescription ("Stereo image: mid up, side across; correlation and left / right levels beside it.");
             startTimerHz (60);
         }
-        ~FlangerScope() override { stopTimer(); }
+        ~StereoScope() override { stopTimer(); }
 
         float correlation() const noexcept { return corr; }
         int plottedFrames() const noexcept { return lastFrames; }
@@ -1020,11 +789,11 @@ namespace kvui
             g.fillEllipse (sq.expanded (R * 0.1f));
             g.setColour (navy950.withAlpha (0.85f));
             g.fillEllipse (sq);
-            for (int ring = 1; ring <= 4; ++ring)
+            for (int circle = 1; circle <= 4; ++circle)
             {
-                const float k = 0.25f * (float) ring;
-                g.setColour (navy600.withAlpha (ring == 4 ? 0.9f : 0.45f));
-                g.drawEllipse (juce::Rectangle<float> (2 * R * k, 2 * R * k).withCentre (c), ring == 4 ? 1.2f : 0.8f);
+                const float k = 0.25f * (float) circle;
+                g.setColour (navy600.withAlpha (circle == 4 ? 0.9f : 0.45f));
+                g.drawEllipse (juce::Rectangle<float> (2 * R * k, 2 * R * k).withCentre (c), circle == 4 ? 1.2f : 0.8f);
             }
             // axes: M vertical, S horizontal, L and R on the diagonals
             g.setColour (navy600.withAlpha (0.6f));
@@ -1101,7 +870,7 @@ namespace kvui
         {
             auto b = getLocalBounds().reduced (16, 14);
             auto side = b.removeFromRight (juce::jmin (230, b.getWidth() / 3));
-            const int s = juce::jmin (b.getWidth(), b.getHeight() - 24);
+            const int s = juce::jmax (40, juce::jmin (b.getWidth() - 64, b.getHeight() - 32));   // room for the M, L, R and S labels
             scopeArea = b.withSizeKeepingCentre (s, s).translated (0, 6);
             side.removeFromTop (30);
             corrArea = side.removeFromTop (18).reduced (4, 0);
@@ -1115,7 +884,7 @@ namespace kvui
         {
             static constexpr int maxFrames = 4096;
             float l[maxFrames], r[maxFrames];
-            const int n = proc.flangerScope.copySince (readPos, l, r, maxFrames);
+            const int n = ring.copySince (readPos, l, r, maxFrames);
             lastFrames = n;
             if (! trail.isValid()) return;
             trail.multiplyAllAlphas (0.82f);   // fade: the trail lasts about a third of a second
@@ -1156,7 +925,7 @@ namespace kvui
 
     private:
         void timerCallback() override { advance(); }
-        KaminariVocalProcessor& proc;
+        const StereoScopeRing& ring;
         juce::Image trail;
         juce::Rectangle<int> scopeArea, corrArea, levelArea;
         unsigned readPos = 0;
@@ -1164,12 +933,155 @@ namespace kvui
         int lastFrames = 0;
     };
 
+    class WidenerPanel : public juce::Component
+    {
+    public:
+        explicit WidenerPanel (KaminariVocalProcessor& p)
+            : header (p, KaminariVocalProcessor::Widener, kvid::wdOn, kvid::wdSend, kvid::wdTap, "Widener", "widener"),
+              scope (p.widenerScope, "Widener vectorscope"),
+              type (p.apvts, kvid::wdType, { "MicroShift", "SideWidener" }, "MicroShift and SideWidener are separate algorithms. Only the selected one runs."),
+              msStyle (p.apvts, kvid::msStyle, { "I", "II", "III" }, "I, II and III differ in pitch and delay variation, tone, saturation and de-glitching."),
+              msDetune (p.apvts, kvid::msDetune, "Detune", "MIN", "MAX", "Amount of continuously varying micro pitch shift. 100 % = the style's own amount."),
+              msDelay (p.apvts, kvid::msDelay, "Delay", "TIGHT", "LOOSE", "Amount of continuously varying delay. 100 % = the style's own amount."),
+              msFocus (p.apvts, kvid::msFocus, "Focus", "20 HZ", "10K", "Crossover: only content above this frequency is widened, keeping the low end stable."),
+              swMode (p.apvts, kvid::swMode, { "1", "2", "3" }, "Mode 1: subtle, no smear. Mode 3: widest, room-like smear. Mode 2: between."),
+              swWidth (p.apvts, kvid::swWidth, "Width", "MIN", "MAX", "Amount of side signal added. The mono sum is not affected."),
+              swTone (p.apvts, kvid::swTone, "Tone", "MID", "FULL", "0: widen the midrange only. 100: widen all frequencies."),
+              swOutput (p.apvts, kvid::swOutput, "Output", "-INF", "0 DB", "Level of the widened signal (-inf to 0 dB)."),
+              typeAttachment (*p.apvts.getParameter (kvid::wdType), [this] (float) { update(); }),
+              msStyleAttachment (*p.apvts.getParameter (kvid::msStyle), [this] (float) { update(); }),
+              swModeAttachment (*p.apvts.getParameter (kvid::swMode), [this] (float) { update(); }),
+              apvts (p.apvts)
+        {
+            for (auto* c : std::initializer_list<juce::Component*> { &header, &scope, &type, &msStyle, &msDetune, &msDelay, &msFocus,
+                                                                     &swMode, &swWidth, &swTone, &swOutput })
+                addAndMakeVisible (c);
+            for (auto* k : { &msDetune, &msDelay, &msFocus, &swWidth, &swTone, &swOutput })
+            {
+                k->setLNF (&lnf);
+                k->setLabelOverhang (2);
+            }
+            typeAttachment.sendInitialUpdate();
+        }
+
+        ~WidenerPanel() override
+        {
+            for (auto* k : { &msDetune, &msDelay, &msFocus, &swWidth, &swTone, &swOutput })
+                k->setLNF (nullptr);
+        }
+
+        void update()
+        {
+            micro = choiceIndex (apvts, kvid::wdType) == kv::WidenerSettings::MicroShift;
+            for (auto* c : std::initializer_list<juce::Component*> { &msStyle, &msDetune, &msDelay, &msFocus })
+                c->setVisible (micro);
+            for (auto* c : std::initializer_list<juce::Component*> { &swMode, &swWidth, &swTone, &swOutput })
+                c->setVisible (! micro);
+            if (micro)
+            {
+                description = kv::microShiftStyleDescription (choiceIndex (apvts, kvid::msStyle));
+                note = "Left is shifted up and right down by a few continuously varying cents, each with a varying short delay. "
+                       "No Mix control: the return is 100 % wet, so the send level sets the blend. Content below Focus is not returned.";
+            }
+            else
+            {
+                description = kv::sideWidenerModeDescription (choiceIndex (apvts, kvid::swMode));
+                note = "Returns only side signal (left +, right " + juce::String (juce::CharPointer_UTF8 ("\xe2\x88\x92"))
+                     + "), so the mono mix is unchanged. Bypass is the send's ON switch.";
+            }
+            resized();
+            repaint();
+        }
+
+        void paint (juce::Graphics& g) override
+        {
+            drawCaption (g, type, "TYPE" + dot() + "ONE AT A TIME");
+            g.setColour (white);
+            g.setFont (font (13.5f, 2));
+            g.drawText (description, descArea, juce::Justification::centredLeft, true);
+            drawTitledGroup (g, groupArea, micro ? "MICROSHIFT" : "SIDEWIDENER");
+            g.setColour (mist);
+            g.setFont (font (11.0f, 2, 0.12f));
+            const auto& sel = micro ? (juce::Component&) msStyle : (juce::Component&) swMode;
+            g.drawText (micro ? "STYLE" : "MODE", sel.getX(), sel.getBottom() + 4, sel.getWidth(), 14, juce::Justification::centred);
+            g.setColour (steel);
+            g.setFont (font (12.0f, 0));
+            g.drawFittedText (note, noteArea, juce::Justification::topLeft, 3, 1.0f);
+        }
+
+        void resized() override
+        {
+            auto b = getLocalBounds();
+            header.setBounds (b.removeFromTop (80));
+            b.removeFromTop (28);
+            auto r = b.removeFromTop (28);
+            type.setBounds (r.removeFromLeft (220));
+            r.removeFromLeft (18);
+            descArea = r;
+            b.removeFromTop (16);
+            // vectorscope of the vocal with the widener's return: all the height to the right of the controls
+            scope.setBounds (b.removeFromRight (juce::jmin (460, b.getWidth() / 2)));
+            b.removeFromRight (14);
+            auto body = b.removeFromTop (220);
+            groupArea = body;
+            auto inner = body.reduced (16, 0).withTrimmedTop (34).withTrimmedBottom (14);
+            auto sel = inner.removeFromLeft (170);
+            (micro ? (juce::Component&) msStyle : (juce::Component&) swMode).setBounds (sel.withSizeKeepingCentre (162, 66).translated (0, -10));
+            inner.removeFromLeft (10);
+            const int cell = inner.getWidth() / 3;
+            layoutRow (inner, { &msDetune, &msDelay, &msFocus, &swWidth, &swTone, &swOutput }, cell);
+            for (auto* k : { &msDetune, &msDelay, &msFocus, &swWidth, &swTone, &swOutput })
+                k->setBounds (k->getBounds().withSizeKeepingCentre (juce::jmin (cell - 10, 92), juce::jmin (k->getHeight(), 140)));
+            b.removeFromTop (12);
+            noteArea = b.removeFromTop (54);
+        }
+
+        ModuleLNF lnf;
+        SendHeader header;
+        StereoScope scope;
+        SegParam type;
+        LedButtons msStyle;
+        RangeKnob msDetune, msDelay, msFocus;
+        LedButtons swMode;
+        RangeKnob swWidth, swTone, swOutput;
+
+    private:
+        juce::ParameterAttachment typeAttachment, msStyleAttachment, swModeAttachment;
+        APVTS& apvts;
+        bool micro = true;
+        juce::String description, note;
+        juce::Rectangle<int> descArea, groupArea, noteArea;
+    };
+
+    class FlangerOptions : public juce::Component
+    {
+    public:
+        explicit FlangerOptions (APVTS& s)
+            : sync (s, kvid::flSync, "SYNC", "Free rate, or one sweep per bar or note value, locked to the host tempo."),
+              shape (s, kvid::flShape, { "SINE", "TRIANGLE" }, "Waveform of the sweep. Triangle sweeps evenly; sine lingers at the ends.")
+        {
+            addAndMakeVisible (sync);
+            addAndMakeVisible (shape);
+        }
+        void resized() override
+        {
+            auto b = getLocalBounds();
+            sync.setBounds (b.removeFromTop (42));
+            b.removeFromTop (8);
+            shape.setBounds (b.removeFromTop (26));
+        }
+        ChoiceBox sync;
+        SegParam shape;
+    };
+
+    //==================================================================================================================
+    //==================================================================================================================
+    // FLANGER
     class FlangerPage : public AdvFrame
     {
     public:
         explicit FlangerPage (KaminariVocalProcessor& p)
             : AdvFrame (p, "Flanger", "Swept comb filter" + dot() + "after Compression, before Distortion", "fl_on", "flanger"),
-              scope (p),
               rate (p.apvts, kvid::flRate, "Rate", "SLOW", "FAST", "Sweep speed when Sync is Free."),
               depth (p.apvts, kvid::flDepth, "Depth", "MIN", "MAX", "How far the delay sweeps (up to 6 ms above Delay)."),
               delay (p.apvts, kvid::flDelay, "Delay", "0.1", "10 MS", "Shortest delay of the sweep. Short = high, metallic notches; long = chorus-like."),
@@ -1181,7 +1093,7 @@ namespace kvui
               state (p.apvts),
               syncAtt (*p.apvts.getParameter (kvid::flSync), [this] (float) { update(); })
         {
-            for (auto* c : std::initializer_list<juce::Component*> { &scope, &options })
+            for (auto* c : std::initializer_list<juce::Component*> { &options })
                 addAndMakeVisible (c);
             for (auto* k : knobs())
             {
@@ -1216,14 +1128,13 @@ namespace kvui
 
         void layoutContent (juce::Rectangle<int> b) override
         {
-            noteArea = b.removeFromBottom (36);
-            b.removeFromBottom (8);
-            layoutGroups (b.removeFromBottom (160), { &sweepGrp, &delayGrp, &stereoGrp, &toneGrp, &outGrp }, 104, 16);
-            b.removeFromBottom (14);
-            scope.setBounds (b);   // the vectorscope takes all the remaining height
+            // no display: the controls sit in one row of groups, centred in the page
+            b.removeFromTop (juce::jmax (0, (b.getHeight() - 200 - 50) / 3));
+            layoutGroups (b.removeFromTop (200), { &sweepGrp, &delayGrp, &stereoGrp, &toneGrp, &outGrp }, 120, 16);
+            b.removeFromTop (14);
+            noteArea = b.removeFromTop (40);
         }
 
-        FlangerScope scope;
         RangeKnob rate, depth, delay, feedback, stereo, hiCut, mix;
         FlangerOptions options;
 

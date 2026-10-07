@@ -133,7 +133,8 @@ public:
     SpectrumAnalyser mbAnalyserPre, mbAnalyserPost, rsAnalyserPre, rsAnalyserPost;
     // Compression: the main signal entering the compressor and the signal its detector hears (after the side-chain bands)
     SpectrumAnalyser compInAnalyser, compScAnalyser;
-    StereoScopeRing flangerScope;   // the flanger's output, for its vectorscope
+    StereoScopeRing widenerScope;   // the vocal with the widener's return added, for the widener's vectorscope
+    juce::AudioBuffer<float> widenerOut;
     kv::Equalizer eq;
     kv::Distortion distortion;  // GUI reads its drive read-out
     kv::Flanger flanger;        // GUI reads its LFO position
