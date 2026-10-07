@@ -32,54 +32,10 @@ namespace kvui
         ~CentsMeter() override { stopTimer(); }
         bool hold = false;
 
-        // Backdrop with depth behind the dial: a recessed stage with a radial glow, rings receding into the
-        // distance, faint rays, a vignette and a shadow under the dial.
-        void paintBackdrop (juce::Graphics& g, juce::Point<float> c, float R)
-        {
-            const auto b = getLocalBounds().toFloat().reduced (1.0f);
-            juce::ColourGradient stage (navy800.withAlpha (0.9f), c.x, c.y, navy950, b.getX(), b.getY(), true);
-            g.setGradientFill (stage);
-            g.fillRoundedRectangle (b, 14.0f);
-            g.saveState();
-            g.reduceClipRegion (b.toNearestInt());
-            // glow that follows the correction: brighter while the voice is pulled
-            const float live = midi >= 0 ? 0.6f + 0.4f * juce::jlimit (0.0f, 1.0f, std::abs (correction) / 50.0f) : 0.35f;
-            juce::ColourGradient glow (accent.withAlpha (0.34f * live), c.x, c.y, accent.withAlpha (0.0f), c.x + R * 2.3f, c.y, true);
-            g.setGradientFill (glow);
-            g.fillEllipse (juce::Rectangle<float> (R * 4.2f, R * 4.2f).withCentre (c));
-            // rings receding into the distance (spacing grows outwards)
-            for (int k = 1; k <= 7; ++k)
-            {
-                const float r = R * (1.05f + 0.16f * (float) (k * k) / 3.0f);
-                g.setColour (accent.withAlpha (0.24f * (1.0f - (float) k / 8.0f)));
-                g.drawEllipse (juce::Rectangle<float> (2 * r, 2 * r * 0.92f).withCentre (c), 1.2f);
-            }
-            // faint rays
-            for (int k = 0; k < 36; ++k)
-            {
-                const float a = juce::MathConstants<float>::twoPi * (float) k / 36.0f;
-                const float r0 = R * 1.08f, r1 = R * 3.0f;
-                g.setColour (accent.withAlpha (k % 3 == 0 ? 0.16f : 0.07f));
-                g.drawLine (c.x + r0 * std::cos (a), c.y + r0 * std::sin (a), c.x + r1 * std::cos (a), c.y + r1 * std::sin (a), 0.7f);
-            }
-            g.restoreState();
-            // vignette and rim
-            juce::ColourGradient vig (juce::Colours::transparentBlack, c.x, c.y, navy950.withAlpha (0.6f), b.getX() - R * 0.3f, c.y, true);
-            g.setGradientFill (vig);
-            g.fillRoundedRectangle (b, 14.0f);
-            g.setColour (navy600.withAlpha (0.8f));
-            g.drawRoundedRectangle (b, 14.0f, 1.0f);
-            // shadow under the dial
-            juce::ColourGradient sh (juce::Colours::black.withAlpha (0.45f), c.x, c.y + R * 0.15f, juce::Colours::transparentBlack, c.x + R * 1.15f, c.y + R * 0.15f, true);
-            g.setGradientFill (sh);
-            g.fillEllipse (juce::Rectangle<float> (R * 2.3f, R * 2.3f).withCentre (c.translated (0, R * 0.12f)));
-        }
-
         void paint (juce::Graphics& g) override
         {
             const auto c = getLocalBounds().toFloat().getCentre().translated (0, 8);
             const float R = juce::jmin (getWidth(), getHeight()) * 0.42f;
-            paintBackdrop (g, c, R);
             for (int i = 0; i <= 60; ++i)
             {
                 const float tick = -100.0f + i * (200.0f / 60.0f);
@@ -103,11 +59,8 @@ namespace kvui
                 g.drawLine (c.x + R * 0.68f * std::sin (a), c.y - R * 0.68f * std::cos (a), c.x + R * 0.98f * std::sin (a), c.y - R * 0.98f * std::cos (a), 2.0f);
             }
             const float inner = R * 0.64f;
-            juce::ColourGradient disk (navy800, c.x, c.y - inner, navy950, c.x, c.y + inner, false);   // lit from above
-            g.setGradientFill (disk);
+            g.setColour (navy950);
             g.fillEllipse (c.x - inner, c.y - inner, inner * 2, inner * 2);
-            g.setColour (white.withAlpha (0.08f));
-            g.drawEllipse (c.x - inner + 1.5f, c.y - inner + 1.5f, inner * 2 - 3.0f, inner * 2 - 3.0f, 1.5f);
             g.setColour (navy600);
             g.drawEllipse (c.x - inner, c.y - inner, inner * 2, inner * 2, 1.0f);
             g.setColour (white);
@@ -380,9 +333,9 @@ namespace kvui
             auto right = mid.removeFromRight (170);
             right.removeFromTop (26);
             humanize.setBounds (right.withSizeKeepingCentre (130, juce::jmin (right.getHeight() - 18, 130)));
-            auto centre = mid.withSizeKeepingCentre (juce::jmin (mid.getWidth() - 20, 420), mid.getHeight());
+            auto centre = mid.withSizeKeepingCentre (300, mid.getHeight());
             holdButton.setBounds (centre.removeFromBottom (26).withSizeKeepingCentre (110, 24));
-            meter.setBounds (centre.withTrimmedBottom (4));
+            meter.setBounds (centre);
         }
 
     private:
