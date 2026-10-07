@@ -130,8 +130,8 @@ namespace kv
             correction = 0.0f; desired = 0.0f; targetNote = -1; heldSamples = 0; noteSamples = 0;
             voiced = false; level = 0.0f; primed = false; onMix = 1.0f;
             tauTrack = 0.0f; missCount = 0; med[0] = med[1] = med[2] = 0.0f; medCount = 0;
-            centre = 0.0f; jumpSamples = 0; slope = 0.0f; lastMidi = -1.0f; lastFrameTime = 0;
-            frameCount = 0; frameHead = 0; markHead = markTail = 0; lastMarkT = 0; nextOut = -1.0;
+            centre = 0.0f; jumpSamples = 0; slope = 0.0f; historyPos = 0; noteFrames = 0; jumpFrames = 0; lastMidi = -1.0f; lastFrameTime = 0;
+            frameCount = 0; frameHead = 0; markHead = markTail = 0; lastMarkT = 0; lastMarkVoiced = false; nextOut = -1.0;
             vibPhase = 0.0f; vibEnv = 0.0f; vibMix = 0.0f; tremPhase = 0.0; tremMix = 0.0f; tremDepthNow = 0.0f;
             wander.reset (0x51u); wanderDepth.reset (0x77u);
         }
@@ -348,16 +348,14 @@ namespace kv
                     long long best = cand;
                     float bestV = -1.0e30f;
                     for (long long t = std::max (lastMarkT + (long long) (0.5f * P), cand - q); t <= cand + q; ++t)
-                    {
-                        const float x = lpRing[(size_t) (t & (lpSize - 1))];
-                        if (x > bestV) { bestV = x; best = t; }
-                    }
+                        if (const float x = lpRing[(size_t) (t & (lpSize - 1))]; x > bestV) { bestV = x; best = t; }
                     cand = best;
                 }
                 marks[(size_t) (markHead & (numMarks - 1))] = { cand, P, v };
                 ++markHead;
                 if (markHead - markTail > numMarks) markTail = markHead - numMarks;
                 lastMarkT = cand;
+                lastMarkVoiced = v;
             }
         }
 
@@ -379,6 +377,9 @@ namespace kv
                 const Mark* mk = nearestMark (nextOut);
                 if (mk == nullptr) { nextOut = (double) m + 1.0; break; }
                 const float P = std::max (8.0f, mk->period);
+                // after a stall (no marks yet, e.g. at a note's start) the grain would begin in the past and only its
+                // second half would play, a click: move it so that it starts with the sample played now
+                if (nextOut - P < (double) m - 1.0) nextOut = (double) m - 1.0 + P;
                 if (nextOut - P > (double) m) break;
                 if ((float) mk->time + P > (float) nIn) break;   // its input is not complete yet (should not happen at this latency)
                 // the output period comes from the same frames as the correction, so hard tune lands exactly on the note
@@ -397,7 +398,7 @@ namespace kv
             const auto idx = (size_t) (m & (olaSize - 1));
             for (int c = 0; c < 2; ++c)
             {
-                wet[c] = wsum[idx] > 0.05f ? acc[c][idx] / wsum[idx] : line[c].readInt (latency);
+                wet[c] = acc[c][idx] / std::max (wsum[idx], 0.5f);   // sparse grains fade instead of switching to the dry signal
                 acc[c][idx] = 0.0f;
             }
             wsum[idx] = 0.0f;
@@ -579,6 +580,10 @@ namespace kv
             const float back = 0.5f * ((float) w + (isVoiced ? period : 0.0f)) + (isVoiced && medCount >= 3 ? (float) (hop * decim) : 0.0f)
                              + 0.0001f * fs;
             const long long time = nIn - (long long) std::lround (back);
+            // Octave errors of the detector (common on high, closed vowels) are folded back to the note's octave; the
+            // correction only depends on the pitch class, so this is safe.
+            if (isVoiced && voiced && noteFrames > 0)
+                midi += 12.0f * std::round ((centre - midi) / 12.0f);
             // slope (semitones per sample) for extrapolation to the played sample in Tracking mode
             if (isVoiced && voiced && lastMidi >= 0.0f)
             {
@@ -593,25 +598,48 @@ namespace kv
             float target = 0.0f;
             if (isVoiced)
             {
-                // the note's centre: follows slowly (keeps vibrato out of the note choice), jumps on a new note
-                if (! wasVoiced) { centre = midi; jumpSamples = 0; heldSamples = 0; }
-                else if (std::abs (midi - centre) > 0.7f)
+                // The note's centre: at the start of a note (scoops, fast phrases) the last ~20 ms; once the note is
+                // held, the average over one vibrato cycle (~190 ms), so vibrato does not move the target note.
+                // A new note starts when the recent pitch stays away from that average by more than 0.75 semitones.
+                if (! wasVoiced) { startNote(); targetNote = -1; }
+                pushHistory (midi);
+                const float grid = s.detuneCents / 100.0f;   // Detune: every target note sits this many semitones off 12-TET A440
+                const float shortMean = historyMean (std::max (1, (int) (0.02f * fs / dt)));
+                // A new note: the last 30 ms have left the held note's centre (its vibrato-free average) by more than
+                // 0.65 semitones for 20 ms, or by more than 0.95 at once (a legato step or a jump), and lie nearer
+                // another note. Vibrato swings around the centre, so it does not count. The note's history restarts
+                // so its average describes only the new note.
+                if (targetNote >= 0 && noteFrames > 2)
                 {
-                    jumpSamples += (long) dt;
-                    if (jumpSamples > (long) (0.03f * fs)) { centre = midi; jumpSamples = 0; heldSamples = 0; }
+                    const float recent = historyMean (std::max (1, (int) (0.03f * fs / dt)));
+                    const float ref = (float) noteFrames * dt > 0.11f * fs ? centre : (float) targetNote + grid;
+                    const float away = std::abs (recent - ref);
+                    const bool otherNote = std::abs (recent - ((float) targetNote + grid)) > 0.55f;
+                    if (away > 0.65f && otherNote) ++jumpFrames; else jumpFrames = 0;
+                    if (otherNote && (away > 0.95f || (float) jumpFrames * dt > 0.02f * fs))
+                    {
+                        startNote();
+                        pushHistory (midi);
+                        targetNote = -1;
+                    }
                 }
-                else jumpSamples = 0;
-                centre += (midi - centre) * (1.0f - std::exp (-dt / (0.12f * fs)));
+                // The note's centre: at the start of a note (scoops, fast phrases) the last ~20 ms, so the target follows
+                // the voice at once; once the note is held, the average over one vibrato cycle (~190 ms, leaving out the
+                // first 60 ms, the scoop or glide into it), so vibrato does not move the target note.
+                const int onsetFrames = (int) (0.06f * fs / dt);
+                const int longFrames = noteFrames - onsetFrames > (int) (0.05f * fs / dt) ? noteFrames - onsetFrames : noteFrames;
+                const float longMean = historyMean (std::min (longFrames, std::max (1, (int) (0.19f * fs / dt))));
+                const bool settled = (float) noteFrames * dt > 0.11f * fs;
+                centre = settled ? longMean : shortMean;
                 heldSamples += (long) dt;
 
-                const float grid = s.detuneCents / 100.0f;   // Detune: every target note sits this many semitones off 12-TET A440
                 int bestNote = -1;
                 float bestDist = 1e9f;
                 for (int note = (int) std::floor (centre - grid) - 7; note <= (int) std::ceil (centre - grid) + 7; ++note)
                 {
                     if (! s.notes[((note % 12) + 12) % 12]) continue;
                     float dist = std::abs ((float) note + grid - centre);
-                    if (note == targetNote) dist -= 0.15f;
+                    if (note == targetNote && settled) dist -= 0.06f;   // a little hysteresis once the note is held
                     if (dist < bestDist) { bestDist = dist; bestNote = note; }
                 }
                 if (bestNote != targetNote) { heldSamples = 0; noteSamples = 0; }
@@ -638,6 +666,20 @@ namespace kv
                 ++frameHead;
                 frameCount = std::min (frameCount + 1, numFrames);
             }
+        }
+
+        void startNote() { noteFrames = 0; jumpFrames = 0; heldSamples = 0; }
+        void pushHistory (float m)
+        {
+            history[(size_t) (historyPos++ & (historySize - 1))] = m;
+            ++noteFrames;
+        }
+        float historyMean (int count) const
+        {
+            count = std::clamp (count, 1, std::min (noteFrames, historySize));
+            float sum = 0.0f;
+            for (int k = 1; k <= count; ++k) sum += history[(size_t) ((historyPos - k) & (historySize - 1))];
+            return sum / (float) count;
         }
 
         // Moves the correction towards the target over `steps` samples (Retune Speed, Humanize).
@@ -680,12 +722,16 @@ namespace kv
         int targetNote = -1, missCount = 0, medCount = 0;
         float tauTrack = 0, med[3] {}, centre = 0, slope = 0, lastMidi = -1.0f;
         long heldSamples = 0, noteSamples = 0, jumpSamples = 0;
+        static constexpr int historySize = 512;
+        std::array<float, historySize> history {};
+        int historyPos = 0, noteFrames = 0, jumpFrames = 0;
         long long lastFrameTime = 0;
         std::array<Frame, numFrames> frames {};
         int frameCount = 0;
         long long frameHead = 0;
         std::array<Mark, numMarks> marks {};
         long long markHead = 0, markTail = 0, lastMarkT = 0;
+        bool lastMarkVoiced = false;
         double nextOut = -1.0;
         float vibPhase = 0, vibEnv = 0, vibMix = 0, lastVib = 0, tremMix = 0, tremDepthNow = 0;
         double tremPhase = 0;

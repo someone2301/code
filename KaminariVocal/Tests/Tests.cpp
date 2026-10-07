@@ -901,6 +901,46 @@ int main (int argc, char** argv)
                    + " cents and keeps the vibrato (" + juce::String (juce::roundToInt (depth)) + " of 40 cents)");
         }
         {
+            // sung-note behaviour (hard tune, both modes): a scoop from below into C4 sung 25 cents flat, then a
+            // legato step up to C#4 sung 20 cents sharp. Each note must land on its own note, not the one the scoop or glide
+            // passed through.
+            std::vector<float> sig ((size_t) (1.6 * sr));
+            {
+                double ph = 0;
+                for (size_t i = 0; i < sig.size(); ++i)
+                {
+                    const double t = (double) i / sr;
+                    double m;
+                    if (t < 0.10) m = 59.75 - 0.6 * (1.0 - t / 0.10) * (1.0 - t / 0.10);   // scoop into C4 -25 ct
+                    else if (t < 0.80) m = 59.75;
+                    else if (t < 0.87) m = 59.75 + (61.2 - 59.75) * (0.5 - 0.5 * std::cos (kv::pi * (t - 0.80) / 0.07));
+                    else m = 61.2;                                                        // C#4 +20 ct
+                    ph += 440.0 * std::pow (2.0, (m - 69.0) / 12.0) / sr;
+                    // a second harmonic gives the detector some structure and keeps one zero crossing per cycle
+                    const double v = std::sin (2 * kv::pi * ph) + 0.3 * std::sin (4 * kv::pi * ph);
+                    sig[i] = (float) (0.2 * v * std::min (1.0, t / 0.01));
+                }
+            }
+            for (int q = 0; q < 2; ++q)
+            {
+                KaminariVocalProcessor p;
+                neutral (p);
+                setParam (p, "tn_quality", (float) q);
+                setParam (p, "tn_on", 1.0f); setParam (p, "tn_speed", 0.0f); setParam (p, "tn_humanize", 0.0f);
+                setParam (p, "tn_range", 2.0f);
+                prepare (p);
+                const auto r = render (p, 1.6, [&] (int, long n) { return n < (long) sig.size() ? sig[(size_t) n] : 0.0f; });
+                const auto first = track (r.out, (int) (0.15 * sr), (int) (0.78 * sr), 440.0 * std::pow (2.0, (60.0 - 69.0) / 12.0));
+                const auto second = track (r.out, (int) (0.95 * sr), (int) (1.55 * sr), 440.0 * std::pow (2.0, (61.0 - 69.0) / 12.0));
+                double worst = 0;
+                for (double c : first) worst = std::max (worst, std::abs (c));
+                for (double c : second) worst = std::max (worst, std::abs (c));
+
+                check (! first.empty() && ! second.empty() && worst < 10.0, juce::String (modeName[q]) + ": a scoop and a legato step land on their own notes (worst "
+                       + juce::String (worst, 1) + " cents from C4 and C#4)");
+            }
+        }
+        {
             // switching the mode changes the reported latency (from the message thread)
             KaminariVocalProcessor p;
             neutral (p);
