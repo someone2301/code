@@ -153,131 +153,11 @@ namespace kvui
         int mode;
     };
 
-    // Shape of the reverb return over time: pre-delay, build-up and decay (or the Nonlin envelope).
-    class ReverbEnvelope : public juce::Component, private juce::Timer
-    {
-    public:
-        explicit ReverbEnvelope (APVTS& s) : state (s) { setTitle ("Reverb envelope"); startTimerHz (15); }
-        ~ReverbEnvelope() override { stopTimer(); }
-
-        void paint (juce::Graphics& g) override
-        {
-            auto b = getLocalBounds().toFloat();
-            g.setColour (navy950);
-            g.fillRoundedRectangle (b, 5.0f);
-            g.setColour (navy600);
-            g.drawRoundedRectangle (b.reduced (0.5f), 5.0f, 1.0f);
-
-            const int m = juce::roundToInt (plainValue (state, kvid::rvMode));
-            const auto& spec = kv::reverbMode (m);
-            const float pre = plainValue (state, kvid::rvPreDelay) * 0.001f;
-            const float decay = plainValue (state, kvid::rvDecay);
-            const float size = plainValue (state, kvid::rvSize) * 0.01f;
-            const float attack = plainValue (state, kvid::rvAttack) * 0.01f;
-            const float density = plainValue (state, kvid::rvDensity) * 0.01f;
-            const bool nonlin = spec.engine == kv::ReverbEngine::Nonlin;
-            const bool ambience = spec.engine == kv::ReverbEngine::Ambience;
-            const float nlLen = (60.0f + 640.0f * size) * 0.001f;
-            const float span = juce::jmax (0.4f, pre + (nonlin ? nlLen * 1.25f : decay * 0.9f));
-
-            auto plot = b.reduced (10.0f, 8.0f).withTrimmedTop (14.0f).withTrimmedBottom (14.0f);
-            auto xOf = [&] (float t) { return plot.getX() + plot.getWidth() * t / span; };
-            // grid: one line per second (or per 100 ms on short spans)
-            float step = 10.0f;
-            for (float st : { 0.05f, 0.1f, 0.25f, 0.5f, 1.0f, 2.0f, 5.0f, 10.0f })
-                if (span / st <= 4.0f) { step = st; break; }
-            g.setFont (font (10.0f, 0));
-            for (int k = 1; (float) k * step < span; ++k)
-            {
-                const float t = (float) k * step;
-                g.setColour (navy800);
-                g.drawVerticalLine (juce::roundToInt (xOf (t)), plot.getY(), plot.getBottom());
-                g.setColour (steel);
-                g.drawText (t < 0.999f ? juce::String (juce::roundToInt (t * 1000.0f)) + " ms" : juce::String (t, std::abs (t - std::round (t)) < 1.0e-3f ? 0 : 1) + " s",
-                            juce::Rectangle<float> (xOf (t) - 30.0f, plot.getBottom() + 1.0f, 60.0f, 12.0f), juce::Justification::centred);
-            }
-
-            auto ampAt = [&] (float t) -> float
-            {
-                const float u = t - pre;
-                if (u < 0.0f) return 0.0f;
-                if (nonlin)
-                {
-                    if (u > nlLen) return 0.0f;
-                    const float x = u / nlLen;
-                    float e;
-                    if (attack <= 0.5f) e = 1.0f - attack / 0.5f * 0.85f * x;
-                    else { const float k = (attack - 0.5f) / 0.5f; e = (1.0f - k) * (1.0f - 0.85f * x) + k * (0.08f + 0.92f * std::pow (x, 1.5f)); }
-                    return e * juce::jmin (1.0f, u / 0.004f);
-                }
-                const float build = 0.006f + 0.05f * spec.diffScale * (0.4f + 0.6f * density);
-                const float tail = std::pow (10.0f, -3.0f * u / juce::jmax (0.05f, decay)) * (1.0f - std::exp (-u / build));
-                if (! ambience) return tail;
-                return tail * std::sin (attack * 1.5707963f);
-            };
-
-            juce::Path curve, fill;
-            const int n = juce::jmax (2, (int) plot.getWidth());
-            for (int i = 0; i <= n; ++i)
-            {
-                const float t = span * (float) i / (float) n;
-                const float y = plot.getBottom() - plot.getHeight() * juce::jlimit (0.0f, 1.0f, ampAt (t));
-                if (i == 0) { curve.startNewSubPath (plot.getX(), y); fill.startNewSubPath (plot.getX(), plot.getBottom()); }
-                else curve.lineTo (xOf (t), y);
-                fill.lineTo (xOf (t), y);
-            }
-            fill.lineTo (plot.getRight(), plot.getBottom());
-            fill.closeSubPath();
-            g.setGradientFill (juce::ColourGradient (accent.withAlpha (0.35f), 0, plot.getY(), accent.withAlpha (0.04f), 0, plot.getBottom(), false));
-            g.fillPath (fill);
-            g.setColour (accent);
-            g.strokePath (curve, juce::PathStrokeType (1.6f));
-
-            if (ambience)
-            {
-                // early reflections, louder as Attack moves towards 0
-                const float er = std::cos (attack * 1.5707963f);
-                static const float taps[] = { 0.007f, 0.013f, 0.019f, 0.026f, 0.034f, 0.043f, 0.055f, 0.068f };
-                g.setColour (white.withAlpha (0.85f));
-                for (int k = 0; k < 8; ++k)
-                {
-                    const float x = xOf (pre + taps[k] * (0.6f + size));
-                    const float h = plot.getHeight() * er * (1.0f - 0.08f * (float) k);
-                    g.fillRect (juce::Rectangle<float> (x - 1.0f, plot.getBottom() - h, 2.0f, h));
-                }
-            }
-
-            // pre-delay marker
-            const float px = xOf (pre);
-            g.setColour (amber);
-            for (float y = plot.getY(); y < plot.getBottom(); y += 5.0f)
-                g.drawLine (px, y, px, juce::jmin (y + 2.5f, plot.getBottom()), 1.0f);
-            g.setFont (font (11.0f, 0));
-            g.drawText ("pre-delay", juce::Rectangle<float> (px + 4.0f, b.getY() + 4.0f, 70.0f, 14.0f), juce::Justification::centredLeft);
-            g.setColour (mist);
-            const juce::String info = nonlin ? juce::String (juce::roundToInt (nlLen * 1000.0f)) + " ms envelope"
-                                             : "RT60 " + juce::String (decay, decay < 10.0f ? 2 : 1) + " s";
-            g.drawText (info, b.reduced (10.0f, 4.0f).removeFromTop (14.0f), juce::Justification::centredRight);
-        }
-
-    private:
-        void timerCallback() override
-        {
-            float sum = 0;
-            for (auto* id : { kvid::rvMode, kvid::rvPreDelay, kvid::rvDecay, kvid::rvSize, kvid::rvAttack, kvid::rvDensity })
-                sum = sum * 1.37f + state.getParameter (id)->getValue();
-            if (std::abs (sum - last) > 1.0e-7f) { last = sum; repaint(); }
-        }
-        APVTS& state;
-        float last = -1;
-    };
-
     class ReverbPanel : public juce::Component
     {
     public:
         explicit ReverbPanel (KaminariVocalProcessor& p)
             : header (p, KaminariVocalProcessor::Reverb, kvid::rvOn, kvid::rvSend, kvid::rvTap, "Reverb", "reverb"),
-              envelope (p.apvts),
               decay (p.apvts, kvid::rvDecay, "Decay", "0.2 s", "20 s", "Time for the tail to fall by 60 dB."),
               size (p.apvts, kvid::rvSize, "Size", "SMALL", "LARGE", "Scale of the space. In Nonlin it sets the envelope length."),
               preDelay (p.apvts, kvid::rvPreDelay, "Pre-delay", "0", "250", "Gap between the vocal and the start of the reverb."),
@@ -291,7 +171,6 @@ namespace kvui
               modeAttachment (modeParam, [this] (float v) { modeChanged (juce::roundToInt (v)); }, &p.undoManager)
         {
             addAndMakeVisible (header);
-            addAndMakeVisible (envelope);
             for (int m = 0; m < kv::numReverbModes; ++m)
             {
                 auto* t = tiles.add (new ModeTile (m));
@@ -358,8 +237,6 @@ namespace kvui
             header.setBounds (b.removeFromTop (80));
             b.removeFromTop (30);
             auto top = b.removeFromTop (4 * 30 + 3 * 5);
-            envelope.setBounds (top.removeFromRight (196));
-            top.removeFromRight (12);
             gridArea = top;
             const int cols = 5, gap = 5;
             const int cw = (top.getWidth() - (cols - 1) * gap) / cols;
@@ -391,7 +268,6 @@ namespace kvui
 
         ModuleLNF lnf;
         SendHeader header;
-        ReverbEnvelope envelope;
         juce::OwnedArray<ModeTile> tiles;
         RangeKnob decay, size, preDelay, hiCut, loCut, modRate, modDepth, density, attack;
 
@@ -1297,7 +1173,7 @@ namespace kvui
                 g.setColour (mist);
                 g.setFont (font (11.0f, 1, 0.1f));
                 g.drawText ((ri == 0 ? "REVERB" : "DELAY") + juce::String (" RETURN EQ") + dot() + "applied to the wet signal only"
-                            + dot() + "click to add a band, drag nodes, wheel = Q",
+                            + dot() + "double-click to add a band, drag nodes, wheel = Q",
                             eq.getX(), eq.getY() - 18, 600, 14, juce::Justification::centredLeft);
                 return;
             }

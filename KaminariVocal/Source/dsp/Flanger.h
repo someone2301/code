@@ -5,8 +5,10 @@
 
 // Flanger (DESIGN.md 2.14), a channel module between Compression and Distortion. Original implementation: a short
 // delay (Delay, 0.1 .. 10 ms) swept upwards by an LFO (Depth, up to +6 ms) with feedback (positive or negative,
-// soft-limited in the loop) and a high cut on the repeats. Left and right LFOs are offset by Stereo Phase. The rate
-// runs free or locks to the host tempo. Mix blends the swept copy with the dry signal: the comb is deepest at 50 %.
+// soft-limited in the loop) and a high cut on the repeats. The sweep is exponential, so the comb's notches move evenly
+// in pitch through the whole sweep. Left and right LFOs are offset by Stereo Phase. The rate runs free or locks to the
+// host tempo. Mix blends the swept copy with the dry signal (the comb is deepest at 50 %); the blend is level
+// compensated for the mix and the feedback, so switching the flanger in does not make the vocal quieter.
 // No latency: the dry signal is not delayed.
 namespace kv
 {
@@ -60,6 +62,8 @@ namespace kv
             depthSmooth.setTarget (s.depth);
             for (auto& f : damp) f.setCutoff (s.hiCutHz, fs);
             const float g = std::clamp (s.feedback, -0.95f, 0.95f);
+            // average power of the swept copy (feedback comb) relative to its input, for the level compensation
+            const float wetPow = 1.0f / (1.0f - 0.85f * g * g);
             const double beatsPerSample = s.bpm / 60.0 / (double) fs;
             const float* in[2] = { inL, inR };
             float* out[2] = { outL, outR };
@@ -77,17 +81,21 @@ namespace kv
                     ph = phase;
                 }
                 const float base = delaySmooth.next(), depth = depthSmooth.next(), mix = mixSmooth.next();
+                const float top = base + maxSweepMs * depth;
+                const float span = std::log (std::max (top, 0.05f) / std::max (base, 0.05f));
+                // dry and swept copy are largely uncorrelated across the comb: compensate the summed power
+                const float comp = 1.0f / std::sqrt ((1.0f - mix) * (1.0f - mix) + mix * mix * wetPow + 0.0001f);
                 for (int c = 0; c < 2; ++c)
                 {
                     const float p = (float) (ph - std::floor (ph)) + (c == 1 ? 0.5f * s.stereo : 0.0f);
                     const float lfo = 0.5f + 0.5f * lfoShape (s.shape, p - 0.25f);   // 0..1, starts at the bottom
-                    const float d = (base + maxSweepMs * depth * lfo) * 0.001f * fs;
+                    const float d = std::max (base, 0.05f) * std::exp (span * lfo) * 0.001f * fs;
                     const float y = line[c].read (d - 1.0f);   // read before this sample's push: d - 1 gives a delay of d
                     // feedback is soft-limited and damped so high settings ring but never run away
                     fb[c] = damp[c].process (y);
                     const float x = in[c][i];   // read before the write below: in and out may be the same buffer
                     line[c].push (x + softClip (g * fb[c]));
-                    out[c][i] = x + (fb[c] - x) * mix;
+                    out[c][i] = (x + (fb[c] - x) * mix) * std::min (comp, 2.0f);
                 }
                 lastPh = (float) (ph - std::floor (ph));
             }

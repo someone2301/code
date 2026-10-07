@@ -182,7 +182,7 @@ void KaminariVocalProcessor::readModuleSettings()
     auto& dt = dtSettings;
     dt.on = moduleOn[ModDistortion];
     dt.style = i ("dt_style"); dt.driveDb = f ("dt_drive"); dt.tone = f ("dt_tone") / 100.0f; dt.bias = f ("dt_bias") / 100.0f;
-    dt.lowCutHz = f ("dt_lowcut"); dt.crush = f ("dt_crush") / 100.0f; dt.mix = f ("dt_mix") / 100.0f; dt.outDb = f ("dt_out");
+    dt.lowCutHz = f ("dt_lowcut"); dt.highCutHz = f ("dt_hicut"); dt.crush = f ("dt_crush") / 100.0f; dt.mix = f ("dt_mix") / 100.0f; dt.outDb = f ("dt_out");
     dt.autoGain = b ("dt_auto_gain"); dt.oversampling = i ("dt_os");
 
     readEqSettings (eqSettings);

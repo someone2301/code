@@ -1567,8 +1567,21 @@ int main (int argc, char** argv)
         const float notch = toneDb (r.out, 0, 500.0, 4800, 24000);
         r = render (p, 0.5, sine (1000.0, -12.0f));
         const float peak = toneDb (r.out, 0, 1000.0, 4800, 24000);
-        check (peak - notch > 40.0f && std::abs (peak + 12.0f) < 0.5f, "Flanger in the chain, Mix 50 %: 500 Hz cancelled to "
-               + juce::String (notch, 1) + " dBFS, 1 kHz passes at " + juce::String (peak, 1) + " dBFS (input -12)");
+        // the comb's peaks sit 3 dB up because the blend is level compensated (the notches remove as much)
+        check (peak - notch > 40.0f && std::abs (peak + 9.0f) < 0.5f, "Flanger in the chain, Mix 50 %: 500 Hz cancelled to "
+               + juce::String (notch, 1) + " dBFS, 1 kHz passes at " + juce::String (peak, 1) + " dBFS (input -12, level compensated)");
+        {
+            // with the default sweep and feedback the vocal keeps its loudness
+            KaminariVocalProcessor q;
+            neutral (q);
+            setParam (q, kvid::flOn, 1.0f);
+            prepare (q);
+            const auto rr = render (q, 4.0, vocal);
+            double ei = 0, eo = 0;
+            for (int i = (int) sr; i < (int) (4.0 * sr); ++i) { ei += (double) rr.in.getSample (0, i) * rr.in.getSample (0, i); eo += (double) rr.out.getSample (0, i) * rr.out.getSample (0, i); }
+            const double d = 10.0 * std::log10 (eo / ei);
+            check (std::abs (d) < 1.5, "Flanger at its default settings keeps the vocal's level (" + juce::String (d, 1) + " dB)");
+        }
         setParam (p, kvid::flFeedback, 95.0f);
         setParam (p, kvid::flDepth, 100.0f);
         prepare (p);
@@ -1709,12 +1722,21 @@ int main (int argc, char** argv)
                     const juce::Point<float> at (curve.xForFreq (f), curve.yForDb (3.0));
                     curve.mouseDown (event (curve, at, at, false));
                     curve.mouseUp (event (curve, at, at, false));
+                    curve.mouseDoubleClick (event (curve, at, at, false));
                     const juce::String pre = "eq" + juce::String (bandNo++) + "_";
                     typesOk = typesOk && getParam (p, (pre + "used").toRawUTF8()) > 0.5f
                                       && juce::roundToInt (getParam (p, (pre + "type").toRawUTF8())) == type
                                       && std::abs (getParam (p, (pre + "freq").toRawUTF8()) / (float) f - 1.0f) < 0.03f;
                 }
-                check (typesOk, "EQ click-to-create: 40 Hz low cut, 100 Hz low shelf, 1 kHz bell, 10 kHz high shelf, 18 kHz high cut");
+                check (typesOk, "EQ double-click-to-create: 40 Hz low cut, 100 Hz low shelf, 1 kHz bell, 10 kHz high shelf, 18 kHz high cut");
+                {
+                    // a single click on empty graph space adds nothing and closes the band settings
+                    const juce::Point<float> empty (curve.xForFreq (3000.0), curve.yForDb (-12.0));
+                    curve.mouseDown (event (curve, empty, empty, false));
+                    curve.mouseUp (event (curve, empty, empty, false));
+                    check (getParam (p, "eq6_used") < 0.5f && curve.selected == -1 && ! ed->eqPage().editor.panel.isVisible(),
+                           "EQ: a single click on empty space adds no band and hides the band settings");
+                }
                 // the keyboard sweeps the selected band to the note under the mouse
                 auto& piano = ed->eqPage().piano;
                 ed->eqPage().select (2);
@@ -1756,6 +1778,7 @@ int main (int argc, char** argv)
                     const juce::Point<float> at (sc.xForFreq (f), sc.yForDb (4.0));
                     sc.mouseDown (event (sc, at, at, false));
                     sc.mouseUp (event (sc, at, at, false));
+                    sc.mouseDoubleClick (event (sc, at, at, false));
                     const juce::String pre = "lv_sc" + juce::String (k) + "_";
                     typesOk = typesOk && getParam (p, (pre + "used").toRawUTF8()) > 0.5f && juce::roundToInt (getParam (p, (pre + "type").toRawUTF8())) == type
                               && std::abs (std::log2 (getParam (p, (pre + "freq").toRawUTF8()) / f)) < 0.05 && sc.selected == k - 1;
@@ -1773,7 +1796,7 @@ int main (int argc, char** argv)
                 juce::MessageManager::getInstance()->runDispatchLoopUntil (300);
                 const int sparks = sc.nodeBolts();
                 check (typesOk && bellGain && dragged && sparks > 0,
-                       "Compression side-chain EQ (main EQ editor): clicks create a 40 Hz low cut, a 3 kHz bell and an 18 kHz high cut; dragging band 2 sets "
+                       "Compression side-chain EQ (main EQ editor): double-clicks create a 40 Hz low cut, a 3 kHz bell and an 18 kHz high cut; dragging band 2 sets "
                        + juce::String (getParam (p, "lv_sc2_freq"), 0) + " Hz / " + juce::String (getParam (p, "lv_sc2_gain"), 1) + " dB; "
                        + juce::String (sparks) + " bolts around the selected node");
                 for (int i = 1; i <= 8; ++i) setParam (p, ("lv_sc" + juce::String (i) + "_used").toRawUTF8(), 0.0f);

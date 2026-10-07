@@ -418,7 +418,7 @@ namespace kvui
             g.fillRoundedRectangle (getLocalBounds().toFloat(), 4.0f);
             g.setColour (navy600);
             g.fillRect (0, 0, getWidth(), 3);
-            const int cur = noteOfBand (band);
+            const int cur = band >= 0 ? noteOfBand (band) : -1000;
             for (int pass = 0; pass < 2; ++pass)
                 for (int m = loNote(); m <= hiNote(); ++m)
                 {
@@ -428,7 +428,7 @@ namespace kvui
                     const bool black = Piano::isBlack (m);
                     juce::Colour fill = black ? juce::Colour (0xff1a2236) : juce::Colour (0xffdce3f0);
                     if (m == hover) fill = black ? juce::Colour (0xff2b4a82) : juce::Colour (0xffb8f3ff);
-                    if (m == cur) fill = EqCurve::bandColour (band);
+                    if (m == cur && band >= 0) fill = EqCurve::bandColour (band);
                     g.setColour (fill);
                     g.fillRoundedRectangle (r, black ? 2.0f : 3.0f);
                     if (black) { g.setColour (navy950); g.drawRoundedRectangle (r, 2.0f, 1.0f); }
@@ -456,7 +456,7 @@ namespace kvui
         void mouseExit (const juce::MouseEvent&) override { hover = -1; repaint(); }
         void mouseDown (const juce::MouseEvent& e) override
         {
-            if (! used (band)) return;
+            if (band < 0 || ! used (band)) return;
             auto* p = proc.apvts.getParameter (curve.getPrefix() + juce::String (band + 1) + "_freq");
             p->beginChangeGesture();
             sweeping = true;
@@ -595,7 +595,7 @@ namespace kvui
             for (auto* c : std::initializer_list<juce::Component*> { power.get(), type.get(), slope.get(), freq.get(), gain.get(), q.get(), &del, &solo })
                 c->setVisible (used);
             if (proc != nullptr) solo.setToggleState (proc->eqSoloFor (target).load() == bandNo, juce::dontSendNotification);
-            use.setVisible (! used);
+            use.setVisible (false);   // an unused band's panel is never shown (double-click the graph to add one)
             auto b = getLocalBounds().reduced (12, 10);
             auto left = b.removeFromLeft (96);
             power->setBounds (left.removeFromTop (28).removeFromLeft (28));
@@ -653,10 +653,12 @@ namespace kvui
             resolution.onChange = [this] { proc.analyserResolution.store (resolution.getSelectedId() - 1); };
             speed.onChange = [this] { proc.analyserSpeed.store (speed.getSelectedId() - 1); };
             pianoToggle.setClickingTogglesState (true);
-            pianoToggle.setToggleState (true, juce::dontSendNotification);
+            // the side-chain EQ starts without the keyboard (it shapes the detector, notes matter less there)
+            const bool pianoOn = eqTarget != KaminariVocalProcessor::EqSideChain;
+            pianoToggle.setToggleState (pianoOn, juce::dontSendNotification);
             pianoToggle.setTooltip ("Show the keyboard under the graph: click or drag along the keys to sweep the selected band from note to note.");
-            pianoToggle.onClick = [this] { piano.setVisible (pianoToggle.getToggleState()); select (selected); repaint(); };
-            piano.setVisible (true);
+            pianoToggle.onClick = [this] { piano.setVisible (pianoToggle.getToggleState()); select (selected); resized(); repaint(); };
+            piano.setVisible (pianoOn);
             curve.onSelect = [this] (int b) { select (b); };
             panel.showNotes = [this] { return pianoToggle.getToggleState(); };
             select (firstUsed());
@@ -664,14 +666,36 @@ namespace kvui
         }
         ~EqEditor() override { stopTimer(); proc.eqSoloFor (target).store (-1); }
 
+        // band < 0: no band selected (a click on empty graph space): the band settings close
         void select (int band)
         {
+            if (band >= 0 && plain (proc.apvts, curve.getPrefix() + juce::String (juce::jlimit (0, 7, band) + 1) + "_used") < 0.5f)
+                band = -1;   // an unused band has no settings to show
+            if (band < 0)
+            {
+                selected = -1;
+                curve.selected = -1;
+                piano.band = -1;
+                proc.eqSoloFor (target).store (-1);
+                panel.setVisible (false);
+                repaint();
+                return;
+            }
             selected = juce::jlimit (0, 7, band);
             curve.selected = selected;
             piano.band = selected;
             auto& solo = proc.eqSoloFor (target);
             if (solo.load() >= 0) solo.store (selected);
-            panel.build (proc, target, selected, lnf, [this] (int d) { select ((selected + d + 8) % 8); });
+            panel.setVisible (true);
+            panel.build (proc, target, selected, lnf, [this] (int d)
+            {
+                // step to the next band in use
+                for (int k = 1; k <= 8; ++k)
+                {
+                    const int c = ((selected + d * k) % 8 + 8) % 8;
+                    if (plain (proc.apvts, curve.getPrefix() + juce::String (c + 1) + "_used") > 0.5f) { select (c); return; }
+                }
+            });
             resized();
         }
         int selectedBand() const noexcept { return selected; }
@@ -720,9 +744,14 @@ namespace kvui
         {
             for (int i = 0; i < 8; ++i)
                 if (plain (proc.apvts, curve.getPrefix() + juce::String (i + 1) + "_used") > 0.5f) return i;
-            return 0;
+            return -1;
         }
-        void timerCallback() override { panel.resized(); }
+        void timerCallback() override
+        {
+            // a band deleted from its panel (or by a preset) closes the settings
+            if (selected >= 0 && plain (proc.apvts, curve.getPrefix() + juce::String (selected + 1) + "_used") < 0.5f) { select (-1); return; }
+            panel.resized();
+        }
         juce::Component* extra = nullptr;
         juce::Rectangle<int> bar;
         int selected = 0;
@@ -732,7 +761,7 @@ namespace kvui
     {
     public:
         explicit EqPage (KaminariVocalProcessor& p)
-            : AdvFrame (p, "EQ", "8 bands" + dot() + "zero latency" + dot() + "click to add a band, drag nodes, wheel = Q", "eq_on", "eq"),
+            : AdvFrame (p, "EQ", "8 bands" + dot() + "zero latency" + dot() + "double-click to add a band, drag nodes, wheel = Q", "eq_on", "eq"),
               out (p.apvts, "eq_out_gain", "Output"), editor (p, KaminariVocalProcessor::EqMain, &out),
               curve (editor.curve), piano (editor.piano)
         {
@@ -1053,7 +1082,7 @@ namespace kvui
         else g.fillRect (r.withTop (r.getBottom() - r.getHeight() * frac));
     }
 
-    // COMPRESSION: knee inset, scrolling level history, threshold line, meters.
+    // COMPRESSION: scrolling level history, threshold line, meters.
     class CompDisplay : public juce::Component, private juce::Timer
     {
     public:
@@ -1067,28 +1096,9 @@ namespace kvui
             g.setColour (navy950);
             g.fillRoundedRectangle (getLocalBounds().toFloat(), 4.0f);
             auto b = getLocalBounds().reduced (4);
-            knee = b.removeFromLeft (juce::jmin (b.getHeight(), 150));
             meters = b.removeFromRight (56);
             main = b.reduced (4, 0);
-            // knee / transfer curve
-            g.setColour (navy900);
-            g.fillRect (knee);
-            g.setColour (navy800);
-            for (int i = 1; i < 4; ++i) { g.drawVerticalLine (knee.getX() + knee.getWidth() * i / 4, (float) knee.getY(), (float) knee.getBottom());
-                                          g.drawHorizontalLine (knee.getY() + knee.getHeight() * i / 4, (float) knee.getX(), (float) knee.getRight()); }
-            const float th = plain (proc.apvts, "lv_thresh"), ratio = plain (proc.apvts, "lv_ratio"), kn = plain (proc.apvts, "lv_knee"), range = plain (proc.apvts, "lv_range");
-            juce::Path tc;
-            for (int i = 0; i <= 60; ++i)
-            {
-                const float in = -60.0f + i, out = in - std::min (range, kv::downwardGr (in, th, ratio, kn));
-                const float x = knee.getX() + (in + 60.0f) / 60.0f * knee.getWidth(), y = knee.getBottom() - (out + 60.0f) / 60.0f * knee.getHeight();
-                if (i == 0) tc.startNewSubPath (x, y); else tc.lineTo (x, y);
-            }
-            g.setColour (accent);
-            g.strokePath (tc, juce::PathStrokeType (2.0f));
-            g.setColour (amber.withAlpha (0.7f));
-            const float tx = knee.getX() + (th + 60.0f) / 60.0f * knee.getWidth();
-            g.drawVerticalLine ((int) tx, (float) knee.getY(), (float) knee.getBottom());
+            const float th = plain (proc.apvts, "lv_thresh");
 
             // history: input area, output line, gain reduction from the top
             std::array<kv::LevelHistory<KaminariVocalProcessor::historySize>::Entry, (size_t) KaminariVocalProcessor::historySize> h;
@@ -1135,7 +1145,7 @@ namespace kvui
     private:
         void timerCallback() override { repaint(); }
         KaminariVocalProcessor& proc;
-        juce::Rectangle<int> knee, main, meters;
+        juce::Rectangle<int> main, meters;
     };
 
     class CompressionPage : public AdvFrame
@@ -1178,7 +1188,7 @@ namespace kvui
             const char* names[] = { "COMPRESSOR", "SIDE-CHAIN EQ" };
             const char* tips[] = { "Level display and the compressor's controls.",
                                    "Side-chain detection EQ: shapes what the compressor reacts to (the audio is not filtered). "
-                                   "Same editor as the main EQ: click to add a band, drag, wheel = Q." };
+                                   "Same editor as the main EQ." };
             for (int v = 0; v < 2; ++v)
             {
                 auto* b = viewButtons.add (new juce::TextButton (names[v]));
@@ -1220,8 +1230,8 @@ namespace kvui
             g.setFont (font (11.0f, 2, 0.1f));
             g.drawText ("SIDE CHAIN", sideChain.getX() + 12, sideChain.getY() + 6, 200, 14, juce::Justification::centredLeft);
             g.setFont (font (11.0f, 1, 0.1f));
-            g.drawText (scShown ? "SIDE-CHAIN EQ" + dot() + "shapes what the detector hears, the audio is not filtered" + dot() + "click to add a band, drag nodes, wheel = Q"
-                                : "LEVEL" + dot() + "transfer curve, gain-reduction history and meters",
+            g.drawText (scShown ? "SIDE-CHAIN EQ" + dot() + "shapes what the detector hears, the audio is not filtered"
+                                : "LEVEL" + dot() + "gain-reduction history and meters",
                         viewRow.getX(), viewRow.getY(), viewRow.getWidth() - 240, viewRow.getHeight(), juce::Justification::centredLeft);
             g.drawText ("DETECTOR", detector.getX(), detector.getY() - 16, 120, 14, juce::Justification::centredLeft);
         }
@@ -1941,84 +1951,11 @@ namespace kvui
         juce::ParameterAttachment att;
     };
 
-    // Transfer curve of the selected style at the current Drive and Bias, with the latest peak marked.
-    class DistortionCurve : public juce::Component, private juce::Timer
-    {
-    public:
-        explicit DistortionCurve (KaminariVocalProcessor& p) : proc (p) { setTitle ("Distortion curve"); startTimerHz (20); }
-        ~DistortionCurve() override { stopTimer(); }
-        void paint (juce::Graphics& g) override
-        {
-            auto b = getLocalBounds().toFloat();
-            g.setColour (navy950);
-            g.fillRoundedRectangle (b, 5.0f);
-            g.setColour (navy600);
-            g.drawRoundedRectangle (b.reduced (0.5f), 5.0f, 1.0f);
-            auto plot = b.reduced (14.0f, 14.0f).withTrimmedTop (8.0f);
-            plot = plot.withSizeKeepingCentre (juce::jmin (plot.getWidth(), plot.getHeight()), juce::jmin (plot.getWidth(), plot.getHeight()));
-            g.setColour (navy800);
-            g.drawHorizontalLine (juce::roundToInt (plot.getCentreY()), plot.getX(), plot.getRight());
-            g.drawVerticalLine (juce::roundToInt (plot.getCentreX()), plot.getY(), plot.getBottom());
-            g.drawRect (plot, 1.0f);
-            // unity line
-            g.setColour (steel.withAlpha (0.6f));
-            g.drawLine (plot.getX(), plot.getBottom(), plot.getRight(), plot.getY(), 1.0f);
-
-            auto& s = proc.apvts;
-            const int style = juce::roundToInt (plainValue (s, "dt_style"));
-            const float drive = juce::Decibels::decibelsToGain (plainValue (s, "dt_drive"));
-            const float bias = plainValue (s, "dt_bias") * 0.01f;
-            juce::Path path;
-            const int n = (int) plot.getWidth();
-            for (int i = 0; i <= n; ++i)
-            {
-                const float x = -1.0f + 2.0f * (float) i / (float) n;
-                const float y = juce::jlimit (-1.2f, 1.2f, kv::Distortion::curve (x * drive, style, bias));
-                const float px = plot.getX() + (float) i, py = plot.getCentreY() - y * plot.getHeight() * 0.5f;
-                if (i == 0) path.startNewSubPath (px, py); else path.lineTo (px, py);
-            }
-            g.setColour (accent);
-            g.strokePath (path, juce::PathStrokeType (2.0f));
-
-            // latest peak into the shaper, as an input level on the curve
-            const bool on = choiceIndex (s, "dt_on") != 0;
-            if (on && peak > 1.0e-4f)
-            {
-                const float xin = juce::jlimit (0.0f, 1.0f, peak / drive);
-                const float y = juce::jlimit (-1.2f, 1.2f, kv::Distortion::curve (xin * drive, style, bias));
-                const float px = plot.getCentreX() + xin * plot.getWidth() * 0.5f, py = plot.getCentreY() - y * plot.getHeight() * 0.5f;
-                g.setColour (amber.withAlpha (0.3f));
-                g.fillEllipse (px - 8.0f, py - 8.0f, 16.0f, 16.0f);
-                g.setColour (amber);
-                g.fillEllipse (px - 4.0f, py - 4.0f, 8.0f, 8.0f);
-            }
-            g.setColour (mist);
-            g.setFont (font (11.0f, 0));
-            g.drawText ("in", plot.withY (plot.getBottom() + 1.0f).withHeight (12.0f), juce::Justification::centredRight);
-            g.drawText ("out", juce::Rectangle<float> (b.getX() + 8.0f, b.getY() + 6.0f, 40.0f, 12.0f), juce::Justification::centredLeft);
-            g.setColour (on ? accent : steel);
-            g.drawText (on ? "peak " + juce::String (overDb, 1) + " dB into the curve" : juce::String ("module off"),
-                        b.reduced (8.0f, 6.0f).removeFromTop (12.0f), juce::Justification::centredRight);
-        }
-    private:
-        void timerCallback() override
-        {
-            const float o = proc.distortion.peakOver.load();
-            overDb = o;
-            const float lin = juce::Decibels::decibelsToGain (o);
-            peak = o > 0.0f ? lin : peak * 0.8f;
-            repaint();
-        }
-        KaminariVocalProcessor& proc;
-        float peak = 0, overDb = 0;
-    };
-
     class DistortionPage : public AdvFrame
     {
     public:
         explicit DistortionPage (KaminariVocalProcessor& p)
             : AdvFrame (p, "Distortion", "Saturation and drive" + dot() + "after Compression, before De-ess", "dt_on", "distortion"),
-              curve (p),
               styles (p.apvts, "dt_style", { { "Tape", "Soft, symmetric saturation; highs soften as Drive rises." },
                                              { "Tube", "Asymmetric saturation that adds even harmonics. Bias adds more." },
                                              { "Warm", "The gentlest curve: thickens without obvious distortion." },
@@ -2029,16 +1966,17 @@ namespace kvui
               bias (p.apvts, "dt_bias", "Bias", "SYM", "ASYM", "Makes the curve asymmetric, adding even harmonics."),
               crush (p.apvts, "dt_crush", "Crush", "OFF", "MAX", "Lo-Fi: fewer bits and a lower sample rate."),
               lowCut (p.apvts, "dt_lowcut", "Low Cut", "OFF", "1K", "Removes lows before the curve so they stay clean and tight."),
+              highCut (p.apvts, "dt_hicut", "High Cut", "1K", "OFF", "Low pass on the distorted sound: tames fizz and harsh upper harmonics."),
               tone (p.apvts, "dt_tone", "Tone", "DARK", "BRIGHT", "Tilts the distorted sound darker or brighter around 1 kHz."),
               mix (p.apvts, "dt_mix", "Mix", "DRY", "WET", "Blend of distorted and clean vocal. Lower values give parallel distortion."),
               out (p.apvts, "dt_out", "Output", "-24", "+12", "Level of the distorted signal."),
               autoGain (p.apvts, "dt_auto_gain", "AUTO GAIN", "AUTO GAIN", "Keeps the distorted level close to the input level, so Drive changes tone, not loudness."),
               os (p.apvts, "dt_os", { "OFF", "2X", "4X" }, "Oversampling reduces harsh aliasing at high Drive. Adds a few samples of latency while the module is on.")
         {
-            for (auto* c : std::initializer_list<juce::Component*> { &curve, &styles, &os, &outOptions })
+            for (auto* c : std::initializer_list<juce::Component*> { &styles, &os, &outOptions })
                 addAndMakeVisible (c);
             outOptions.addAndMakeVisible (autoGain);
-            for (auto* k : { &drive, &bias, &crush, &lowCut, &tone, &mix, &out })
+            for (auto* k : { &drive, &bias, &crush, &lowCut, &highCut, &tone, &mix, &out })
             {
                 addAndMakeVisible (k);
                 k->setLNF (&lnf);
@@ -2047,7 +1985,7 @@ namespace kvui
             styles.onChange = [this] (int st) { crush.setVisible (st == kv::DistortionSettings::LoFi); if (! getBounds().isEmpty()) resized(); repaint(); };
             crush.setVisible (styles.current() == kv::DistortionSettings::LoFi);
         }
-        ~DistortionPage() override { for (auto* k : { &drive, &bias, &crush, &lowCut, &tone, &mix, &out }) k->setLNF (nullptr); }
+        ~DistortionPage() override { for (auto* k : { &drive, &bias, &crush, &lowCut, &highCut, &tone, &mix, &out }) k->setLNF (nullptr); }
 
         void paint (juce::Graphics& g) override
         {
@@ -2071,32 +2009,29 @@ namespace kvui
 
         void layoutContent (juce::Rectangle<int> b) override
         {
-            auto top = b.removeFromTop (260);
-            curve.setBounds (top.removeFromLeft (320));
-            top.removeFromLeft (20);
+            auto top = b.removeFromTop (230);
             top.removeFromTop (22);
             styles.setBounds (top.removeFromTop (150));
             top.removeFromTop (12);
             descArea = top.removeFromTop (40);
-            b.removeFromTop (16);
+            b.removeFromTop (24);
             layoutGroups (b.removeFromTop (juce::jmin (b.getHeight(), 200)), { &driveGrp, &toneGrp, &outGrp, &qualGrp }, 104, 22);
             if (! outOptions.getBounds().isEmpty()) autoGain.setBounds (outOptions.getLocalBounds().withSizeKeepingCentre (outOptions.getWidth(), 28));
         }
 
     private:
         ModuleLNF lnf;
-        DistortionCurve curve;
         ChoiceTiles styles;
         juce::Rectangle<int> descArea;
 
     public:
-        RangeKnob drive, bias, crush, lowCut, tone, mix, out;
+        RangeKnob drive, bias, crush, lowCut, highCut, tone, mix, out;
         ToggleBox autoGain;
         SegParam os;
 
     private:
         juce::Component outOptions;
-        SendGroup driveGrp { "DRIVE", { &drive, &bias, &crush }, &drive, 30 }, toneGrp { "TONE", { &lowCut, &tone } },
+        SendGroup driveGrp { "DRIVE", { &drive, &bias, &crush }, &drive, 30 }, toneGrp { "TONE", { &lowCut, &highCut, &tone } },
                   outGrp { "OUTPUT", { &mix, &out }, nullptr, 0, &outOptions, 120, 28 },
                   qualGrp { "OVERSAMPLING", {}, nullptr, 0, &os, 150, 28, -14 };
     };

@@ -27,6 +27,7 @@ namespace kv
         float tone = 0.0f;         // -1 dark .. +1 bright
         float bias = 0.0f;         // 0..1
         float lowCutHz = 20.0f;    // 20 = off
+        float highCutHz = 20000.0f; // >= 19.9 kHz = off; a 12 dB/oct low pass on the distorted signal
         float crush = 0.4f;        // 0..1 (Lo-Fi)
         float mix = 1.0f;          // 0..1
         float outDb = 0.0f;
@@ -60,6 +61,7 @@ namespace kv
             for (auto& o : os) if (o) o->reset();
             for (auto& d : dryLine) d.reset();
             for (auto& f : lowCut) f.reset();
+            for (auto& f : highCut) f.reset();
             for (auto& f : toneLo) f.reset();
             for (auto& f : toneHi) f.reset();
             for (auto& f : dc) f.reset();
@@ -89,6 +91,7 @@ namespace kv
             for (int c = 0; c < 2; ++c)
             {
                 if (s.lowCutHz > 20.5f) lowCut[c].set (Biquad::HighPass, fs, s.lowCutHz, 0.7071f);
+                if (s.highCutHz < 19900.0f) highCut[c].set (Biquad::LowPass, fs, std::min (s.highCutHz, 0.45f * fs), 0.7071f);
                 const float tilt = s.tone * 6.0f;
                 toneLo[c].set (Biquad::LowShelf, fs, 1000.0f, 0.5f, -tilt);
                 toneHi[c].set (Biquad::HighShelf, fs, 1000.0f, 0.5f, tilt);
@@ -162,6 +165,7 @@ namespace kv
                     float v = block.getSample (c, i);
                     v -= dc[c].process (v);
                     v = toneHi[c].process (toneLo[c].process (v));
+                    if (s.highCutHz < 19900.0f) v = highCut[c].process (v);
                     y[c] = v;
                     dry[c] = lat > 0 ? dryLine[c].readInt (lat + (n - 1 - i)) : ch[c][i];   // whole block already pushed
                 }
@@ -244,7 +248,7 @@ namespace kv
         int osLatency[2] { 0, 0 }, lastOs = -1;
         juce::AudioBuffer<float> block;
         DelayLine dryLine[2];
-        Biquad lowCut[2], toneLo[2], toneHi[2];
+        Biquad lowCut[2], highCut[2], toneLo[2], toneHi[2];
         OnePoleLP dc[2], tapeLp[2];
         LoFi lofi[2];
         float inEnv = 0, outEnv = 0;

@@ -320,20 +320,23 @@ public:
                 gesture (param (i, "slope"), 1.0f);      // 12 dB/oct for the cut filters
                 gesture (param (i, "on"), 1.0f);
                 gesture (param (i, "used"), 1.0f);
+                createdBand = i;
+                createdMs = juce::Time::getMillisecondCounterHiRes();
                 select (i);
                 return i;
             }
         return -1;
     }
 
+    // A click on a node selects it; a click on empty graph space closes the band settings (no band selected);
+    // a double-click on empty space adds a band there.
     void mouseDown (const juce::MouseEvent& e) override
     {
         dragBand = bandAt (e.position);
         if (dragBand < 0 && ! e.mods.isPopupMenu())
         {
-            dragBand = addBandAt (e.position);
-            createdBand = dragBand;
-            createdMs = juce::Time::getMillisecondCounterHiRes();
+            select (-1);
+            return;
         }
         if (dragBand >= 0)
         {
@@ -361,8 +364,13 @@ public:
     void mouseDoubleClick (const juce::MouseEvent& e) override
     {
         const int b = bandAt (e.position);
+        if (b < 0)
+        {
+            addBandAt (e.position);   // selects the new band
+            return;
+        }
         // the second click of a double-click that created this band must not reset it
-        if (b >= 0 && ! (b == createdBand && juce::Time::getMillisecondCounterHiRes() - createdMs < 800.0))
+        if (! (b == createdBand && juce::Time::getMillisecondCounterHiRes() - createdMs < 800.0))
             gesture (param (b, "gain"), 0.0f);
     }
 
@@ -399,7 +407,7 @@ private:
     {
         analyzers.update (proc, proc.eqAnalyserFor (target, false), proc.eqAnalyserFor (target, true), proc.eqAnalyserModeFor (target).load());
         animMs = juce::Time::getMillisecondCounterHiRes();
-        if (state.getRawParameterValue (prefix + juce::String (selected + 1) + "_used")->load() > 0.5f)
+        if (selected >= 0 && state.getRawParameterValue (prefix + juce::String (selected + 1) + "_used")->load() > 0.5f)
             nodeFx.tick (animMs, 10.0f);
         repaint();
     }

@@ -287,6 +287,8 @@ namespace kvp
         addFloat  ("dt_bias", "Distortion Bias", { 0.0f, 100.0f, 0.1f }, 0.0f, pctText);
         addFloat  ("dt_lowcut", "Distortion Low Cut", logRange (20.0f, 1000.0f), 20.0f,
                    [] (float v, int) { return v <= 20.5f ? String ("Off") : freqText (v); }, freqFromText);
+        addFloat  ("dt_hicut", "Distortion High Cut", logRange (1000.0f, 20000.0f), 20000.0f,
+                   [] (float v, int) { return v >= 19900.0f ? String ("Off") : freqText (v); }, freqFromText);
         addFloat  ("dt_crush", "Distortion Crush", { 0.0f, 100.0f, 0.1f }, 40.0f, pctText);
         addFloat  ("dt_mix", "Distortion Mix", { 0.0f, 100.0f, 0.1f }, 100.0f, pctText);
         addFloat  ("dt_out", "Distortion Output", { -24.0f, 12.0f, 0.01f }, 0.0f, dbText);

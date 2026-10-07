@@ -240,8 +240,21 @@ namespace kvui
         }
         ~EqSection() override { stopTimer(); proc.eqSolo.store (-1); }
 
+        // b < 0: no band selected (a click on empty graph space): the selected-band row is hidden
         void select (int b)
         {
+            const bool none = b < 0;
+            for (auto* c : std::initializer_list<juce::Component*> { &type, &freq, &gain, &q, &active, &solo, &del })
+                c->setVisible (! none);
+            if (none)
+            {
+                selected = -1;
+                curve.selected = -1;
+                proc.eqSolo.store (-1);
+                if (onSelect) onSelect (-1);
+                repaint();
+                return;
+            }
             selected = juce::jlimit (0, 7, b);
             curve.selected = selected;
             const juce::String pre = "eq" + juce::String (selected + 1) + "_";
@@ -275,6 +288,7 @@ namespace kvui
             g.drawText ("Speed", speed.getX() - 46, r.getY(), 40, r.getHeight(), juce::Justification::centredRight);
             g.drawText ("Zoom", zoomOut.getX() - 44, r.getY(), 38, r.getHeight(), juce::Justification::centredRight);
             const auto f = type.getBounds();
+            if (selected < 0) return;
             g.drawText ("Selected", 16, f.getY(), 60, f.getHeight(), juce::Justification::centredLeft);
             g.setColour (white);
             g.setFont (font (12.5f, 1));
@@ -332,7 +346,7 @@ namespace kvui
         {
             for (int i = 0; i < 8; ++i)
                 if (proc.apvts.getRawParameterValue ("eq" + juce::String (i + 1) + "_used")->load() > 0.5f) return i;
-            return 0;
+            return -1;
         }
         void setParam (const char* what, float v)
         {
@@ -352,6 +366,8 @@ namespace kvui
             int used = 0;
             for (int i = 0; i < 8; ++i) used += proc.apvts.getRawParameterValue ("eq" + juce::String (i + 1) + "_used")->load() > 0.5f ? 1 : 0;
             bandCount.setText (juce::String (used) + " of 8 bands", juce::dontSendNotification);
+            if (selected >= 0 && proc.apvts.getRawParameterValue ("eq" + juce::String (selected + 1) + "_used")->load() < 0.5f) select (-1);
+            if (selected < 0) return;
             const juce::String pre = "eq" + juce::String (selected + 1) + "_";
             type.setSelectedId (juce::roundToInt (proc.apvts.getRawParameterValue (pre + "type")->load()) + 1, juce::dontSendNotification);
             active.setToggleState (proc.apvts.getRawParameterValue (pre + "on")->load() > 0.5f, juce::dontSendNotification);
