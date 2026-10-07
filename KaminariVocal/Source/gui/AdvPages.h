@@ -452,7 +452,7 @@ namespace kvui
         void mouseDown (const juce::MouseEvent& e) override
         {
             if (! used (band)) return;
-            auto* p = proc.apvts.getParameter ("eq" + juce::String (band + 1) + "_freq");
+            auto* p = proc.apvts.getParameter (curve.getPrefix() + juce::String (band + 1) + "_freq");
             p->beginChangeGesture();
             sweeping = true;
             sweepTo (e);
@@ -461,7 +461,7 @@ namespace kvui
         void mouseUp (const juce::MouseEvent&) override
         {
             if (! sweeping) return;
-            proc.apvts.getParameter ("eq" + juce::String (band + 1) + "_freq")->endChangeGesture();
+            proc.apvts.getParameter (curve.getPrefix() + juce::String (band + 1) + "_freq")->endChangeGesture();
             sweeping = false;
         }
 
@@ -493,10 +493,10 @@ namespace kvui
             return -1;
         }
 
-        bool used (int i) const { return plain (proc.apvts, "eq" + juce::String (i + 1) + "_used") > 0.5f; }
+        bool used (int i) const { return plain (proc.apvts, curve.getPrefix() + juce::String (i + 1) + "_used") > 0.5f; }
         int noteOfBand (int i) const
         {
-            const float f = plain (proc.apvts, "eq" + juce::String (i + 1) + "_freq");
+            const float f = plain (proc.apvts, curve.getPrefix() + juce::String (i + 1) + "_freq");
             return juce::roundToInt (69.0 + 12.0 * std::log2 (f / 440.0));
         }
 
@@ -508,7 +508,7 @@ namespace kvui
                 const int m = noteAt ({ juce::jlimit (0.0f, (float) getWidth() - 1.0f, e.position.x), juce::jlimit (4.0f, (float) getHeight() - 2.0f, e.position.y) });
                 if (m >= 0) f = freqOf (m);
             }
-            auto* p = proc.apvts.getParameter ("eq" + juce::String (band + 1) + "_freq");
+            auto* p = proc.apvts.getParameter (curve.getPrefix() + juce::String (band + 1) + "_freq");
             p->setValueNotifyingHost (p->convertTo0to1 ((float) f));
             hover = noteAt (e.position);
             repaint();
@@ -521,28 +521,122 @@ namespace kvui
         bool sweeping = false;
     };
 
-    class EqPage : public AdvFrame, private juce::Timer
+    // Floating panel for the selected band of any EQ (power, shape, slope, FREQ / GAIN / Q, solo, band navigation, delete).
+    struct EqBandPanel : juce::Component
+    {
+        void build (KaminariVocalProcessor& p, int eqTarget, int band, juce::LookAndFeel& l, std::function<void (int)> nav)
+        {
+            const juce::String pre = KaminariVocalProcessor::eqPrefix (eqTarget) + juce::String (band + 1) + "_";
+            target = eqTarget;
+            removeAllChildren();
+            bandNo = band;
+            power = std::make_unique<PowerButton> (p.apvts, pre + "on", "Band " + juce::String (band + 1));
+            type = std::make_unique<ChoiceBox> (p.apvts, (pre + "type").toRawUTF8(), "", hintFor ("_type"));
+            slope = std::make_unique<ChoiceBox> (p.apvts, (pre + "slope").toRawUTF8(), "", hintFor ("_slope"));
+            freq = std::make_unique<RangeKnob> (p.apvts, pre + "freq", "Freq", "10 Hz", "30 kHz");
+            gain = std::make_unique<RangeKnob> (p.apvts, pre + "gain", "Gain", "-30", "+30");
+            q = std::make_unique<RangeKnob> (p.apvts, pre + "q", "Q", "0.025", "40");
+            auto* fp = p.apvts.getParameter (pre + "freq");
+            freq->setValueText ([fp]
+            {
+                const float f = fp->convertFrom0to1 (fp->getValue());
+                const float m = 69.0f + 12.0f * std::log2 (f / 440.0f);
+                const int n = juce::roundToInt (m);
+                return kvp::freqText (f) + dot() + noteName (n) + " " + (m - n >= 0 ? "+" : "") + juce::String (juce::roundToInt ((m - n) * 100)) + " ct";
+            });
+            for (auto* k : { freq.get(), gain.get(), q.get() }) k->setLNF (&l);
+            prev.setButtonText (juce::String (juce::CharPointer_UTF8 ("\xe2\x80\xb9")));
+            next.setButtonText (juce::String (juce::CharPointer_UTF8 ("\xe2\x80\xba")));
+            del.setButtonText ("x");
+            prev.onClick = [nav] { nav (-1); };
+            next.onClick = [nav] { nav (1); };
+            del.setTooltip ("Remove this band");
+            del.onClick = [&p, pre] { setParamPlain (p.apvts, pre + "used", 0.0f); };
+            use.setButtonText ("Add band");
+            use.onClick = [&p, pre] { setParamPlain (p.apvts, pre + "used", 1.0f); };
+            solo.setButtonText ("SOLO");
+            solo.setClickingTogglesState (true);
+            solo.setToggleState (p.eqSoloFor (eqTarget).load() == band, juce::dontSendNotification);
+            solo.setTooltip ("Hear only what this band works on: around a bell, below a low shelf or low cut, above a high shelf or high cut.");
+            solo.onClick = [&p, band, this] { p.eqSoloFor (target).store (solo.getToggleState() ? band : -1); };
+            proc = &p;
+            for (auto* c : std::initializer_list<juce::Component*> { power.get(), type.get(), slope.get(), freq.get(), gain.get(), q.get(), &prev, &next, &del, &use, &solo })
+                addAndMakeVisible (c);
+            usedId = pre + "used";
+            state = &p.apvts;
+            resized();
+        }
+        void paint (juce::Graphics& g) override
+        {
+            g.setColour (navy800.withAlpha (0.95f));
+            g.fillRoundedRectangle (getLocalBounds().toFloat(), 8.0f);
+            g.setColour (accent);
+            g.drawRoundedRectangle (getLocalBounds().toFloat().reduced (0.5f), 8.0f, 1.0f);
+            g.setColour (white);
+            g.setFont (font (14.0f, 1));
+            g.drawText (juce::String (bandNo + 1), prev.getRight(), next.getY(), next.getX() - prev.getRight(), next.getHeight(), juce::Justification::centred);
+        }
+        void resized() override
+        {
+            if (power == nullptr) return;
+            const bool used = state != nullptr && state->getRawParameterValue (usedId)->load() > 0.5f;
+            for (auto* c : std::initializer_list<juce::Component*> { power.get(), type.get(), slope.get(), freq.get(), gain.get(), q.get(), &del, &solo })
+                c->setVisible (used);
+            if (proc != nullptr) solo.setToggleState (proc->eqSoloFor (target).load() == bandNo, juce::dontSendNotification);
+            use.setVisible (! used);
+            auto b = getLocalBounds().reduced (12, 10);
+            auto left = b.removeFromLeft (96);
+            power->setBounds (left.removeFromTop (28).removeFromLeft (28));
+            left.removeFromTop (6);
+            type->setBounds (left.removeFromTop (30).withTrimmedTop (-14));
+            left.removeFromTop (6);
+            slope->setBounds (left.removeFromTop (30).withTrimmedTop (-14));
+            auto right = b.removeFromRight (112);
+            auto nav = right.removeFromTop (28);
+            prev.setBounds (nav.removeFromLeft (26));
+            del.setBounds (nav.removeFromRight (26));
+            nav.removeFromRight (6);
+            next.setBounds (nav.removeFromRight (26));
+            right.removeFromTop (10);
+            solo.setBounds (right.removeFromTop (26));
+            use.setBounds (getLocalBounds().withSizeKeepingCentre (140, 30));
+            const int w = b.getWidth() / 3;
+            freq->setBounds (b.removeFromLeft (w));
+            gain->setBounds (b.removeFromLeft (w));
+            q->setBounds (b);
+        }
+        std::unique_ptr<PowerButton> power;
+        std::unique_ptr<ChoiceBox> type, slope;
+        std::unique_ptr<RangeKnob> freq, gain, q;
+        juce::TextButton prev, next, del, use, solo;
+        KaminariVocalProcessor* proc = nullptr;
+        int bandNo = 0, target = 0;
+        juce::String usedId;
+        APVTS* state = nullptr;
+    };
+
+    // The EQ editor used by every EQ in the plug-in: graph (EqCurve), keyboard (EqPiano), floating band panel and a
+    // bar with the keyboard switch, Pre / Post analyzer toggles (both can be on), resolution and speed. `extra`
+    // (optional) sits at the right end of the bar, e.g. the main EQ's output knob.
+    class EqEditor : public juce::Component, private juce::Timer
     {
     public:
-        explicit EqPage (KaminariVocalProcessor& p)
-            : AdvFrame (p, "EQ", "8 bands" + dot() + "zero latency" + dot() + "click to add a band, drag nodes, wheel = Q", "eq_on", "eq"),
-              curve (p), piano (p, curve), analyser ({ "Pre", "Post", "Both", "Off" }, "Analyzer"), out (p.apvts, "eq_out_gain", "Output"),
-              pianoToggle ("Piano")
+        EqEditor (KaminariVocalProcessor& p, int eqTarget, juce::Component* extraControl = nullptr)
+            : proc (p), target (eqTarget), curve (p, eqTarget), piano (p, curve),
+              analyser ([&p, eqTarget] { return p.eqAnalyserModeFor (eqTarget).load(); },
+                        [&p, eqTarget] (int m) { p.eqAnalyserModeFor (eqTarget).store (m); }, curve.preName(), curve.postName()),
+              pianoToggle ("Piano"), extra (extraControl)
         {
-            addAndMakeVisible (curve);
-            addAndMakeVisible (panel);
-            addAndMakeVisible (analyser);
-            addAndMakeVisible (resolution);
-            addAndMakeVisible (speed);
-            addAndMakeVisible (out);
-            addAndMakeVisible (pianoToggle);
+            for (auto* c : std::initializer_list<juce::Component*> { &curve, &panel, &analyser, &resolution, &speed, &pianoToggle })
+                addAndMakeVisible (c);
             addChildComponent (piano);
-            analyser.setSelected (EqCurve::segmentForMode (p.analyserMode.load()));
-            analyser.onChange = [this] (int i) { proc.analyserMode.store (EqCurve::modeForSegment (i)); };
+            if (extra != nullptr) addAndMakeVisible (extra);
             resolution.addItemList (SpectrumProcessor::resolutionNames(), 1);
             speed.addItemList (SpectrumProcessor::speedNames(), 1);
             resolution.setSelectedId (p.analyserResolution.load() + 1, juce::dontSendNotification);
             speed.setSelectedId (p.analyserSpeed.load() + 1, juce::dontSendNotification);
+            resolution.setTooltip ("Analyzer resolution (FFT size).");
+            speed.setTooltip ("Analyzer fall-back speed.");
             resolution.onChange = [this] { proc.analyserResolution.store (resolution.getSelectedId() - 1); };
             speed.onChange = [this] { proc.analyserSpeed.store (speed.getSelectedId() - 1); };
             pianoToggle.setClickingTogglesState (true);
@@ -551,24 +645,25 @@ namespace kvui
             pianoToggle.onClick = [this] { piano.setVisible (pianoToggle.getToggleState()); resized(); repaint(); };
             piano.setVisible (true);
             curve.onSelect = [this] (int b) { select (b); };
-            select (0);
+            select (firstUsed());
             startTimerHz (6);
         }
-        ~EqPage() override { stopTimer(); }
+        ~EqEditor() override { stopTimer(); proc.eqSoloFor (target).store (-1); }
 
         void select (int band)
         {
             selected = juce::jlimit (0, 7, band);
             curve.selected = selected;
             piano.band = selected;
-            if (proc.eqSolo.load() >= 0) proc.eqSolo.store (selected);
-            panel.build (proc, selected, lnf, [this] (int d) { select ((selected + d + 8) % 8); });
+            auto& solo = proc.eqSoloFor (target);
+            if (solo.load() >= 0) solo.store (selected);
+            panel.build (proc, target, selected, lnf, [this] (int d) { select ((selected + d + 8) % 8); });
             resized();
         }
+        int selectedBand() const noexcept { return selected; }
 
         void paint (juce::Graphics& g) override
         {
-            AdvFrame::paint (g);
             drawGroup (g, bar, navy900);
             g.setColour (mist);
             g.setFont (font (12.0f, 0));
@@ -577,13 +672,14 @@ namespace kvui
             g.drawText ("Speed", speed.getX() - 46, bar.getY(), 40, bar.getHeight(), juce::Justification::centredRight);
         }
 
-        void layoutContent (juce::Rectangle<int> b) override
+        void resized() override
         {
+            auto b = getLocalBounds();
             bar = b.removeFromBottom (34);
             b.removeFromBottom (8);
-            if (pianoToggle.getToggleState()) { piano.setBounds (b.removeFromBottom (46)); b.removeFromBottom (2); }
+            if (pianoToggle.getToggleState()) { piano.setBounds (b.removeFromBottom (juce::jmin (46, b.getHeight() / 5))); b.removeFromBottom (2); }
             curve.setBounds (b);
-            panel.setBounds (b.withSizeKeepingCentre (540, 128).withY (b.getBottom() - 140));
+            panel.setBounds (b.withSizeKeepingCentre (juce::jmin (540, b.getWidth() - 20), 128).withY (b.getBottom() - 140));
             auto r = bar.reduced (8, 4);
             pianoToggle.setBounds (r.removeFromLeft (64));
             r.removeFromLeft (76);
@@ -592,118 +688,50 @@ namespace kvui
             resolution.setBounds (r.removeFromLeft (90));
             r.removeFromLeft (56);
             speed.setBounds (r.removeFromLeft (90));
-            out.setBounds (r.removeFromRight (150).withTrimmedTop (-2));
+            if (extra != nullptr) extra->setBounds (r.removeFromRight (150).withTrimmedTop (-2));
         }
 
+        KaminariVocalProcessor& proc;
+        int target;
         ModuleLNF lnf;
         EqCurve curve;
         EqPiano piano;
-
-        // Floating panel for the selected band (power, shape, slope, FREQ / GAIN / Q, band navigation, delete).
-        struct BandPanel : juce::Component
-        {
-            void build (KaminariVocalProcessor& p, int band, juce::LookAndFeel& l, std::function<void (int)> nav)
-            {
-                const juce::String pre = "eq" + juce::String (band + 1) + "_";
-                removeAllChildren();
-                bandNo = band;
-                power = std::make_unique<PowerButton> (p.apvts, pre + "on", "Band " + juce::String (band + 1));
-                type = std::make_unique<ChoiceBox> (p.apvts, (pre + "type").toRawUTF8(), "", hintFor ("_type"));
-                slope = std::make_unique<ChoiceBox> (p.apvts, (pre + "slope").toRawUTF8(), "", hintFor ("_slope"));
-                freq = std::make_unique<RangeKnob> (p.apvts, pre + "freq", "Freq", "10 Hz", "30 kHz");
-                gain = std::make_unique<RangeKnob> (p.apvts, pre + "gain", "Gain", "-30", "+30");
-                q = std::make_unique<RangeKnob> (p.apvts, pre + "q", "Q", "0.025", "40");
-                auto* fp = p.apvts.getParameter (pre + "freq");
-                freq->setValueText ([fp]
-                {
-                    const float f = fp->convertFrom0to1 (fp->getValue());
-                    const float m = 69.0f + 12.0f * std::log2 (f / 440.0f);
-                    const int n = juce::roundToInt (m);
-                    return kvp::freqText (f) + dot() + noteName (n) + " " + (m - n >= 0 ? "+" : "") + juce::String (juce::roundToInt ((m - n) * 100)) + " ct";
-                });
-                for (auto* k : { freq.get(), gain.get(), q.get() }) k->setLNF (&l);
-                prev.setButtonText (juce::String (juce::CharPointer_UTF8 ("\xe2\x80\xb9")));
-                next.setButtonText (juce::String (juce::CharPointer_UTF8 ("\xe2\x80\xba")));
-                del.setButtonText ("x");
-                prev.onClick = [nav] { nav (-1); };
-                next.onClick = [nav] { nav (1); };
-                del.setTooltip ("Remove this band");
-                del.onClick = [&p, pre] { setParamPlain (p.apvts, pre + "used", 0.0f); };
-                use.setButtonText ("Add band");
-                use.onClick = [&p, pre] { setParamPlain (p.apvts, pre + "used", 1.0f); };
-                solo.setButtonText ("SOLO");
-                solo.setClickingTogglesState (true);
-                solo.setToggleState (p.eqSolo.load() == band, juce::dontSendNotification);
-                solo.setTooltip ("Hear only what this band works on: around a bell, below a low shelf or low cut, above a high shelf or high cut.");
-                solo.onClick = [&p, band, this] { p.eqSolo.store (solo.getToggleState() ? band : -1); };
-                proc = &p;
-                for (auto* c : std::initializer_list<juce::Component*> { power.get(), type.get(), slope.get(), freq.get(), gain.get(), q.get(), &prev, &next, &del, &use, &solo })
-                    addAndMakeVisible (c);
-                usedId = pre + "used";
-                state = &p.apvts;
-                resized();
-            }
-            void paint (juce::Graphics& g) override
-            {
-                g.setColour (navy800.withAlpha (0.95f));
-                g.fillRoundedRectangle (getLocalBounds().toFloat(), 8.0f);
-                g.setColour (accent);
-                g.drawRoundedRectangle (getLocalBounds().toFloat().reduced (0.5f), 8.0f, 1.0f);
-                g.setColour (white);
-                g.setFont (font (14.0f, 1));
-                g.drawText (juce::String (bandNo + 1), prev.getRight(), next.getY(), next.getX() - prev.getRight(), next.getHeight(), juce::Justification::centred);
-            }
-            void resized() override
-            {
-                if (power == nullptr) return;
-                const bool used = state != nullptr && state->getRawParameterValue (usedId)->load() > 0.5f;
-                for (auto* c : std::initializer_list<juce::Component*> { power.get(), type.get(), slope.get(), freq.get(), gain.get(), q.get(), &del, &solo })
-                    c->setVisible (used);
-                if (proc != nullptr) solo.setToggleState (proc->eqSolo.load() == bandNo, juce::dontSendNotification);
-                use.setVisible (! used);
-                auto b = getLocalBounds().reduced (12, 10);
-                auto left = b.removeFromLeft (96);
-                power->setBounds (left.removeFromTop (28).removeFromLeft (28));
-                left.removeFromTop (6);
-                type->setBounds (left.removeFromTop (30).withTrimmedTop (-14));
-                left.removeFromTop (6);
-                slope->setBounds (left.removeFromTop (30).withTrimmedTop (-14));
-                auto right = b.removeFromRight (112);
-                auto nav = right.removeFromTop (28);
-                prev.setBounds (nav.removeFromLeft (26));
-                del.setBounds (nav.removeFromRight (26));
-                nav.removeFromRight (6);
-                next.setBounds (nav.removeFromRight (26));
-                right.removeFromTop (10);
-                solo.setBounds (right.removeFromTop (26));
-                use.setBounds (getLocalBounds().withSizeKeepingCentre (140, 30));
-                const int w = b.getWidth() / 3;
-                freq->setBounds (b.removeFromLeft (w));
-                gain->setBounds (b.removeFromLeft (w));
-                q->setBounds (b);
-            }
-            std::unique_ptr<PowerButton> power;
-            std::unique_ptr<ChoiceBox> type, slope;
-            std::unique_ptr<RangeKnob> freq, gain, q;
-            juce::TextButton prev, next, del, use, solo;
-            KaminariVocalProcessor* proc = nullptr;
-            int bandNo = 0;
-            juce::String usedId;
-            APVTS* state = nullptr;
-        } panel;
+        EqBandPanel panel;
+        AnalyzerToggles analyser;
+        juce::ComboBox resolution, speed;
+        juce::TextButton pianoToggle;
 
     private:
-        void timerCallback() override
+        int firstUsed() const
         {
-            panel.resized();
+            for (int i = 0; i < 8; ++i)
+                if (plain (proc.apvts, curve.getPrefix() + juce::String (i + 1) + "_used") > 0.5f) return i;
+            return 0;
         }
-
-        Segmented analyser;
-        juce::ComboBox resolution, speed;
-        Knob out;
-        juce::TextButton pianoToggle;
+        void timerCallback() override { panel.resized(); }
+        juce::Component* extra = nullptr;
         juce::Rectangle<int> bar;
         int selected = 0;
+    };
+
+    class EqPage : public AdvFrame
+    {
+    public:
+        explicit EqPage (KaminariVocalProcessor& p)
+            : AdvFrame (p, "EQ", "8 bands" + dot() + "zero latency" + dot() + "click to add a band, drag nodes, wheel = Q", "eq_on", "eq"),
+              out (p.apvts, "eq_out_gain", "Output"), editor (p, KaminariVocalProcessor::EqMain, &out),
+              curve (editor.curve), piano (editor.piano)
+        {
+            addAndMakeVisible (editor);
+        }
+
+        void select (int band) { editor.select (band); }
+        void layoutContent (juce::Rectangle<int> b) override { editor.setBounds (b); }
+
+        Knob out;
+        EqEditor editor;
+        EqCurve& curve;
+        EqPiano& piano;
     };
 
     //==================================================================================================================
@@ -854,13 +882,11 @@ namespace kvui
               display (p), slope (p.apvts, "mb_slope", { "6", "12", "24" }, "Crossover slope in dB/oct"),
               detector (p.apvts, "mb_detector", { "Peak", "Smooth" }),
               os (p.apvts, "mb_os", { "Off", "2x", "4x" }, "Oversampling: runs the bands at 2x or 4x the session rate. Adds latency while Multiband is on."),
-              analyzer ({ "In", "Out", "Both", "Off" }, "Analyzer")
+              analyzer ([this] { return display.analyzerMode; }, [this] (int m) { display.analyzerMode = m; }, "In", "Out")
         {
             addAndMakeVisible (display);
             addAndMakeVisible (os);
             addAndMakeVisible (analyzer);
-            analyzer.setSelected (AnalyzerPair::segmentForMode (display.analyzerMode));
-            analyzer.onChange = [this] (int i) { display.analyzerMode = AnalyzerPair::modeForSegment (i); };
             addAndMakeVisible (panel);
             addAndMakeVisible (slope);
             addAndMakeVisible (detector);
@@ -996,7 +1022,7 @@ namespace kvui
             if (display.selected >= count) select (count - 1);
         }
         SegParam slope, detector, os;
-        Segmented analyzer;
+        AnalyzerToggles analyzer;
         juce::TextButton addBand, removeBand;
         juce::Rectangle<int> bar;
     };
@@ -1098,337 +1124,13 @@ namespace kvui
         juce::Rectangle<int> knee, main, meters;
     };
 
-    //==================================================================================================================
-    // Side-chain detection: spectrum of the main signal and of the signal the detector hears (after the side-chain
-    // bands), the bands' combined response and their nodes.
-    //   - click empty space: a new detection band there (below 100 Hz a low cut, above 12 kHz a high cut, else a bell);
-    //     keeping the mouse down drags it straight away
-    //   - drag a node: frequency and gain; mouse wheel on a node: Q; double-click a node: gain to 0 dB
-    class ScDisplay : public juce::Component, public juce::SettableTooltipClient, private juce::Timer
-    {
-    public:
-        static constexpr int numBands = kv::CompressorSettings::numScBands;
-        static constexpr float rangeDb = 24.0f;
-
-        explicit ScDisplay (KaminariVocalProcessor& p) : proc (p), state (p.apvts)
-        {
-            setTitle ("Side chain detection");
-            setTooltip ("Click to add a detection band. Drag a band to set its frequency and gain; mouse wheel sets its Q.");
-            startTimerHz (30);
-        }
-        ~ScDisplay() override { stopTimer(); }
-
-        std::function<void (int)> onSelect;
-        int selectedBand() const noexcept { return selected; }
-        void select (int b) { selected = b; if (onSelect) onSelect (b); repaint(); }
-
-        static int typeForFrequency (double f)
-        {
-            using T = kv::CompressorSettings::ScBand;
-            return f < 100.0 ? T::LowCut : (f > 12000.0 ? T::HighCut : T::Bell);
-        }
-
-        float xForFreq (double f) const { return (float) (std::log (f / 20.0) / std::log (1000.0)) * (float) getWidth(); }
-        double freqForX (float x) const { return 20.0 * std::pow (1000.0, juce::jlimit (0.0, 1.0, (double) x / juce::jmax (1, getWidth()))); }
-        float yForDb (double db) const { return (float) (0.5 - db / (2.0 * rangeDb)) * (float) getHeight(); }
-        double dbForY (float y) const { return (0.5 - (double) y / juce::jmax (1, getHeight())) * 2.0 * rangeDb; }
-
-        kv::CompressorSettings::ScBand band (int i) const
-        {
-            kv::CompressorSettings::ScBand b;
-            const juce::String p = "lv_sc" + juce::String (i + 1) + "_";
-            b.used = state.getRawParameterValue (p + "used")->load() > 0.5f;
-            b.on = state.getRawParameterValue (p + "on")->load() > 0.5f;
-            b.type = juce::roundToInt (state.getRawParameterValue (p + "type")->load());
-            b.freq = state.getRawParameterValue (p + "freq")->load();
-            b.gainDb = state.getRawParameterValue (p + "gain")->load();
-            b.q = state.getRawParameterValue (p + "q")->load();
-            return b;
-        }
-
-        static bool hasGain (int type) { using T = kv::CompressorSettings::ScBand; return type != T::LowCut && type != T::HighCut; }
-
-        static double magnitudeDb (const kv::CompressorSettings::ScBand& b, double f, double fs)
-        {
-            const auto c = kv::Compressor::scBiquad (b, (float) fs);
-            const double w = 2.0 * kv::pi * f / fs;
-            const std::complex<double> z1 = std::polar (1.0, -w), z2 = z1 * z1;
-            const double m = std::abs ((double) c.b0 + (double) c.b1 * z1 + (double) c.b2 * z2)
-                             / std::max (1e-12, std::abs (1.0 + (double) c.a1 * z1 + (double) c.a2 * z2));
-            return 20.0 * std::log10 (std::max (m, 1e-9));
-        }
-
-        juce::Point<float> nodePos (int i) const
-        {
-            const auto b = band (i);
-            return { xForFreq (b.freq), yForDb (hasGain (b.type) ? b.gainDb : 0.0) };
-        }
-
-        void paint (juce::Graphics& g) override
-        {
-            auto a = getLocalBounds().toFloat();
-            g.setColour (navy950);
-            g.fillRoundedRectangle (a, 4.0f);
-            g.saveState();
-            g.reduceClipRegion (getLocalBounds());
-            g.setFont (font (9.5f, 0));
-            for (double f : { 50.0, 100.0, 200.0, 500.0, 1000.0, 2000.0, 5000.0, 10000.0 })
-            {
-                const float x = xForFreq (f);
-                g.setColour (navy800);
-                g.drawVerticalLine ((int) x, 0.0f, a.getBottom());
-                g.setColour (mist.withAlpha (0.6f));
-                g.drawText (f >= 1000.0 ? juce::String ((int) (f / 1000)) + "k" : juce::String ((int) f), (int) x + 3, getHeight() - 13, 30, 12, juce::Justification::centredLeft);
-            }
-            g.setColour (navy800);
-            for (double db : { -12.0, 12.0 }) g.drawHorizontalLine ((int) yForDb (db), 0.0f, a.getRight());
-            g.setColour (navy600);
-            g.drawHorizontalLine ((int) yForDb (0.0), 0.0f, a.getRight());
-
-            analyzers.draw (g, a, [this] (float x) { return freqForX (x); }, AnalyzerPair::Both, "MAIN", "DETECTOR");
-
-            const double fs = proc.getSampleRate() > 0 ? proc.getSampleRate() : 48000.0;
-            bool any = false;
-            for (int i = 0; i < numBands; ++i)
-            {
-                const auto b = band (i);
-                if (! b.used) continue;
-                juce::Path p;
-                for (float x = 0.0f; x <= a.getWidth(); x += 2.0f)
-                {
-                    const float y = juce::jlimit (-20.0f, a.getHeight() + 20.0f, yForDb (magnitudeDb (b, freqForX (x), fs)));
-                    if (x < 1.0f) p.startNewSubPath (x, y); else p.lineTo (x, y);
-                }
-                juce::Path fill (p);
-                fill.lineTo (a.getRight(), yForDb (0.0));
-                fill.lineTo (0.0f, yForDb (0.0));
-                fill.closeSubPath();
-                const auto col = EqCurve::bandColour (i);
-                g.setColour (col.withAlpha ((i == selected ? 0.24f : 0.1f) * (b.on ? 1.0f : 0.5f)));
-                g.fillPath (fill);
-                g.setColour (col.withAlpha (b.on ? 0.55f : 0.25f));
-                g.strokePath (p, juce::PathStrokeType (1.0f));
-                any = any || b.on;
-            }
-            if (any)
-            {
-                juce::Path total;
-                for (float x = 0.0f; x <= a.getWidth(); x += 2.0f)
-                {
-                    double db = 0.0;
-                    for (int i = 0; i < numBands; ++i)
-                        if (const auto b = band (i); b.active()) db += magnitudeDb (b, freqForX (x), fs);
-                    const float y = juce::jlimit (-20.0f, a.getHeight() + 20.0f, yForDb (db));
-                    if (x < 1.0f) total.startNewSubPath (x, y); else total.lineTo (x, y);
-                }
-                g.setColour (white.withAlpha (0.9f));
-                g.strokePath (total, juce::PathStrokeType (1.6f));
-            }
-            for (int i = 0; i < numBands; ++i)
-            {
-                const auto b = band (i);
-                if (! b.used) continue;
-                const auto pt = nodePos (i);
-                const auto col = b.on ? EqCurve::bandColour (i) : mist.withAlpha (0.5f);
-                const float r = i == selected ? 8.0f : 6.5f;
-                g.setColour (navy950);
-                g.fillEllipse (pt.x - r, pt.y - r, 2 * r, 2 * r);
-                g.setColour (col);
-                g.drawEllipse (pt.x - r, pt.y - r, 2 * r, 2 * r, i == selected ? 2.0f : 1.4f);
-                g.setFont (font (9.5f, 1));
-                g.drawText (juce::String (i + 1), juce::Rectangle<float> (pt.x - r, pt.y - r, 2 * r, 2 * r), juce::Justification::centred);
-            }
-            g.restoreState();
-            g.setColour (navy600);
-            g.drawRoundedRectangle (a.reduced (0.5f), 4.0f, 1.0f);
-        }
-
-        int bandAt (juce::Point<float> p) const
-        {
-            for (int i = numBands; --i >= 0;)
-                if (band (i).used && nodePos (i).getDistanceFrom (p) < 11.0f)
-                    return i;
-            return -1;
-        }
-
-        // Adds a detection band at a point (first free slot); returns it, or -1 when all are in use.
-        int addBandAt (juce::Point<float> p)
-        {
-            for (int i = 0; i < numBands; ++i)
-                if (! band (i).used)
-                {
-                    const double f = freqForX (p.x);
-                    const int type = typeForFrequency (f);
-                    gesture (param (i, "type"), (float) type);
-                    gesture (param (i, "freq"), (float) f);
-                    gesture (param (i, "gain"), hasGain (type) ? (float) juce::jlimit ((double) -rangeDb, (double) rangeDb, std::round (dbForY (p.y) * 10.0) / 10.0) : 0.0f);
-                    gesture (param (i, "q"), 1.0f);
-                    gesture (param (i, "on"), 1.0f);
-                    gesture (param (i, "used"), 1.0f);
-                    select (i);
-                    return i;
-                }
-            return -1;
-        }
-
-        void mouseDown (const juce::MouseEvent& e) override
-        {
-            dragBand = bandAt (e.position);
-            if (dragBand < 0 && ! e.mods.isPopupMenu())
-            {
-                dragBand = addBandAt (e.position);
-                createdBand = dragBand;
-                createdMs = juce::Time::getMillisecondCounterHiRes();
-            }
-            if (dragBand >= 0)
-            {
-                select (dragBand);
-                for (auto* id : { "freq", "gain" }) param (dragBand, id)->beginChangeGesture();
-            }
-        }
-
-        void mouseDrag (const juce::MouseEvent& e) override
-        {
-            if (dragBand < 0) return;
-            setPlain (param (dragBand, "freq"), (float) freqForX (e.position.x));
-            if (hasGain (band (dragBand).type))
-                setPlain (param (dragBand, "gain"), (float) juce::jlimit ((double) -rangeDb, (double) rangeDb, dbForY (e.position.y)));
-        }
-
-        void mouseUp (const juce::MouseEvent&) override
-        {
-            if (dragBand >= 0)
-                for (auto* id : { "freq", "gain" }) param (dragBand, id)->endChangeGesture();
-            dragBand = -1;
-        }
-
-        void mouseDoubleClick (const juce::MouseEvent& e) override
-        {
-            const int b = bandAt (e.position);
-            if (b >= 0 && ! (b == createdBand && juce::Time::getMillisecondCounterHiRes() - createdMs < 800.0))
-                gesture (param (b, "gain"), 0.0f);
-        }
-
-        void mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheelDetails& w) override
-        {
-            const int b = bandAt (e.position);
-            if (b < 0) return;
-            auto* q = param (b, "q");
-            q->beginChangeGesture();
-            q->setValueNotifyingHost (juce::jlimit (0.0f, 1.0f, q->getValue() + (w.isReversed ? -w.deltaY : w.deltaY) * 0.05f));
-            q->endChangeGesture();
-        }
-
-    private:
-        juce::RangedAudioParameter* param (int b, const char* what) { return state.getParameter ("lv_sc" + juce::String (b + 1) + "_" + what); }
-        static void setPlain (juce::RangedAudioParameter* p, float v) { p->setValueNotifyingHost (p->convertTo0to1 (v)); }
-        static void gesture (juce::RangedAudioParameter* p, float v) { p->beginChangeGesture(); setPlain (p, v); p->endChangeGesture(); }
-
-        void timerCallback() override
-        {
-            analyzers.update (proc, proc.compInAnalyser, proc.compScAnalyser, AnalyzerPair::Both);
-            if (selected >= 0 && ! band (selected).used) select (-1);
-            repaint();
-        }
-
-        KaminariVocalProcessor& proc;
-        APVTS& state;
-        AnalyzerPair analyzers;
-        int selected = -1, dragBand = -1, createdBand = -1;
-        double createdMs = 0;
-    };
-
-    // Editor for the selected side-chain band: on/off, type, frequency, gain, Q and remove.
-    class ScBandEditor : public juce::Component
-    {
-    public:
-        explicit ScBandEditor (KaminariVocalProcessor& p) : proc (p)
-        {
-            del.setButtonText ("x");
-            del.setTooltip ("Remove this detection band");
-            del.onClick = [this] { if (band >= 0) setParamPlain (proc.apvts, prefix() + "used", 0.0f); };
-            addChildComponent (del);
-        }
-
-        void setBand (int b)
-        {
-            if (b == band) return;
-            band = b;
-            power.reset(); type.reset(); freq.reset(); gain.reset(); q.reset(); typeAtt.reset();
-            del.setVisible (b >= 0);
-            if (b >= 0)
-            {
-                const auto pre = prefix();
-                power = std::make_unique<PowerButton> (proc.apvts, pre + "on", "Detection band " + juce::String (b + 1));
-                type = std::make_unique<ChoiceBox> (proc.apvts, (pre + "type").toRawUTF8(), "", "Shape of this detection band");
-                freq = std::make_unique<Field> (proc.apvts, pre + "freq", "Freq");
-                gain = std::make_unique<Field> (proc.apvts, pre + "gain", "Gain");
-                q = std::make_unique<Field> (proc.apvts, pre + "q", "Q");
-                for (auto* c : std::initializer_list<juce::Component*> { power.get(), type.get(), freq.get(), gain.get(), q.get() })
-                    addAndMakeVisible (c);
-                typeAtt = std::make_unique<juce::ParameterAttachment> (*proc.apvts.getParameter (pre + "type"), [this] (float v)
-                {
-                    // a cut has no gain: show it inactive
-                    const bool g = ScDisplay::hasGain (juce::roundToInt (v));
-                    gain->setEnabled (g);
-                    gain->setAlpha (g ? 1.0f : 0.38f);
-                    gain->box.setTooltip (g ? juce::String() : "A cut has no gain: it removes everything past its frequency.");
-                });
-                typeAtt->sendInitialUpdate();
-            }
-            resized();
-            repaint();
-        }
-
-        void paint (juce::Graphics& g) override
-        {
-            g.setColour (band >= 0 ? EqCurve::bandColour (band) : mist);
-            g.setFont (font (11.0f, 2, 0.1f));
-            if (band < 0)
-            {
-                g.setColour (mist);
-                g.setFont (font (11.5f, 0));
-                g.drawFittedText ("Click the spectrum to add a detection band. Bands shape what the detector hears; the audio is not filtered.",
-                                  getLocalBounds().reduced (4), juce::Justification::centred, 4);
-                return;
-            }
-            g.drawText ("BAND " + juce::String (band + 1), 34, 0, 80, 24, juce::Justification::centredLeft);
-        }
-
-        void resized() override
-        {
-            if (band < 0 || power == nullptr) return;
-            auto b = getLocalBounds();
-            auto top = b.removeFromTop (24);
-            power->setBounds (top.removeFromLeft (24));
-            del.setBounds (top.removeFromRight (24));
-            top.removeFromRight (6);
-            type->setBounds (top.removeFromRight (juce::jmin (118, top.getWidth() - 90)));
-            b.removeFromTop (8);
-            auto row = b.removeFromTop (40);
-            const int w = (row.getWidth() - 12) / 3;
-            freq->setBounds (row.removeFromLeft (w)); row.removeFromLeft (6);
-            gain->setBounds (row.removeFromLeft (w)); row.removeFromLeft (6);
-            q->setBounds (row);
-        }
-
-    private:
-        juce::String prefix() const { return "lv_sc" + juce::String (band + 1) + "_"; }
-        KaminariVocalProcessor& proc;
-        int band = -1;
-        std::unique_ptr<PowerButton> power;
-        std::unique_ptr<ChoiceBox> type;
-        std::unique_ptr<Field> freq, gain, q;
-        std::unique_ptr<juce::ParameterAttachment> typeAtt;
-        juce::TextButton del;
-    };
-
     class CompressionPage : public AdvFrame
     {
     public:
         explicit CompressionPage (KaminariVocalProcessor& p)
             : AdvFrame (p, "Compression", "Style, timing, parallel Dry, auto gain", "lv_on", "compression"),
-              display (p), scDisplay (p), scEditor (p),
+              display (p), scEq (p, KaminariVocalProcessor::EqSideChain),
+              view ({ "Level", "Side-chain EQ" }, "Compression display"),
               thresh (p.apvts, "lv_thresh", "Threshold", "-50 dB", "0 dB"),
               ratio (p.apvts, "lv_ratio", "Ratio", "1:1", "20:1"),
               attack (p.apvts, "lv_attack", "Attack", "fast", "slow"),
@@ -1457,32 +1159,51 @@ namespace kvui
         {
             for (auto* c : std::initializer_list<juce::Component*> { &display, &thresh, &ratio, &attack, &release, &mix, &out, &dry, &wet, &style,
                                                                      &knee, &range, &lookahead, &hold, &scLevel, &link, &detector, &autoRelease, &autoGain,
-                                                                     &scDisplay, &scEditor })
+                                                                     &view })
                 addAndMakeVisible (c);
-            scDisplay.onSelect = [this] (int b) { scEditor.setBand (b); };
+            addChildComponent (scEq);
+            view.setSelected (0);
+            view.buttons[1]->setTooltip ("Side-chain detection EQ: shapes what the compressor reacts to (the audio is not filtered). "
+                                         "Same editor as the main EQ: click to add a band, drag, wheel = Q.");
+            view.onChange = [this] (int v) { showSideChain (v == 1); };
             for (auto* k : { &thresh, &ratio, &attack, &release, &mix, &out, &dry, &wet }) k->setLNF (&lnf);
             styleAtt.sendInitialUpdate();
         }
 
         RangeKnob& ratioKnob() { return ratio; }
-        ScDisplay& sideChainDisplay() { return scDisplay; }
-        ScBandEditor& sideChainEditor() { return scEditor; }
+        EqEditor& sideChainEq() { return scEq; }
+        // Side-chain EQ view: the EQ editor takes the display and the controls area (it needs the room of the main EQ
+        // page for its band panel); "Level" brings the compressor's display and controls back.
+        void showSideChain (bool sc)
+        {
+            scShown = sc;
+            view.setSelected (sc ? 1 : 0);
+            display.setVisible (! sc);
+            scEq.setVisible (sc);
+            for (auto* c : mainControls()) c->setVisible (! sc);
+            if (! sc) proc.scEqSolo.store (-1);
+            resized();
+            repaint();
+        }
+        bool sideChainShown() const noexcept { return scShown; }
 
         void paint (juce::Graphics& g) override
         {
             AdvFrame::paint (g);
-            drawGroup (g, controls);
+            if (! scShown) drawGroup (g, controls);
             drawGroup (g, sideChain);
             g.setColour (mist);
             g.setFont (font (11.0f, 2, 0.1f));
-            g.drawText ("SIDE CHAIN DETECTION", sideChain.getX() + 12, sideChain.getY() + 6, 200, 14, juce::Justification::centredLeft);
-            g.drawText ("DETECTOR", detector.getX() - 84, detector.getY() + 4, 80, 14, juce::Justification::centredRight);
+            g.drawText ("SIDE CHAIN", sideChain.getX() + 12, sideChain.getY() + 6, 200, 14, juce::Justification::centredLeft);
+            g.drawText ("DISPLAY", view.getX(), view.getY() - 16, 120, 14, juce::Justification::centredLeft);
+            g.drawText ("DETECTOR", detector.getX(), detector.getY() - 16, 120, 14, juce::Justification::centredLeft);
         }
 
         void layoutContent (juce::Rectangle<int> b) override
         {
-            const int scH = 150;
-            display.setBounds (b.removeFromTop (b.getHeight() - scH - 10 - 210 - 10));
+            const int scH = 78;
+            const auto displayArea = b.removeFromTop (b.getHeight() - scH - 10 - 210 - 10);
+            display.setBounds (displayArea);
             b.removeFromTop (10);
             sideChain = b.removeFromBottom (scH);
             b.removeFromBottom (10);
@@ -1509,24 +1230,26 @@ namespace kvui
             autoGain.setBounds (right.withSizeKeepingCentre (110, 24));
             const int sw = (sliders.getWidth() - 3 * 30) / 4;
             for (auto* s : { &knee, &range, &lookahead, &hold }) { s->setBounds (sliders.removeFromLeft (sw)); sliders.removeFromLeft (30); }
-            // side chain: level, link and detector | spectrum with detection bands | selected band
             auto sc = sideChain.reduced (12, 8).withTrimmedTop (20);
-            auto lc = sc.removeFromLeft (190);
-            scLevel.setBounds (lc.removeFromTop (44));
-            lc.removeFromTop (4);
-            link.setBounds (lc.removeFromTop (44));
-            sc.removeFromLeft (16);
-            scEditor.setBounds (sc.removeFromRight (250).withTrimmedTop (2));
-            sc.removeFromRight (14);
-            scDisplay.setBounds (sc);
-            detector.setBounds (sideChain.getX() + 320, sideChain.getY() + 5, 130, 22);
+            scLevel.setBounds (sc.removeFromLeft (200).withHeight (44));
+            sc.removeFromLeft (40);
+            link.setBounds (sc.removeFromLeft (200).withHeight (44));
+            sc.removeFromLeft (40);
+            detector.setBounds (sc.removeFromLeft (130).withHeight (26).translated (0, 6));
+            view.setBounds (sc.removeFromRight (240).withHeight (26).translated (0, 6));
+            scEq.setBounds (displayArea.getUnion (controls));
         }
 
     private:
         ModuleLNF lnf;
         CompDisplay display;
-        ScDisplay scDisplay;
-        ScBandEditor scEditor;
+        EqEditor scEq;
+        Segmented view;
+        bool scShown = false;
+        std::vector<juce::Component*> mainControls()
+        {
+            return { &thresh, &ratio, &attack, &release, &mix, &out, &dry, &wet, &style, &knee, &range, &lookahead, &hold, &autoRelease, &autoGain };
+        }
         RangeKnob thresh, ratio, attack, release, mix, out, dry, wet;
         ChoiceBox style;
         HSlider knee, range, lookahead, hold, scLevel, link;
@@ -1876,7 +1599,7 @@ namespace kvui
               mix (p.apvts, "rs_mix", "mix"), out (p.apvts, "rs_out_gain", "out"),
               quality (p.apvts, "rs_quality", { "normal", "high", "ultra" }),
               os (p.apvts, "rs_os", { "off", "2x", "4x" }, "Oversampling: runs the resonance bands at 2x or 4x the session rate. Adds latency while Resonance is on."),
-              analyzer ({ "In", "Out", "Both", "Off" }, "Analyzer"),
+              analyzer ([this] { return graph.analyzerMode; }, [this] (int m) { graph.analyzerMode = m; }, "In", "Out"),
               bypass (p.apvts, "rs_bypass", "bypass", "bypass", hintFor ("rs_bypass")),
               delta (p.apvts, "rs_delta", "delta", "delta", hintFor ("rs_delta"))
         {
@@ -1885,8 +1608,6 @@ namespace kvui
                                                                      &bypass, &delta, &panel, &os, &analyzer })
                 addAndMakeVisible (c);
             for (auto* k : { &depth, &detail, &attack, &release }) k->setLNF (&lnf);
-            analyzer.setSelected (AnalyzerPair::segmentForMode (graph.analyzerMode));
-            analyzer.onChange = [this] (int i) { graph.analyzerMode = AnalyzerPair::modeForSegment (i); };
             graph.onSelect = [this] (int k) { panel.build (proc, k); resized(); };
             panel.build (p, 0);
             startTimerHz (4);
@@ -2030,7 +1751,7 @@ namespace kvui
         SegParam stereo;
         Field link, focus, dLo, dHi, aLo, aHi, rLo, rHi, maxCut, wetTrim, mix, out;
         SegParam quality, os;
-        Segmented analyzer;
+        AnalyzerToggles analyzer;
         ToggleBox bypass, delta;
         juce::Rectangle<int> col1, col2, bar;
     };

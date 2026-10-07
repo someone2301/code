@@ -40,6 +40,7 @@ void KaminariVocalProcessor::prepareToPlay (double sampleRate, int samplesPerBlo
     soloIn.setSize (2, block, false, false, true);
     scDetector.setSize (1, block, false, false, true);
     routeBuf.setSize (2, block, false, false, true);
+    retSoloIn.setSize (2, block, false, false, true);
 
     tune.prepare (sampleRate);
     compHistory.setHop ((int) std::lround (sampleRate / 375.0));
@@ -108,9 +109,14 @@ int KaminariVocalProcessor::computeLatency() const
 
 void KaminariVocalProcessor::readEqSettings (kv::EqBandSettings (&out)[kv::Equalizer::numBands]) const
 {
+    readEqBands ("eq", out);
+}
+
+void KaminariVocalProcessor::readEqBands (const juce::String& prefix, kv::EqBandSettings (&out)[kv::Equalizer::numBands]) const
+{
     for (int b = 0; b < kv::Equalizer::numBands; ++b)
     {
-        const juce::String p = "eq" + juce::String (b + 1) + "_";
+        const juce::String p = prefix + juce::String (b + 1) + "_";
         auto& e = out[b];
         e.used = raw (p + "used")->load() > 0.5f;
         e.on = raw (p + "on")->load() > 0.5f;
@@ -198,13 +204,7 @@ void KaminariVocalProcessor::readModuleSettings()
         // off: no reduction or gain change, but the lookahead delay stays so the latency does not change
         c.threshDb = 0; c.rangeDb = 0; c.autoGain = false;
     }
-    for (int k = 0; k < kv::CompressorSettings::numScBands; ++k)
-    {
-        const juce::String p = "lv_sc" + juce::String (k + 1) + "_";
-        auto& sb = c.scBand[k];
-        sb.used = b (p + "used"); sb.on = b (p + "on"); sb.type = i (p + "type");
-        sb.freq = f (p + "freq"); sb.gainDb = f (p + "gain"); sb.q = f (p + "q");
-    }
+    readEqBands ("lv_sc", c.scBand);
 
     auto& d = dsSettings;
     d = {};
@@ -276,14 +276,7 @@ void KaminariVocalProcessor::processModules (float* l, float* r, int n)
     crossfaded (ModEq, [&] { eq.process (l, r, n, eqSettings, eqOutGain); });
     if (soloing)
     {
-        // band audition: what the band works on: around a bell / notch / band pass, below a low shelf or low cut, above a high shelf or high cut
-        const auto& bs = eqSettings[solo];
-        auto kind = kv::Biquad::BandPass;
-        float q = std::max (0.3f, bs.q);
-        if (bs.type == kv::LowShelf || bs.type == kv::LowCut)        { kind = kv::Biquad::LowPass;  q = 0.7071f; }
-        else if (bs.type == kv::HighShelf || bs.type == kv::HighCut) { kind = kv::Biquad::HighPass; q = 0.7071f; }
-        else if (bs.type == kv::TiltShelf || bs.type == kv::FlatTilt) q = 0.5f;
-        for (auto& bp : soloBp) bp.set (kind, (float) sampleRateHz, bs.freq, q);
+        setSoloFilter (soloBp, eqSettings[solo], sampleRateHz);
         for (int i = 0; i < n; ++i) { l[i] = soloBp[0].process (soloIn.getSample (0, i)); r[i] = soloBp[1].process (soloIn.getSample (1, i)); }
     }
     analyserPost.push (l, r, n);
@@ -299,6 +292,15 @@ void KaminariVocalProcessor::processModules (float* l, float* r, int n)
     dryCopy.copyFrom (0, 0, l, n);
     dryCopy.copyFrom (1, 0, r, n);
     moduleGr[ModCompression].store (compressor.process (l, r, n, compSettings, scDetector.getWritePointer (0)));
+    {
+        // side-chain EQ band solo: hear the region that band works on (taken from the compressor's input)
+        const int so = scEqSolo.load();
+        if (so >= 0 && so < kv::CompressorSettings::numScBands && compSettings.scBand[so].used && moduleOn[ModCompression])
+        {
+            setSoloFilter (scSoloBp, compSettings.scBand[so], sampleRateHz);
+            for (int i = 0; i < n; ++i) { l[i] = scSoloBp[0].process (dryCopy.getSample (0, i)); r[i] = scSoloBp[1].process (dryCopy.getSample (1, i)); }
+        }
+    }
     compInAnalyser.push (dryCopy.getReadPointer (0), dryCopy.getReadPointer (1), n);
     compScAnalyser.push (scDetector.getReadPointer (0), scDetector.getReadPointer (0), n);
     compMakeup.store (compressor.currentMakeup());
@@ -350,21 +352,14 @@ void KaminariVocalProcessor::resetSend (int s)
     if (s == Widener) widener.reset();
 }
 
-kv::ReturnEqSettings KaminariVocalProcessor::readReturnEq (int r) const
+void KaminariVocalProcessor::setSoloFilter (kv::Biquad (&bp)[2], const kv::EqBandSettings& bs, double fs)
 {
-    const juce::String pre = r == 0 ? "rv_eq" : "dl_eq";
-    kv::ReturnEqSettings e;
-    for (int k = 0; k < kv::ReturnEqSettings::numBands; ++k)
-    {
-        const juce::String p = pre + juce::String (k + 1) + "_";
-        auto& b = e.band[k];
-        b.on = raw (p + "on")->load() > 0.5f;
-        b.freq = raw (p + "freq")->load();
-        b.q = raw (p + "q")->load();
-        b.gainDb = kv::ReturnEqSettings::hasGain (k) ? raw (p + "gain")->load() : 0.0f;
-    }
-    e.solo = returnEqSolo[r].load();
-    return e;
+    auto kind = kv::Biquad::BandPass;
+    float q = std::max (0.3f, bs.q);
+    if (bs.type == kv::LowShelf || bs.type == kv::LowCut)        { kind = kv::Biquad::LowPass;  q = 0.7071f; }
+    else if (bs.type == kv::HighShelf || bs.type == kv::HighCut) { kind = kv::Biquad::HighPass; q = 0.7071f; }
+    else if (bs.type == kv::TiltShelf || bs.type == kv::FlatTilt) q = 0.5f;
+    for (auto& b : bp) b.set (kind, (float) fs, bs.freq, q);
 }
 
 kv::DuckSettings KaminariVocalProcessor::readDuck (int r) const
@@ -504,7 +499,18 @@ void KaminariVocalProcessor::processBlock (juce::AudioBuffer<float>& buffer, juc
     const auto rvSettings = readReverb();
     const auto dlSettings = readDelay (bpm);
     const auto wdSettings = readWidener();
-    const kv::ReturnEqSettings retEq[2] = { readReturnEq (0), readReturnEq (1) };
+    readEqBands ("rv_eq", retEqSettings[0]);
+    readEqBands ("dl_eq", retEqSettings[1]);
+    int retSolo[2];
+    bool retEqActive[2];
+    for (int k = 0; k < 2; ++k)
+    {
+        const int so = returnEqSolo[k].load();
+        retSolo[k] = so >= 0 && so < kv::Equalizer::numBands && retEqSettings[k][so].used ? so : -1;
+        retEqActive[k] = false;
+        for (auto& b : retEqSettings[k]) retEqActive[k] = retEqActive[k] || (b.used && b.on);
+        if (retSolo[k] >= 0) setSoloFilter (retSoloBp[k], retEqSettings[k][retSolo[k]], sampleRateHz);
+    }
     const kv::DuckSettings duck[2] = { readDuck (0), readDuck (1) };
     // Delay / Reverb routing: one direction at a time, so the two never form a loop
     const int route = juce::roundToInt (raw ("fx_route")->load());
@@ -613,8 +619,13 @@ void KaminariVocalProcessor::processBlock (juce::AudioBuffer<float>& buffer, juc
             if (ri >= 0)
             {
                 retAnalyserPre[ri].push (out[0], out[1], n);
-                if (retEq[ri].anyOn() || retEq[ri].solo >= 0)
-                    returnEq[ri].process (out[0], out[1], n, retEq[ri]);
+                if (retSolo[ri] >= 0)
+                    for (int c = 0; c < 2; ++c) retSoloIn.copyFrom (c, 0, out[c], n);
+                if (retEqActive[ri])
+                    returnEq[ri].process (out[0], out[1], n, retEqSettings[ri], 0.0f);
+                if (retSolo[ri] >= 0)   // band audition from the EQ's input, as on the main EQ
+                    for (int c = 0; c < 2; ++c)
+                        for (int i = 0; i < n; ++i) out[c][i] = retSoloBp[ri][c].process (retSoloIn.getSample (c, i));
                 retAnalyserPost[ri].push (out[0], out[1], n);
                 if (s == routeFrom)
                     for (int c = 0; c < 2; ++c) routeBuf.copyFrom (c, 0, out[c], n);   // before ducking and the fade

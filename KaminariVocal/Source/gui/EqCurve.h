@@ -3,6 +3,7 @@
 #include "SendPanels.h"
 #include "../dsp/Eq.h"
 #include "../dsp/SpectrumAnalyser.h"
+#include "Lightning.h"
 
 // Pre and post spectra for a display on the 20 Hz .. 20 kHz log axis: pre filled dark, post as a light outline.
 // Shared by the EQ, Multiband, Resonance and Compression displays so all analyzers look and move the same.
@@ -80,7 +81,63 @@ private:
     double lastMs = 0, lastAudioPre = 0, lastAudioPost = 0;
 };
 
-// EQ response graph with draggable band nodes (Basic view and the EQ page).
+// Analyzer switches: Pre and Post are two independent toggles, so both can be on at once (or neither). The mode
+// is kept as an AnalyzerPair mode (Pre, Post, Both, Off) so sessions and the displays read it as before.
+class AnalyzerToggles : public juce::Component, private juce::Timer
+{
+public:
+    AnalyzerToggles (std::function<int()> getMode, std::function<void (int)> setMode,
+                     const juce::String& preName = "Pre", const juce::String& postName = "Post")
+        : get (std::move (getMode)), set (std::move (setMode)), pre (preName), post (postName)
+    {
+        for (auto* b : { &pre, &post })
+        {
+            b->setClickingTogglesState (true);
+            b->getProperties().set ("kvStyle", "seg");
+            b->onClick = [this] { set (modeFor (pre.getToggleState(), post.getToggleState())); };
+            addAndMakeVisible (b);
+        }
+        pre.setTooltip ("Show the spectrum before the processing (" + preName + "). Can be on together with " + postName + ".");
+        post.setTooltip ("Show the spectrum after the processing (" + postName + "). Can be on together with " + preName + ".");
+        refresh();
+        startTimerHz (5);
+    }
+    ~AnalyzerToggles() override { stopTimer(); }
+
+    static int modeFor (bool showPre, bool showPost)
+    {
+        return showPre && showPost ? AnalyzerPair::Both : (showPre ? AnalyzerPair::Pre : (showPost ? AnalyzerPair::Post : AnalyzerPair::Off));
+    }
+    static bool showsPre (int mode)  { return mode == AnalyzerPair::Pre || mode == AnalyzerPair::Both; }
+    static bool showsPost (int mode) { return mode == AnalyzerPair::Post || mode == AnalyzerPair::Both; }
+
+    void refresh()
+    {
+        const int m = get();
+        pre.setToggleState (showsPre (m), juce::dontSendNotification);
+        post.setToggleState (showsPost (m), juce::dontSendNotification);
+    }
+    void resized() override
+    {
+        auto b = getLocalBounds();
+        pre.setBounds (b.removeFromLeft (b.getWidth() / 2).withTrimmedRight (2));
+        post.setBounds (b.withTrimmedLeft (2));
+    }
+
+    juce::TextButton& preButton() { return pre; }
+    juce::TextButton& postButton() { return post; }
+
+private:
+    void timerCallback() override { refresh(); }   // another view of the same analyzer may have changed it
+    std::function<int()> get;
+    std::function<void (int)> set;
+    juce::TextButton pre, post;
+};
+
+// EQ response graph with draggable band nodes. One class for every EQ in the plug-in (main EQ in the Basic view and
+// on the EQ page, the compressor's side-chain detection EQ, the Reverb and Delay return EQs); `target` picks the
+// parameter set (KaminariVocalProcessor::EqTarget), its analyzers and its solo.
+//   - the selected node crackles with lightning
 //   - each band's own response is shaded between its curve and 0 dB, in the band's colour (as in Pro-Q)
 //   - analyzer: pre-EQ, post-EQ or both at once (pre filled dark, post as a light outline over it)
 //   - click empty space: a new band at that frequency; its type follows the frequency (see typeForFrequency)
@@ -111,11 +168,14 @@ public:
         return c[juce::jlimit (0, 7, i)];
     }
 
-    explicit EqCurve (KaminariVocalProcessor& p) : proc (p), state (p.apvts)
+    explicit EqCurve (KaminariVocalProcessor& p, int eqTarget = KaminariVocalProcessor::EqMain)
+        : proc (p), state (p.apvts), target (eqTarget), prefix (KaminariVocalProcessor::eqPrefix (eqTarget))
     {
-        setTitle ("EQ graph");
+        setTitle (target == KaminariVocalProcessor::EqSideChain ? "Side-chain EQ graph"
+                  : target == KaminariVocalProcessor::EqReverbReturn ? "Reverb return EQ graph"
+                  : target == KaminariVocalProcessor::EqDelayReturn ? "Delay return EQ graph" : "EQ graph");
         setDescription ("Click empty space to add a band; drag a node to change frequency and gain; mouse wheel changes Q.");
-        startTimerHz (30);
+        startTimerHz (40);
     }
 
     void setRange (double db) { range = db; repaint(); }
@@ -139,7 +199,7 @@ public:
         g.reduceClipRegion (getLocalBounds());
 
         // analyzers: pre-EQ (dark fill) under post-EQ (light outline + faint fill)
-        analyzers.draw (g, b, [this] (float x) { return freqForX (x); }, proc.analyserMode.load(), "PRE EQ", "POST EQ");
+        analyzers.draw (g, b, [this] (float x) { return freqForX (x); }, proc.eqAnalyserModeFor (target).load(), preLabel(), postLabel());
 
         g.setColour (navy800);
         for (double f : { 50.0, 100.0, 200.0, 500.0, 1000.0, 2000.0, 5000.0, 10000.0 })
@@ -160,13 +220,13 @@ public:
                 g.drawText ("0", 6, (int) yForDb (db) - 13, 34, 12, juce::Justification::left);
 
         kv::EqBandSettings s[kv::Equalizer::numBands];
-        proc.readEqSettings (s);
+        proc.readEqBands (prefix, s);
         const double fs = 48000.0;
         kv::EqDesign designs[kv::Equalizer::numBands];
         for (int i = 0; i < kv::Equalizer::numBands; ++i)
             designs[i] = kv::EqDesign::make (s[i], fs);
-        const bool on = state.getRawParameterValue ("eq_on")->load() > 0.5f;
-        const int solo = proc.eqSolo.load();
+        const bool on = state.getRawParameterValue (KaminariVocalProcessor::eqOnId (target))->load() > 0.5f;
+        const int solo = proc.eqSoloFor (target).load();
         // keep paths just outside the graph instead of clamping to its edge, so a deep cut leaves no line at the bottom
         auto yFor = [this] (double db) { return juce::jlimit (-20.0f, (float) getHeight() + 20.0f, yForDb (db)); };
         const float y0 = yForDb (0.0);
@@ -213,10 +273,7 @@ public:
             const float r = i == selected ? 10.0f : 8.5f;
             const auto col = bandColour (i);
             if (i == selected)
-            {
-                g.setColour (col.withAlpha (0.18f));
-                g.fillEllipse (c.x - r - 7, c.y - r - 7, 2 * r + 14, 2 * r + 14);
-            }
+                nodeFx.paint (g, c, r, col, animMs);   // lightning surging around the selected node
             g.setColour (i == selected ? col : navy800);
             g.fillEllipse (c.x - r, c.y - r, 2 * r, 2 * r);
             g.setColour (s[i].on ? col.brighter (0.3f) : mist.withAlpha (0.6f));
@@ -242,7 +299,7 @@ public:
     int bandAt (juce::Point<float> p) const
     {
         kv::EqBandSettings s[kv::Equalizer::numBands];
-        proc.readEqSettings (s);
+        proc.readEqBands (prefix, s);
         for (int i = kv::Equalizer::numBands - 1; i >= 0; --i)
             if (s[i].used && nodePos (s[i]).getDistanceFrom (p) < 12.0f) return i;
         return -1;
@@ -252,7 +309,7 @@ public:
     int addBandAt (juce::Point<float> p)
     {
         for (int i = 0; i < kv::Equalizer::numBands; ++i)
-            if (state.getRawParameterValue ("eq" + juce::String (i + 1) + "_used")->load() < 0.5f)
+            if (state.getRawParameterValue (prefix + juce::String (i + 1) + "_used")->load() < 0.5f)
             {
                 const double f = freqForX (p.x);
                 const int type = typeForFrequency (f);
@@ -291,7 +348,7 @@ public:
     {
         if (dragBand < 0) return;
         setPlain (param (dragBand, "freq"), (float) freqForX (e.position.x));
-        const int type = juce::roundToInt (state.getRawParameterValue ("eq" + juce::String (dragBand + 1) + "_type")->load());
+        const int type = juce::roundToInt (state.getRawParameterValue (prefix + juce::String (dragBand + 1) + "_type")->load());
         if (type != kv::LowCut && type != kv::HighCut && type != kv::Notch && type != kv::BandPass)
             setPlain (param (dragBand, "gain"), (float) juce::jlimit (-30.0, 30.0, dbForY (e.position.y)));
     }
@@ -324,15 +381,28 @@ public:
 private:
     juce::RangedAudioParameter* param (int band, const char* what)
     {
-        return state.getParameter ("eq" + juce::String (band + 1) + "_" + what);
+        return state.getParameter (prefix + juce::String (band + 1) + "_" + what);
     }
+public:
+    int getTarget() const noexcept { return target; }
+    const juce::String& getPrefix() const noexcept { return prefix; }
+    int nodeBolts() const noexcept { return nodeFx.activeBolts(); }
+    // Analyzer names for this graph (also used by its toggles).
+    juce::String preName() const  { return target == KaminariVocalProcessor::EqSideChain ? "Main" : (target == KaminariVocalProcessor::EqMain ? "Pre" : "Before"); }
+    juce::String postName() const { return target == KaminariVocalProcessor::EqSideChain ? "Detector" : (target == KaminariVocalProcessor::EqMain ? "Post" : "After"); }
+private:
+    juce::String preLabel() const  { return target == KaminariVocalProcessor::EqSideChain ? "MAIN" : (target == KaminariVocalProcessor::EqMain ? "PRE EQ" : "BEFORE EQ"); }
+    juce::String postLabel() const { return target == KaminariVocalProcessor::EqSideChain ? "DETECTOR" : (target == KaminariVocalProcessor::EqMain ? "POST EQ" : "AFTER EQ"); }
     static void setPlain (juce::RangedAudioParameter* p, float v) { p->setValueNotifyingHost (p->convertTo0to1 (v)); }
     static void gesture (juce::RangedAudioParameter* p, float v) { p->beginChangeGesture(); setPlain (p, v); p->endChangeGesture(); }
     void select (int b) { selected = b; if (onSelect) onSelect (b); repaint(); }
 
     void timerCallback() override
     {
-        analyzers.update (proc, proc.analyserPre, proc.analyserPost, proc.analyserMode.load());
+        analyzers.update (proc, proc.eqAnalyserFor (target, false), proc.eqAnalyserFor (target, true), proc.eqAnalyserModeFor (target).load());
+        animMs = juce::Time::getMillisecondCounterHiRes();
+        if (state.getRawParameterValue (prefix + juce::String (selected + 1) + "_used")->load() > 0.5f)
+            nodeFx.tick (animMs, 10.0f);
         repaint();
     }
 
@@ -340,6 +410,10 @@ private:
 
     KaminariVocalProcessor& proc;
     APVTS& state;
+    int target;
+    juce::String prefix;
+    kvfx::NodeLightning nodeFx;
+    double animMs = 0;
     int dragBand = -1, createdBand = -1;
     double createdMs = 0;
     double range = 18.0;

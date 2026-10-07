@@ -1005,27 +1005,37 @@ int main (int argc, char** argv)
 
     // ---- Reverb / Delay returns: EQ, ducking, routing ------------------------------------------------------------------
     {
-        auto toneThrough = [] (kv::ReturnEqSettings s, double f)
+        // return EQ: the main EQ's bands on the wet signal; a low cut at 2 kHz removes a 200 Hz tone from the reverb
+        // return, and soloing a 1 kHz bell leaves only its region of an 8 kHz tone
+        auto reverbReturn = [] (double toneHz, std::function<void (KaminariVocalProcessor&)> setup)
         {
-            kv::ReturnEq eq;
-            eq.prepare (sr);
-            juce::AudioBuffer<float> b (2, 24000);
-            for (int i = 0; i < b.getNumSamples(); ++i)
-                for (int c = 0; c < 2; ++c) b.setSample (c, i, 0.25f * (float) std::sin (2.0 * kv::pi * f * i / sr));
-            for (int start = 0; start < b.getNumSamples(); start += block)
-                eq.process (b.getWritePointer (0, start), b.getWritePointer (1, start), std::min (block, b.getNumSamples() - start), s);
-            return toneDb (b, 0, f, 12000, 24000) - 20.0f * std::log10 (0.25f);
+            KaminariVocalProcessor p;
+            neutral (p);
+            setParam (p, kvid::rvOn, 1.0f);
+            setParam (p, kvid::rvSend, 0.0f);
+            if (setup) setup (p);
+            prepare (p);
+            double e = 0;
+            int blocks = 0;
+            render (p, 1.5, sine (toneHz, -12.0f), [&] (int b) { if (b > 40) { e += p.returnRms[KaminariVocalProcessor::Reverb].load(); ++blocks; } });
+            return 20.0f * std::log10 ((float) (e / std::max (1, blocks)) + 1.0e-9f);
         };
-        kv::ReturnEqSettings hp; hp.band[0] = { true, 2000.0f, 0.0f, 1.0f };
-        kv::ReturnEqSettings bell; bell.band[1] = { true, 1000.0f, 9.0f, 1.0f };
-        kv::ReturnEqSettings lp; lp.band[3] = { true, 1000.0f, 0.0f, 1.0f };
-        kv::ReturnEqSettings soloS = bell; soloS.solo = 1;
-        const float hpLow = toneThrough (hp, 200.0), hpHigh = toneThrough (hp, 8000.0), bellGain = toneThrough (bell, 1000.0),
-                    lpHigh = toneThrough (lp, 8000.0), soloFar = toneThrough (soloS, 8000.0), soloAt = toneThrough (soloS, 1000.0);
-        check (hpLow < -30.0f && std::abs (hpHigh) < 0.5f && std::abs (bellGain - 9.0f) < 0.3f && lpHigh < -30.0f && soloFar < -15.0f && std::abs (soloAt) < 1.0f,
-               "return EQ: high pass at 2 kHz " + juce::String (hpLow, 1) + " dB at 200 Hz / " + juce::String (hpHigh, 1) + " dB at 8 kHz; bell +9 dB gives "
-               + juce::String (bellGain, 1) + " dB; low pass at 1 kHz " + juce::String (lpHigh, 1) + " dB at 8 kHz; bell solo "
-               + juce::String (soloAt, 1) + " dB at 1 kHz, " + juce::String (soloFar, 1) + " dB at 8 kHz");
+        const float plainLow = reverbReturn (200.0, nullptr);
+        const float cutLow = reverbReturn (200.0, [] (KaminariVocalProcessor& p)
+        {
+            setParam (p, "rv_eq1_used", 1.0f); setParam (p, "rv_eq1_type", (float) kv::LowCut); setParam (p, "rv_eq1_freq", 2000.0f);
+            setParam (p, "rv_eq1_slope", 3.0f);
+        });
+        const float plainHigh = reverbReturn (8000.0, nullptr);
+        const float soloHigh = reverbReturn (8000.0, [] (KaminariVocalProcessor& p)
+        {
+            setParam (p, "rv_eq2_used", 1.0f); setParam (p, "rv_eq2_type", (float) kv::Bell); setParam (p, "rv_eq2_freq", 1000.0f);
+            setParam (p, "rv_eq2_q", 4.0f);
+            p.returnEqSolo[0].store (1);
+        });
+        check (cutLow < plainLow - 25.0f && soloHigh < plainHigh - 20.0f,
+               "Reverb return EQ: a 2 kHz low cut takes a 200 Hz return from " + juce::String (plainLow, 1) + " to " + juce::String (cutLow, 1)
+               + " dB; soloing a 1 kHz bell takes an 8 kHz return from " + juce::String (plainHigh, 1) + " to " + juce::String (soloHigh, 1) + " dB");
 
         // ducking: the return drops by the depth while the vocal is loud, and recovers when it stops
         kv::Ducker d;
@@ -1102,11 +1112,11 @@ int main (int argc, char** argv)
         const float plainComp = compLevel (nullptr);
         const float lowCut = compLevel ([] (KaminariVocalProcessor& p)
         {
-            setParam (p, "lv_sc1_used", 1.0f); setParam (p, "lv_sc1_type", 1.0f); setParam (p, "lv_sc1_freq", 2000.0f);
+            setParam (p, "lv_sc1_used", 1.0f); setParam (p, "lv_sc1_type", (float) kv::LowCut); setParam (p, "lv_sc1_freq", 2000.0f);
         });
         const float cutOff = compLevel ([] (KaminariVocalProcessor& p)
         {
-            setParam (p, "lv_sc1_used", 1.0f); setParam (p, "lv_sc1_type", 1.0f); setParam (p, "lv_sc1_freq", 2000.0f); setParam (p, "lv_sc1_on", 0.0f);
+            setParam (p, "lv_sc1_used", 1.0f); setParam (p, "lv_sc1_type", (float) kv::LowCut); setParam (p, "lv_sc1_freq", 2000.0f); setParam (p, "lv_sc1_on", 0.0f);
         });
         const float boost = compLevel ([] (KaminariVocalProcessor& p)
         {
@@ -1380,35 +1390,42 @@ int main (int argc, char** argv)
                        "Multiband: clicking the display at 3 kHz adds band 2 (" + juce::String (lo, 0) + " - " + juce::String (hi, 0) + " Hz)");
                 setParam (p, "mb_count", 1.0f);
             }
-            // Compression side chain: clicking the spectrum creates detection bands; the editor follows the selection
+            // Compression side chain: the same EQ editor as the main EQ; clicks create bands typed by frequency, a drag
+            // moves one, and the selected node crackles with lightning
             {
                 ed->showTab (true, KaminariVocalEditor::TabCompression);
+                ed->compressionPanel().showSideChain (true);
                 juce::MessageManager::getInstance()->runDispatchLoopUntil (20);
-                auto& sc = ed->compressionPanel().sideChainDisplay();
-                const float midY = (float) sc.getHeight() * 0.5f;
-                bool typesOk = sc.getWidth() > 200;
+                auto& sc = ed->compressionPanel().sideChainEq().curve;
+                bool typesOk = sc.getWidth() > 200 && sc.isVisible();
                 int k = 1;
-                for (auto [f, type] : { std::pair<double, int> { 60.0, 1 }, { 3000.0, 0 }, { 15000.0, 2 } })
+                for (auto [f, type] : { std::pair<double, int> { 40.0, kv::LowCut }, { 3000.0, kv::Bell }, { 18000.0, kv::HighCut } })
                 {
-                    const juce::Point<float> at (sc.xForFreq (f), midY - 20.0f);
+                    const juce::Point<float> at (sc.xForFreq (f), sc.yForDb (4.0));
                     sc.mouseDown (event (sc, at, at, false));
                     sc.mouseUp (event (sc, at, at, false));
                     const juce::String pre = "lv_sc" + juce::String (k) + "_";
                     typesOk = typesOk && getParam (p, (pre + "used").toRawUTF8()) > 0.5f && juce::roundToInt (getParam (p, (pre + "type").toRawUTF8())) == type
-                              && std::abs (std::log2 (getParam (p, (pre + "freq").toRawUTF8()) / f)) < 0.05 && sc.selectedBand() == k - 1;
+                              && std::abs (std::log2 (getParam (p, (pre + "freq").toRawUTF8()) / f)) < 0.05 && sc.selected == k - 1;
                     ++k;
                 }
                 const bool bellGain = getParam (p, "lv_sc2_gain") > 2.0f;
-                // drag band 2 down to a cut and up in frequency
-                const auto n2 = sc.nodePos (1);
+                kv::EqBandSettings bands[8];
+                p.readEqBands ("lv_sc", bands);
+                const auto n2 = sc.nodePos (bands[1]);
                 const juce::Point<float> to (sc.xForFreq (5000.0), sc.yForDb (-6.0));
                 sc.mouseDown (event (sc, n2, n2, false));
                 sc.mouseDrag (event (sc, to, n2, true));
                 sc.mouseUp (event (sc, to, n2, true));
                 const bool dragged = std::abs (getParam (p, "lv_sc2_freq") - 5000.0f) < 100.0f && std::abs (getParam (p, "lv_sc2_gain") + 6.0f) < 0.3f;
-                check (typesOk && bellGain && dragged, "Compression side chain: clicks create a 60 Hz low cut, a 3 kHz bell and a 15 kHz high cut; "
-                       "dragging band 2 sets " + juce::String (getParam (p, "lv_sc2_freq"), 0) + " Hz / " + juce::String (getParam (p, "lv_sc2_gain"), 1) + " dB");
-                for (int i = 1; i <= 4; ++i) setParam (p, ("lv_sc" + juce::String (i) + "_used").toRawUTF8(), 0.0f);
+                juce::MessageManager::getInstance()->runDispatchLoopUntil (300);
+                const int sparks = sc.nodeBolts();
+                check (typesOk && bellGain && dragged && sparks > 0,
+                       "Compression side-chain EQ (main EQ editor): clicks create a 40 Hz low cut, a 3 kHz bell and an 18 kHz high cut; dragging band 2 sets "
+                       + juce::String (getParam (p, "lv_sc2_freq"), 0) + " Hz / " + juce::String (getParam (p, "lv_sc2_gain"), 1) + " dB; "
+                       + juce::String (sparks) + " bolts around the selected node");
+                for (int i = 1; i <= 8; ++i) setParam (p, ("lv_sc" + juce::String (i) + "_used").toRawUTF8(), 0.0f);
+                ed->compressionPanel().showSideChain (false);
             }
             // Basic tuning view: detected and target note, deviation and the span being corrected
             {
@@ -1542,11 +1559,21 @@ int main (int argc, char** argv)
                 juce::PNGImageFormat().writeImageToStream (sheet, o);
             }
             // Reverb return EQ and Delay ducking / routing views
-            setParam (p, "rv_eq1_on", 1.0f); setParam (p, "rv_eq1_freq", 180.0f);
-            setParam (p, "rv_eq2_on", 1.0f); setParam (p, "rv_eq2_freq", 450.0f); setParam (p, "rv_eq2_gain", -4.0f);
-            setParam (p, "rv_eq4_on", 1.0f); setParam (p, "rv_eq4_freq", 7000.0f);
+            setParam (p, "rv_eq1_used", 1.0f); setParam (p, "rv_eq1_type", (float) kv::LowCut); setParam (p, "rv_eq1_freq", 180.0f);
+            setParam (p, "rv_eq2_used", 1.0f); setParam (p, "rv_eq2_freq", 450.0f); setParam (p, "rv_eq2_gain", -4.0f);
+            setParam (p, "rv_eq3_used", 1.0f); setParam (p, "rv_eq3_type", (float) kv::HighCut); setParam (p, "rv_eq3_freq", 7000.0f);
+            ed->sendsView().returnFx (0).eq.select (1);
             ed->sendsView().showView (1);
             shot (0, kvid::rvMode, 0.0f, "adv_reverb_eq.png");
+            // compression side-chain EQ view
+            setParam (p, "lv_sc1_used", 1.0f); setParam (p, "lv_sc1_type", (float) kv::LowCut); setParam (p, "lv_sc1_freq", 150.0f);
+            setParam (p, "lv_sc2_used", 1.0f); setParam (p, "lv_sc2_freq", 5500.0f); setParam (p, "lv_sc2_gain", 6.0f);
+            ed->showTab (true, KaminariVocalEditor::TabCompression);
+            ed->compressionPanel().showSideChain (true);
+            ed->compressionPanel().sideChainEq().select (1);
+            for (int k = 0; k < 4; ++k) { render (p, 0.1, vocal); juce::MessageManager::getInstance()->runDispatchLoopUntil (40); }
+            save ("adv_compression_sc.png");
+            ed->compressionPanel().showSideChain (false);
             setParam (p, "dl_duck_on", 1.0f); setParam (p, "fx_route", 1.0f);
             ed->sendsView().showView (2);
             shot (1, kvid::dlMode, 0.0f, "adv_delay_duck.png");

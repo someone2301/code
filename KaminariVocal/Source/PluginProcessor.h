@@ -81,6 +81,25 @@ public:
     // Reverb (0) and Delay (1) returns: EQ band being auditioned (-1 = none; not saved), ducking read-out,
     // spectrum of the return before and after its EQ
     std::atomic<int> returnEqSolo[2] { -1, -1 };
+    std::atomic<int> scEqSolo { -1 };
+    // analyzer display (bit 0 = pre, bit 1 = post as AnalyzerPair modes) of the side-chain and return EQ graphs
+    std::atomic<int> scAnalyserMode { 3 }, returnAnalyserMode[2] { 3, 3 };
+
+    // The four EQs that share the main EQ's band layout and editor.
+    enum EqTarget { EqMain, EqSideChain, EqReverbReturn, EqDelayReturn, numEqTargets };
+    static juce::String eqPrefix (int t) { static const char* p[] = { "eq", "lv_sc", "rv_eq", "dl_eq" }; return p[juce::jlimit (0, 3, t)]; }
+    static juce::String eqOnId (int t)   { static const char* p[] = { "eq_on", "lv_on", "rv_on", "dl_on" }; return p[juce::jlimit (0, 3, t)]; }
+    std::atomic<int>& eqSoloFor (int t) { return t == EqSideChain ? scEqSolo : (t == EqReverbReturn ? returnEqSolo[0] : (t == EqDelayReturn ? returnEqSolo[1] : eqSolo)); }
+    std::atomic<int>& eqAnalyserModeFor (int t) { return t == EqSideChain ? scAnalyserMode : (t == EqReverbReturn ? returnAnalyserMode[0] : (t == EqDelayReturn ? returnAnalyserMode[1] : analyserMode)); }
+    SpectrumAnalyser& eqAnalyserFor (int t, bool post)
+    {
+        if (t == EqSideChain) return post ? compScAnalyser : compInAnalyser;
+        if (t == EqReverbReturn || t == EqDelayReturn) return post ? retAnalyserPost[t - EqReverbReturn] : retAnalyserPre[t - EqReverbReturn];
+        return post ? analyserPost : analyserPre;
+    }
+    void readEqBands (const juce::String& prefix, kv::EqBandSettings (&out)[kv::Equalizer::numBands]) const;
+    // Band audition filter: around a bell / notch / band pass, below a low shelf or low cut, above a high shelf or high cut.
+    static void setSoloFilter (kv::Biquad (&bp)[2], const kv::EqBandSettings& bs, double fs);
     std::array<std::atomic<float>, 2> duckGr {};
     SpectrumAnalyser retAnalyserPre[2], retAnalyserPost[2];
     std::atomic<int> eqSolo { -1 };         // band being auditioned (-1 = none); not saved
@@ -158,9 +177,11 @@ private:
     int mbOs = 0, dsOs = 0, rsOs = 0;
     std::array<juce::SmoothedValue<float>, numModules> moduleFade;   // 10 ms bypass crossfades (EQ, Multiband, Resonance)
     juce::AudioBuffer<float> work, dryCopy, soloIn, scDetector, routeBuf;
-    kv::ReturnEq returnEq[2];
+    kv::Equalizer returnEq[2];
+    kv::EqBandSettings retEqSettings[2][kv::Equalizer::numBands];
+    kv::Biquad retSoloBp[2][2], scSoloBp[2];
+    juce::AudioBuffer<float> retSoloIn;
     kv::Ducker ducker[2];
-    kv::ReturnEqSettings readReturnEq (int r) const;
     kv::DuckSettings readDuck (int r) const;
     kv::Biquad soloBp[2];
     juce::ValueTree abState[2];

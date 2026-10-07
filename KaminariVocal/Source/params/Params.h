@@ -212,6 +212,24 @@ namespace kvp
             addFloat  (p + "q", n + "Q", logRange (0.025f, 40.0f), 1.0f, num);
             addChoice (p + "slope", n + "Slope", slopes, 1);
         }
+        // The compressor's side-chain detection EQ and the Reverb / Delay return EQs use the same eight-band layout as
+        // the main EQ (prefix + N + "_" + used / on / type / freq / gain / q / slope), so one editor serves all four.
+        auto addEqBandSet = [&] (const String& prefix, const String& namePrefix)
+        {
+            for (int b = 1; b <= 8; ++b)
+            {
+                const String p = prefix + String (b) + "_", n = namePrefix + " " + String (b) + " ";
+                addBool   (p + "used", n + "Used", false);
+                addBool   (p + "on", n + "Active", true);
+                addChoice (p + "type", n + "Type", types, 0);
+                addFloat  (p + "freq", n + "Freq", logRange (10.0f, 30000.0f), eqFreqs[b - 1], hzText, freqFromText);
+                addFloat  (p + "gain", n + "Gain", { -30.0f, 30.0f, 0.01f }, 0.0f, dbText);
+                addFloat  (p + "q", n + "Q", logRange (0.025f, 40.0f), 1.0f, num);
+                addChoice (p + "slope", n + "Slope", slopes, 1);
+            }
+        };
+        addEqBandSet ("rv_eq", "Reverb EQ");
+        addEqBandSet ("dl_eq", "Delay EQ");
 
         // Multiband
         addBool   ("mb_on", "Multiband On", false);
@@ -258,18 +276,7 @@ namespace kvp
         addFloat  ("lv_stereo_link", "Compression Stereo Link", { 0.0f, 100.0f, 0.1f }, 100.0f, pctText);
         addFloat  ("lv_out_gain", "Compression Output", { -24.0f, 24.0f, 0.01f }, 0.0f, dbText);
         addBool   ("lv_auto_gain", "Compression Auto Gain", true);
-        // side-chain detection bands (shape what the detector hears)
-        const float scFreqs[4] = { 120, 600, 3000, 8000 };
-        for (int b = 1; b <= 4; ++b)
-        {
-            const String p = "lv_sc" + String (b) + "_", n = "Compression SC " + String (b) + " ";
-            addBool   (p + "used", n + "Used", false);
-            addBool   (p + "on", n + "Active", true);
-            addChoice (p + "type", n + "Type", { "Bell", "Low Cut", "High Cut", "Low Shelf", "High Shelf" }, 0);
-            addFloat  (p + "freq", n + "Freq", logRange (20.0f, 20000.0f), scFreqs[b - 1], hzText, freqFromText);
-            addFloat  (p + "gain", n + "Gain", { -24.0f, 24.0f, 0.01f }, 0.0f, dbText);
-            addFloat  (p + "q", n + "Q", logRange (0.1f, 18.0f), 1.0f, num);
-        }
+        addEqBandSet ("lv_sc", "Compression SC EQ");   // side-chain detection EQ: shapes what the detector hears
 
         // Distortion
         addBool   ("dt_on", "Distortion On", false);
@@ -425,22 +432,10 @@ namespace kvp
         addFloat  (kvid::dlDiffSize, "Delay Diffusion Size", { 0.0f, 100.0f, 0.1f }, 50.0f, pctText);
         addChoice (kvid::dlDiffLoop, "Delay Diffusion Position", { "Post", "Loop" }, 0);
 
-        // Reverb and Delay returns: EQ, ducking, wet gain (DESIGN.md 2.9.6); Delay / Reverb routing
+        // Reverb and Delay returns: ducking and wet gain (DESIGN.md 2.9.6; their EQ bands are with the EQ above); routing
         for (auto [pre, name] : { std::pair<const char*, const char*> { "rv_", "Reverb" }, { "dl_", "Delay" } })
         {
             const String p (pre), n (name);
-            auto qText = [] (float v, int) { return String (v, 2); };
-            const char* bandNames[] = { "High Pass", "Bell 1", "Bell 2", "Low Pass" };
-            const float freqs[] = { 100.0f, 400.0f, 3000.0f, 10000.0f };
-            for (int b = 1; b <= 4; ++b)
-            {
-                const String bp = p + "eq" + String (b) + "_", bn = n + " EQ " + bandNames[b - 1] + " ";
-                addBool ((bp + "on").toRawUTF8(), bn + "On", false);
-                addFloat ((bp + "freq").toRawUTF8(), bn + "Freq", logRange (20.0f, 20000.0f), freqs[b - 1], hzText, {}, freqFromText);
-                if (b == 2 || b == 3)
-                    addFloat ((bp + "gain").toRawUTF8(), bn + "Gain", { -18.0f, 18.0f, 0.01f }, 0.0f, dbText);
-                addFloat ((bp + "q").toRawUTF8(), bn + "Q", logRange (0.1f, 18.0f), 1.0f, qText);
-            }
             addBool ((p + "duck_on").toRawUTF8(), n + " Ducking On", false);
             addFloat ((p + "duck_thresh").toRawUTF8(), n + " Ducking Threshold", { -60.0f, 0.0f, 0.1f }, -30.0f, dbText);
             addFloat ((p + "duck_depth").toRawUTF8(), n + " Ducking Depth", { 0.0f, 30.0f, 0.1f }, 9.0f, dbText);

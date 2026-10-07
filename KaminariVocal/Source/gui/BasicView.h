@@ -202,7 +202,7 @@ namespace kvui
     public:
         explicit EqSection (KaminariVocalProcessor& p)
             : proc (p), power (p.apvts, "eq_on", "EQ"), curve (p),
-              analyser ({ "Pre", "Post", "Both", "Off" }, "Analyzer"), zoomOut ("-"), zoomIn ("+"),
+              analyser ([&p] { return p.analyserMode.load(); }, [&p] (int m) { p.analyserMode.store (m); }), zoomOut ("-"), zoomIn ("+"),
               active ("Active"), solo ("Solo"), del ("Delete")
         {
             setTitle ("EQ");
@@ -211,8 +211,6 @@ namespace kvui
                 addAndMakeVisible (c);
             styleText (bandCount, 12.0f, colours::mist);
             bandCount.setJustificationType (juce::Justification::centredLeft);
-            analyser.setSelected (EqCurve::segmentForMode (p.analyserMode.load()));
-            analyser.onChange = [this] (int i) { proc.analyserMode.store (EqCurve::modeForSegment (i)); };
             resolution.addItemList (SpectrumProcessor::resolutionNames(), 1);
             speed.addItemList (SpectrumProcessor::speedNames(), 1);
             resolution.setSelectedId (p.analyserResolution.load() + 1, juce::dontSendNotification);
@@ -297,8 +295,8 @@ namespace kvui
             speed.setBounds (top.removeFromRight (74).reduced (0, 2));
             top.removeFromRight (52);
             resolution.setBounds (top.removeFromRight (74).reduced (0, 2));
-            top.removeFromRight (78);
-            analyser.setBounds (top.removeFromRight (150).reduced (0, 2));
+            top.removeFromRight (118);
+            analyser.setBounds (top.removeFromRight (110).reduced (0, 2));
             b.removeFromTop (8);
             auto bottom = b.removeFromBottom (26);
             b.removeFromBottom (8);
@@ -321,7 +319,7 @@ namespace kvui
         KaminariVocalProcessor& proc;
         PowerButton power;
         EqCurve curve;
-        Segmented analyser;
+        AnalyzerToggles analyser;
         juce::ComboBox resolution, speed, type;
         juce::TextButton zoomOut, zoomIn;
         ValueBox freq, gain, q;
