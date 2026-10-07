@@ -654,8 +654,7 @@ namespace kvui
                 {
                     const float t = v ("ds_thresh");
                     val = juce::String (juce::roundToInt (-t / 60.0f * 100.0f)) + " % (" + minusSign (t, 0) + " dB)";
-                    foot = v ("ds_detect") < 0.5f ? "Voice focus" + dot() + "~" + kvp::freqText (std::sqrt (v ("ds_det_lo") * v ("ds_det_hi")))
-                                                   : juce::String ("Full band");
+                    foot = "Above " + kvp::freqText (v ("ds_det_lo")) + dot() + (v ("ds_process") < 0.5f ? "split band" : "wide band");
                     break;
                 }
                 case KaminariVocalProcessor::ModDistortion:

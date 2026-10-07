@@ -124,13 +124,13 @@
     "deess": {
       "title": "De-ess",
       "presets": [
-        { "name": "Standard", "description": "The default for most voices.", "values": { "ds_thresh": -28, "ds_range": 8, "ds_det_lo": 3500, "ds_det_hi": 8600 } },
-        { "name": "Gentle", "description": "Light touch for already smooth recordings.", "values": { "ds_thresh": -24, "ds_range": 5, "ds_det_lo": 4000, "ds_det_hi": 9000 } },
-        { "name": "Bright Singer", "description": "Strong reduction for very sibilant voices.", "values": { "ds_thresh": -34, "ds_range": 10, "ds_det_lo": 5000, "ds_det_hi": 10000 } },
-        { "name": "Higher Voice", "description": "Detection range shifted up for high voices.", "values": { "ds_thresh": -30, "ds_range": 8, "ds_det_lo": 6000, "ds_det_hi": 11000 } },
-        { "name": "Lower Voice", "description": "Detection range shifted down for low voices.", "values": { "ds_thresh": -30, "ds_range": 8, "ds_det_lo": 3500, "ds_det_hi": 7500 } },
+        { "name": "Standard", "description": "The default for most voices.", "values": { "ds_thresh": -28, "ds_range": 8, "ds_det_lo": 3500 } },
+        { "name": "Gentle", "description": "Light touch for already smooth recordings.", "values": { "ds_thresh": -24, "ds_range": 5, "ds_det_lo": 4000 } },
+        { "name": "Bright Singer", "description": "Strong reduction for very sibilant voices.", "values": { "ds_thresh": -34, "ds_range": 10, "ds_det_lo": 5000 } },
+        { "name": "Higher Voice", "description": "Detection range shifted up for high voices.", "values": { "ds_thresh": -30, "ds_range": 8, "ds_det_lo": 6000 } },
+        { "name": "Lower Voice", "description": "Detection range shifted down for low voices.", "values": { "ds_thresh": -30, "ds_range": 8, "ds_det_lo": 3500 } },
         { "name": "Wideband Soft", "description": "Turns the whole vocal down slightly on esses.", "values": { "ds_thresh": -26, "ds_range": 5, "ds_process": "Wideband" } },
-        { "name": "Harsh S Fix", "description": "Deep, focused reduction for piercing esses.", "values": { "ds_thresh": -38, "ds_range": 12, "ds_det_lo": 5500, "ds_det_hi": 9000, "ds_lookahead": 2 } }
+        { "name": "Harsh S Fix", "description": "Deep, focused reduction for piercing esses.", "values": { "ds_thresh": -38, "ds_range": 12, "ds_det_lo": 5500, "ds_lookahead": 2 } }
       ]
     },
 

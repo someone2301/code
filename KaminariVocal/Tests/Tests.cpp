@@ -1669,10 +1669,14 @@ int main (int argc, char** argv)
                 juce::Random rnd (7);
                 auto sibilant = [&rnd] (int, long n)
                 {
+                    // syllables (smooth swells and gaps) with an "s" at the end of each word
                     const double t = (double) n / sr;
-                    const float voice = 0.2f * (float) std::sin (2.0 * kv::pi * 220.0 * t);
-                    const bool ess = std::fmod (t, 0.8) > 0.55;
-                    float hiss = ess ? 0.25f * (rnd.nextFloat() * 2.0f - 1.0f) : 0.0f;
+                    const double w = std::fmod (t, 0.8);
+                    const float syll = w < 0.5 ? (float) std::pow (std::sin (kv::pi * w / 0.5), 0.7) * (0.6f + 0.4f * (float) std::sin (kv::pi * 2.0 * t * 3.1))
+                                               : 0.0f;
+                    const float voice = 0.3f * std::abs (syll) * (float) (std::sin (2.0 * kv::pi * 220.0 * t) + 0.4 * std::sin (2.0 * kv::pi * 440.0 * t));
+                    const bool ess = w > 0.5 && w < 0.68;
+                    const float hiss = ess ? 0.22f * (float) std::sin (kv::pi * (w - 0.5) / 0.18) * (rnd.nextFloat() * 2.0f - 1.0f) : 0.0f;
                     return voice + hiss;
                 };
                 float maxGr = 0;

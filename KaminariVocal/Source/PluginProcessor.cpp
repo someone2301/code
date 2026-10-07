@@ -213,8 +213,8 @@ void KaminariVocalProcessor::readModuleSettings()
     d.rangeDb = 0;
     if (moduleOn[ModDeEss])
     {
-        d.threshDb = f ("ds_thresh"); d.rangeDb = f ("ds_range"); d.detLo = f ("ds_det_lo"); d.detHi = f ("ds_det_hi");
-        d.fullBand = i ("ds_detect") == 1; d.wideband = i ("ds_process") == 1;
+        d.threshDb = f ("ds_thresh"); d.rangeDb = f ("ds_range"); d.detLo = f ("ds_det_lo");
+        d.fullBand = true; d.wideband = i ("ds_process") == 1;   // detection: everything above the frequency
         d.stereoLink = f ("ds_stereo_link") / 100.0f; d.linkMode = i ("ds_link_mode");
         d.listen = b ("ds_listen"); d.audition = b ("ds_audition_trigger");
     }
