@@ -546,9 +546,7 @@ Per return (`rv_` and `dl_` prefixes; part of each send's module presets):
 
 | ID | Name | Range / choices | Default |
 |---|---|---|---|
-| `xx_eq1_on`, `xx_eq1_freq`, `xx_eq1_q` | High Pass (12 dB/oct) | 20 Hz … 20 kHz; Q 0.1 … 18 | off, 100 Hz, 1 |
-| `xx_eq2_…`, `xx_eq3_…` (`on`, `freq`, `gain`, `q`) | Bell 1, Bell 2 | gain −18 … +18 dB | off, 400 Hz / 3 kHz, 0 dB, 1 |
-| `xx_eq4_on`, `xx_eq4_freq`, `xx_eq4_q` | Low Pass (12 dB/oct) | 20 Hz … 20 kHz | off, 10 kHz, 1 |
+| `xx_eqN_used`, `_on`, `_type`, `_freq`, `_gain`, `_q`, `_slope` (N = 1..8) | Return EQ bands: the main EQ's layout (2.19) | as the main EQ | unused |
 | `xx_duck_on` | Ducking | off / on | off |
 | `xx_duck_thresh` | Threshold | −60 … 0 dB | −30 dB |
 | `xx_duck_depth` | Depth (full depth 6 dB above the threshold) | 0 … 30 dB | 9 dB |
@@ -558,7 +556,7 @@ Per return (`rv_` and `dl_` prefixes; part of each send's module presets):
 
 Global (chain presets only): `fx_route` Off / Delay into Reverb / Reverb into Delay (default Off) and `fx_route_amt` 0 … 100 % (default 30 %). One direction at a time, so the two returns can never form a loop. The source return is taken after its EQ and before ducking, follows its on/off fade, and is guarded like any return.
 
-Order per return: effect → EQ (band solo replaces the output with the band's region) → routing tap → ducking → wet gain → on/off fade → return guard. The EQ follows changes over about 20 ms. The Sends page has Sound / EQ / Duck & Route views for Reverb and Delay; the EQ view shows the return's spectrum before and after the EQ, its response and four band nodes (drag, wheel = Q, double-click = band off; clicking empty space switches on the band that fits there), and per band On, Solo, Freq, Gain (bells) and Q.
+Order per return: effect → EQ (band solo replaces the output with the band's region, taken from the EQ's input) → routing tap → ducking → wet gain → on/off fade → return guard. The Sends page has Sound / EQ / Duck & Route views for Reverb and Delay; the EQ view is the shared EQ editor (2.19) with Before / After analyzer toggles.
 
 ### 2.10 Presets (implemented for the sends; data for every module)
 
@@ -730,20 +728,31 @@ Session state version 4: the Flanger tab sits before Distortion; older sessions'
 - Pre / post analyzer in the display; click on empty space adds a band around the click (resets that band's settings).
 - Bypassed or muted bands are drawn grey and flagged.
 
-### 2.18 Compression side-chain detection
+### 2.18 Compression side-chain detection EQ
 
-Up to four detection bands shape what the detector hears; the audio itself is not filtered.
+An eight-band EQ on the detector signal only (the audio is not filtered), with the main EQ's band layout
+(`lv_scN_used`, `_on`, `_type`, `_freq`, `_gain`, `_q`, `_slope`, N = 1..8), filter designs and editor. The Compression
+page's DISPLAY switch shows either the level display with the compressor controls, or the side-chain EQ editor in
+their place: spectrum of the main signal and of the detector signal (Main / Detector toggles), click to add a band
+typed by frequency, drag, wheel = Q, band panel, keyboard sweep. Solo on a side-chain band plays the region that band
+works on, taken from the compressor's input. In Vocal style the Ratio knob is shown inactive and reads Auto.
 
-| ID (N = 1..4) | Name | Range / choices | Default |
-|---|---|---|---|
-| `lv_scN_used` | Band in use | off / on | off |
-| `lv_scN_on` | Band active | off / on | on |
-| `lv_scN_type` | Type | Bell, Low Cut, High Cut, Low Shelf, High Shelf | Bell |
-| `lv_scN_freq` | Frequency | 20 Hz … 20 kHz | 120, 600, 3000, 8000 Hz |
-| `lv_scN_gain` | Gain (not used by the cuts) | −24 … +24 dB | 0 dB |
-| `lv_scN_q` | Q | 0.1 … 18 | 1 |
+### 2.19 One EQ editor
 
-The side-chain display shows the main signal entering the compressor and the detector signal (after the bands and the side-chain level), the bands' combined response and their nodes. Click empty space to add a band (below 100 Hz a low cut, above 12 kHz a high cut, otherwise a bell), drag for frequency and gain, mouse wheel for Q, double-click for 0 dB. The selected band is edited beside the display. In Vocal style the Ratio knob is shown inactive and reads Auto (the style sets the ratio).
+Every EQ in the plug-in (main EQ, side-chain detection EQ, Reverb and Delay return EQs) uses the same parameters
+layout, filters (`kv::EqDesign` / `kv::Equalizer`) and editor (`EqEditor`: `EqCurve` graph, `EqPiano` keyboard, floating
+`EqBandPanel`, analyzer toggles, resolution and speed). Analyzer Pre and Post are two independent toggles everywhere
+(also Multiband and Resonance In / Out), so both can be shown at once. The selected band's node crackles with
+lightning in every EQ graph.
+
+### 2.20 Widener algorithms (revised)
+
+- MicroShift: one read tap per side; when the tap drifts out of range it splices one jump back, at the lag that best
+  matches the outgoing waveform (normalised cross-correlation over 6 ms), with an equal-gain raised-cosine
+  crossfade (Style I 12 ms, II 14 ms, III 8 ms). A steady tone keeps its level within 1 dB (the earlier two-tap
+  version swung by 7 dB and flanged). Saturation is lighter (Style I 1.15, III 1.5).
+- SideWidener: the side copy comes from allpass chains (Mode 1: 2 short stages, Mode 2: 4, Mode 3: 6 longer ones)
+  and is at most 0.7 x the mid, so neither speaker gets an evenly spaced comb or a full cancellation.
 
 ## 3. Signal flow
 
@@ -835,7 +844,7 @@ Default size 1100 × 760 px (680 px plus a 64 px send row added with the effect 
 └────┴─────────────────┴──────────────────────┴────────────────────┴─────────────────────┴────┘
 ```
 
-Tune card tuning view (implemented): below the Retune Speed hammer, one line shows the detected note → the note it is tuned to and how far the voice is from it (♯ +n ct / ♭ −n ct, or "in tune" within 5 cents); under it a −50 … +50 cent bar with a marker at the voice's deviation, the span being corrected shaded from the marker towards the target, and a centre mark that lights when the voice is in tune. "-- no pitch" when nothing is detected.
+Basic module cards are all the same size, with the same hammer area. The Tune card holds Key and Scale (Vocal Range is on the Tune page). Tune card tuning view (implemented): below the Retune Speed hammer, one line shows the detected note → the note it is tuned to and how far the voice is from it (♯ +n ct / ♭ −n ct, or "in tune" within 5 cents); under it a −50 … +50 cent bar with a marker at the voice's deviation, the span being corrected shaded from the marker towards the target, and a centre mark that lights when the voice is in tune. "-- no pitch" when nothing is detected.
 
 ### 5.2 Advanced view
 
@@ -924,9 +933,9 @@ Used for Tune Retune Speed, Multiband, Compression, De-ess and Resonance in the 
 
 - An original war-hammer drawing standing head up: chamfered head with engraved lines, collar, wrapped grip, pommel. No box or track. (A generic Norse-style hammer, not a copy of any film or comic design.)
 - **Dragging down raises the value**: the hammer fills with colour (white at the top through the accent blue) from the top of the head down towards the pommel; dragging up empties it in reverse. Mouse wheel and arrow keys follow the same direction. The whole control is the drag area.
-- At rest nothing surrounds the hammer. Past an activation point (fill 0.1) it charges up, and everything follows the fill continuously (intensity 0 → 1):
-  - aura: flame-shaped, licking upwards, white inside with a blue edge, glow and outline; brighter with intensity and flashing on surges; always kept inside the control;
-  - lightning in three layers, each bolt white-cored with a blue glow, flickering: fast small arcs crawling on the hammer, branching medium bolts thrown off its edges, and slower large surges (random intervals, shorter at high intensity) that also flash the aura;
+- At rest nothing surrounds the hammer. Past an activation point (fill 0.1) it charges up like a Super Saiyan 2 transformation (Dragon Ball Z), and everything follows the fill continuously (intensity 0 → 1):
+  - aura: a jagged flame of sharp tongues that follows the hammer's silhouette (wide at the head, narrow along the grip), leans upwards and flickers fast, in three layers (translucent blue, lighter blue, white core) with crisp outlines; brighter with intensity and flashing on surges; tongues shorten at the control's edge rather than being cut off;
+  - lightning, each bolt white-cored with a blue glow, flickering: fast small arcs crackling all over the head and grip, bolts crossing the hammer from side to side, branching medium bolts thrown off its edges, and slower surges (random intervals, shorter at high intensity) that run from pommel to head or far out and flash the aura;
   - ambient particles: rising sparks and curling wisps.
   Bolt count, brightness, speed and reach grow with intensity; all timing is random, so the pattern never repeats. The hammer body is drawn over the aura so it stays readable.
 - Parameters where a lower value means more effect (Retune Speed, thresholds) use an inverted mapping, so a fuller hammer always means more effect.
