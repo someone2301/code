@@ -192,12 +192,12 @@ int main (int argc, char** argv)
 {
     juce::ScopedJuceInitialiser_GUI init;
 
-    // ---- optional benchmark (KV_BENCH=1): audio cost per block and drawing cost per frame -------------------------
+    // ---- optional benchmark (KV_BENCH=<block size>): audio cost per block and drawing cost per frame -------------------------
     if (std::getenv ("KV_BENCH") != nullptr)
     {
         auto runDsp = [] (const char* name, std::function<void (KaminariVocalProcessor&)> setup)
         {
-            constexpr int bs = 128;
+            const int bs = juce::jmax (32, std::atoi (std::getenv ("KV_BENCH")));   // KV_BENCH=<block size>, e.g. 128
             KaminariVocalProcessor p;
             setup (p);
             p.setPlayConfigDetails (2, 2, sr, bs);
@@ -216,7 +216,7 @@ int main (int argc, char** argv)
             double sum = 0; for (double v : t) sum += v;
             std::sort (t.begin(), t.end());
             const double budget = bs / sr;
-            std::printf ("[BENCH] %-46s mean %5.1f %%  99.9th pct %5.1f %%  worst %5.1f %% of the 128-sample block time\n", name,
+            std::printf ("[BENCH] %-46s mean %5.1f %%  99.9th pct %5.1f %%  worst %5.1f %% of the block time\n", name,
                          100.0 * sum / blocks / budget, 100.0 * t[(size_t) (blocks * 0.999)] / budget, 100.0 * t.back() / budget);
         };
         auto busy = [] (KaminariVocalProcessor& p)
