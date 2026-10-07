@@ -82,6 +82,7 @@ public:
     // spectrum of the return before and after its EQ
     std::atomic<int> returnEqSolo[2] { -1, -1 };
     std::atomic<int> scEqSolo { -1 };
+    std::array<std::atomic<bool>, 3> feedBlocked {};   // a send's feed is dropped because it would close a loop
     // analyzer display (bit 0 = pre, bit 1 = post as AnalyzerPair modes) of the side-chain and return EQ graphs
     std::atomic<int> scAnalyserMode { 3 }, returnAnalyserMode[2] { 3, 3 };
 
@@ -179,6 +180,7 @@ private:
     int mbOs = 0, dsOs = 0, rsOs = 0;
     std::array<juce::SmoothedValue<float>, numModules> moduleFade;   // 10 ms bypass crossfades (EQ, Multiband, Resonance)
     juce::AudioBuffer<float> work, dryCopy, soloIn, scDetector, routeBuf;
+    std::array<juce::AudioBuffer<float>, 3> feedBuf;   // returns fed into each send this chunk
     kv::Equalizer returnEq[2];
     kv::EqBandSettings retEqSettings[2][kv::Equalizer::numBands];
     kv::Biquad retSoloBp[2][2], scSoloBp[2];

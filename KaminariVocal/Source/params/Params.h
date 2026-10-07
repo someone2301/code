@@ -443,8 +443,13 @@ namespace kvp
             addChoice ((p + "duck_source").toRawUTF8(), n + " Ducking Source", { "Vocal", "Raw Input" }, 0);
             addFloat ((p + "wet_gain").toRawUTF8(), n + " Wet Gain", { -24.0f, 12.0f, 0.01f }, 0.0f, dbText);
         }
-        addChoice ("fx_route", "Delay / Reverb Routing", { "Off", "Delay into Reverb", "Reverb into Delay" }, 0);
-        addFloat  ("fx_route_amt", "Delay / Reverb Routing Amount", { 0.0f, 100.0f, 0.1f }, 30.0f, pctText);
+        // routing between the sends: each send may feed one other send (a feed that would close a loop is dropped)
+        addChoice ("fx_rv_feed", "Reverb Feeds", { "Off", "Delay", "Widener" }, 0);
+        addChoice ("fx_dl_feed", "Delay Feeds", { "Off", "Reverb", "Widener" }, 0);
+        addChoice ("fx_wd_feed", "Widener Feeds", { "Off", "Reverb", "Delay" }, 0);
+        addFloat  ("fx_rv_feed_amt", "Reverb Feed Amount", { 0.0f, 100.0f, 0.1f }, 30.0f, pctText);
+        addFloat  ("fx_dl_feed_amt", "Delay Feed Amount", { 0.0f, 100.0f, 0.1f }, 30.0f, pctText);
+        addFloat  ("fx_wd_feed_amt", "Widener Feed Amount", { 0.0f, 100.0f, 0.1f }, 30.0f, pctText);
 
         // Widener send
         addBool   (kvid::wdOn, "Widener Send On", false);

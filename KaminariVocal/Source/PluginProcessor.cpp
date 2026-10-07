@@ -40,6 +40,7 @@ void KaminariVocalProcessor::prepareToPlay (double sampleRate, int samplesPerBlo
     soloIn.setSize (2, block, false, false, true);
     scDetector.setSize (1, block, false, false, true);
     routeBuf.setSize (2, block, false, false, true);
+    for (auto& f : feedBuf) f.setSize (2, block, false, false, true);
     retSoloIn.setSize (2, block, false, false, true);
 
     tune.prepare (sampleRate);
@@ -513,13 +514,40 @@ void KaminariVocalProcessor::processBlock (juce::AudioBuffer<float>& buffer, juc
         if (retSolo[k] >= 0) setSoloFilter (retSoloBp[k], retEqSettings[k][retSolo[k]], sampleRateHz);
     }
     const kv::DuckSettings duck[2] = { readDuck (0), readDuck (1) };
-    // Delay / Reverb routing: one direction at a time, so the two never form a loop
-    const int route = juce::roundToInt (raw ("fx_route")->load());
-    const float routeAmt = raw ("fx_route_amt")->load() / 100.0f;
-    const int routeFrom = route == 1 ? (int) Delay : (route == 2 ? (int) Reverb : -1);
-    const int routeTo = route == 1 ? (int) Reverb : (route == 2 ? (int) Delay : -1);
-    const std::array<int, numSends> order = route == 1 ? std::array<int, numSends> { Delay, Reverb, Widener }
-                                                       : std::array<int, numSends> { Reverb, Delay, Widener };
+    // Routing between the sends: each send may feed one other send. A feed that would close a loop is dropped
+    // (checked in the order Reverb, Delay, Widener), and the sends run so that every source comes before its target.
+    std::array<int, numSends> feedTo;
+    feedTo.fill (-1);
+    std::array<float, numSends> feedAmt {};
+    {
+        static const char* ids[numSends] = { "fx_rv_feed", "fx_dl_feed", "fx_wd_feed" };
+        static const char* amts[numSends] = { "fx_rv_feed_amt", "fx_dl_feed_amt", "fx_wd_feed_amt" };
+        for (int s = 0; s < numSends; ++s)
+        {
+            const int choice = juce::roundToInt (raw (ids[s])->load());   // 0 Off, then the other sends in index order
+            const int target = choice <= 0 ? -1 : (choice - 1 >= s ? choice : choice - 1);
+            feedAmt[(size_t) s] = raw (amts[s])->load() / 100.0f;
+            bool loops = false;
+            for (int t = target, steps = 0; t >= 0 && steps < numSends; t = feedTo[(size_t) t], ++steps)
+                if (t == s) loops = true;
+            feedBlocked[(size_t) s].store (target >= 0 && loops);
+            if (target >= 0 && ! loops) feedTo[(size_t) s] = target;
+        }
+    }
+    std::array<int, numSends> order {};
+    {
+        std::array<bool, numSends> placed {};
+        int k = 0;
+        while (k < numSends)
+            for (int s = 0; s < numSends; ++s)
+            {
+                if (placed[(size_t) s]) continue;
+                bool ready = true;   // every send feeding s is placed already
+                for (int src = 0; src < numSends; ++src)
+                    if (! placed[(size_t) src] && feedTo[(size_t) src] == s) ready = false;
+                if (ready) { placed[(size_t) s] = true; order[(size_t) k++] = s; }
+            }
+    }
     std::array<float, 2> duckMax {};
     flSettings = readFlanger (bpm);
     inGainSmooth.setTargetValue (juce::Decibels::decibelsToGain (raw (kvid::inGain)->load()));
@@ -572,12 +600,15 @@ void KaminariVocalProcessor::processBlock (juce::AudioBuffer<float>& buffer, juc
         returns.clear (0, n);
         returns.clear (1, n);
 
-        bool routed = false;   // routeBuf holds the source return for this chunk
+        std::array<bool, numSends> fed {};   // feedBuf[s] holds returns fed into send s this chunk
+        for (int s = 0; s < numSends; ++s) { feedBuf[(size_t) s].clear (0, n); feedBuf[(size_t) s].clear (1, n); }
         for (int s : order)
         {
             auto& level = sendSmooth[(size_t) s];
             auto& fade = returnFade[(size_t) s];
-            const bool fromRoute = s == routeTo && routed && routeAmt > 0.0f;
+            const bool fromRoute = fed[(size_t) s];
+            const int target = feedTo[(size_t) s];
+            const bool feeds = target >= 0 && feedAmt[(size_t) s] > 0.0f;
             const bool inputLive = level.isSmoothing() || level.getTargetValue() > 0.0f || fromRoute;
 
             // Nothing to do: the send is off (return faded out), or nothing is being sent and the tail has died.
@@ -609,13 +640,15 @@ void KaminariVocalProcessor::processBlock (juce::AudioBuffer<float>& buffer, juc
             }
             if (fromRoute)
                 for (int c = 0; c < 2; ++c)
-                    sendIn.addFrom (c, 0, routeBuf, c, 0, n, routeAmt);
+                    sendIn.addFrom (c, 0, feedBuf[(size_t) s], c, 0, n);
 
             const float* in[2] = { sendIn.getReadPointer (0), sendIn.getReadPointer (1) };
             float* out[2] = { sendOut.getWritePointer (0), sendOut.getWritePointer (1) };
             if (s == Reverb)  reverb.process (in[0], in[1], out[0], out[1], n, rvSettings);
             if (s == Delay)   delay.process (in[0], in[1], out[0], out[1], n, dlSettings);
             if (s == Widener) widener.process (in[0], in[1], out[0], out[1], n, wdSettings);
+            if (feeds && s == Widener)
+                for (int c = 0; c < 2; ++c) routeBuf.copyFrom (c, 0, out[c], n);
             const int ri = s == Reverb ? 0 : (s == Delay ? 1 : -1);
             if (ri >= 0)
             {
@@ -628,8 +661,8 @@ void KaminariVocalProcessor::processBlock (juce::AudioBuffer<float>& buffer, juc
                     for (int c = 0; c < 2; ++c)
                         for (int i = 0; i < n; ++i) out[c][i] = retSoloBp[ri][c].process (retSoloIn.getSample (c, i));
                 retAnalyserPost[ri].push (out[0], out[1], n);
-                if (s == routeFrom)
-                    for (int c = 0; c < 2; ++c) routeBuf.copyFrom (c, 0, out[c], n);   // before ducking and the fade
+                if (feeds)
+                    for (int c = 0; c < 2; ++c) routeBuf.copyFrom (c, 0, out[c], n);   // after the EQ, before ducking and the fade
                 const bool rawKey = duck[ri].source == kv::DuckSettings::RawInput;   // the input before the channel modules
                 const float* key[2] = { rawKey ? out2[0] : io[0], rawKey ? out2[chs > 1 ? 1 : 0] : io[1] };
                 duckMax[(size_t) ri] = juce::jmax (duckMax[(size_t) ri], ducker[ri].process (out[0], out[1], n, key[0], key[1], duck[ri]));
@@ -645,7 +678,7 @@ void KaminariVocalProcessor::processBlock (juce::AudioBuffer<float>& buffer, juc
                     if (! std::isfinite (y))
                         y = 0.0f;
                     y = kv::returnGuard (y) * f;
-                    if (s == routeFrom)
+                    if (feeds)
                     {
                         const float rb = routeBuf.getSample (c, i);
                         routeBuf.setSample (c, i, std::isfinite (rb) ? kv::returnGuard (rb) * f : 0.0f);
@@ -656,7 +689,12 @@ void KaminariVocalProcessor::processBlock (juce::AudioBuffer<float>& buffer, juc
                 }
             }
             peak[(size_t) s] = juce::jmax (peak[(size_t) s], blockPeak);
-            if (s == routeFrom) routed = true;
+            if (feeds)
+            {
+                for (int c = 0; c < 2; ++c)
+                    feedBuf[(size_t) target].addFrom (c, 0, routeBuf, c, 0, n, feedAmt[(size_t) s]);
+                fed[(size_t) target] = true;
+            }
 
             // tail has decayed below -140 dBFS with no input: stop processing until something is sent again
             if (! inputLive && blockPeak < 1.0e-7f)

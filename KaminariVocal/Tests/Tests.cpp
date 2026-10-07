@@ -1112,38 +1112,47 @@ int main (int argc, char** argv)
                + " dB while the vocal is loud (depth 12 dB), " + juce::String (recoveredDb, 2) + " dB 0.5 s after it stops");
 
         // routing: Delay into Reverb feeds the reverb even with nothing sent to it; Reverb into Delay at full amount stays bounded
-        auto reverbPeak = [] (int route, float amount)
+        auto sendPeak = [] (int target, std::function<void (KaminariVocalProcessor&)> routing)
         {
             KaminariVocalProcessor p;
             neutral (p);
-            setParam (p, kvid::rvOn, 1.0f);
-            setParam (p, kvid::rvSend, p.apvts.getParameter (kvid::rvSend)->getNormalisableRange().start);   // Off: nothing sent
-            setParam (p, kvid::dlOn, 1.0f);
-            setParam (p, kvid::dlSend, 0.0f);
-            setParam (p, "fx_route", (float) route);
-            setParam (p, "fx_route_amt", amount);
+            for (auto* id : { kvid::rvOn, kvid::dlOn, kvid::wdOn }) setParam (p, id, 1.0f);
+            for (auto* id : { kvid::rvSend, kvid::wdSend })
+                setParam (p, id, p.apvts.getParameter (id)->getNormalisableRange().start);   // Off: nothing sent
+            setParam (p, kvid::dlSend, 0.0f);                                                 // only the delay is sent to
+            if (routing) routing (p);
             prepare (p);
             float peak = 0;
-            render (p, 2.0, vocal, [&] (int) { peak = std::max (peak, p.returnPeak[KaminariVocalProcessor::Reverb].load()); });
+            render (p, 2.0, vocal, [&] (int) { peak = std::max (peak, p.returnPeak[(size_t) target].load()); });
             return peak;
         };
-        const float routedOff = reverbPeak (0, 100.0f), routedOn = reverbPeak (1, 100.0f);
+        // Delay feeds Reverb (fx_dl_feed 1 = Reverb), Reverb feeds Widener (fx_rv_feed 2 = Widener): a chain of three
+        const float revOff = sendPeak (KaminariVocalProcessor::Reverb, nullptr);
+        const float revOn = sendPeak (KaminariVocalProcessor::Reverb, [] (KaminariVocalProcessor& p) { setParam (p, "fx_dl_feed", 1.0f); setParam (p, "fx_dl_feed_amt", 100.0f); });
+        const float wideChain = sendPeak (KaminariVocalProcessor::Widener, [] (KaminariVocalProcessor& p)
+        {
+            setParam (p, "fx_dl_feed", 1.0f); setParam (p, "fx_dl_feed_amt", 100.0f);
+            setParam (p, "fx_rv_feed", 2.0f); setParam (p, "fx_rv_feed_amt", 100.0f);
+        });
+        // a loop (Reverb -> Delay -> Reverb) at 100 % with 100 % feedback: one feed is dropped and the output stays bounded
         float loopPeak = 0;
-        bool finite = true;
+        bool finite = true, blocked = false;
         {
             KaminariVocalProcessor p;
             neutral (p);
             setParam (p, kvid::rvOn, 1.0f); setParam (p, kvid::rvSend, 6.0f); setParam (p, kvid::rvDecay, 20.0f);
             setParam (p, kvid::dlOn, 1.0f); setParam (p, kvid::dlSend, 6.0f); setParam (p, kvid::dlFeedback, 100.0f);
-            setParam (p, "fx_route", 2.0f); setParam (p, "fx_route_amt", 100.0f);
+            setParam (p, "fx_rv_feed", 1.0f); setParam (p, "fx_rv_feed_amt", 100.0f);   // reverb -> delay
+            setParam (p, "fx_dl_feed", 1.0f); setParam (p, "fx_dl_feed_amt", 100.0f);   // delay -> reverb (closes a loop)
             prepare (p);
             const auto res = render (p, 10.0, vocal, [&] (int) { loopPeak = std::max (loopPeak, p.returnPeak[KaminariVocalProcessor::Delay].load()); });
             for (int i = 0; i < res.out.getNumSamples(); ++i) finite = finite && std::isfinite (res.out.getSample (0, i));
+            blocked = p.feedBlocked[KaminariVocalProcessor::Delay].load() && ! p.feedBlocked[KaminariVocalProcessor::Reverb].load();
         }
-        check (routedOff < 1.0e-6f && routedOn > 1.0e-3f && finite && loopPeak <= 1.0f,
-               "Delay into Reverb: reverb return " + juce::String (routedOn, 4) + " with no reverb send (" + juce::String (routedOff, 6)
-               + " with routing off); Reverb into Delay at 100 % with 100 % feedback stays bounded for 10 s (delay return peak "
-               + juce::String (loopPeak, 3) + ")");
+        check (revOff < 1.0e-6f && revOn > 1.0e-3f && wideChain > 1.0e-3f && finite && blocked && loopPeak <= 1.0f,
+               "Send routing: Delay into Reverb gives a reverb return of " + juce::String (revOn, 4) + " with no reverb send ("
+               + juce::String (revOff, 6) + " without); Delay -> Reverb -> Widener reaches the widener (" + juce::String (wideChain, 4)
+               + "); a Reverb <-> Delay loop drops the closing feed and stays bounded for 10 s (peak " + juce::String (loopPeak, 3) + ")");
 
         // ducking in the plug-in: a loud vocal ducks the reverb return by the depth
         {
@@ -1664,7 +1673,7 @@ int main (int argc, char** argv)
             for (int k = 0; k < 4; ++k) { render (p, 0.1, vocal); juce::MessageManager::getInstance()->runDispatchLoopUntil (40); }
             save ("adv_compression_sc.png");
             ed->compressionPanel().showSideChain (false);
-            setParam (p, "dl_duck_on", 1.0f); setParam (p, "fx_route", 1.0f);
+            setParam (p, "dl_duck_on", 1.0f); setParam (p, "fx_dl_feed", 1.0f);
             ed->sendsView().showView (2);
             shot (1, kvid::dlMode, 0.0f, "adv_delay_duck.png");
             ed->sendsView().showView (0);

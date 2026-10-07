@@ -1240,6 +1240,94 @@ namespace kvui
     // SENDS page: title, one tab per send (on light, name, send level) and the selected send's panel.
     //==================================================================================================================
     // RETURN EQ, DUCKING AND ROUTING (Reverb and Delay, DESIGN.md 2.9.6)
+    // Routing between the sends: each send can feed one other send, with an amount. A feed that would close a loop is
+    // dropped by the processor; its row says so.
+    class RoutingMatrix : public juce::Component, private juce::Timer
+    {
+    public:
+        explicit RoutingMatrix (KaminariVocalProcessor& p) : proc (p)
+        {
+            static const char* names[3] = { "REVERB", "DELAY", "WIDENER" };
+            static const char* feeds[3] = { "fx_rv_feed", "fx_dl_feed", "fx_wd_feed" };
+            static const char* amts[3] = { "fx_rv_feed_amt", "fx_dl_feed_amt", "fx_wd_feed_amt" };
+            const juce::StringArray targets[3] = { { "Off", "Delay", "Widener" }, { "Off", "Reverb", "Widener" }, { "Off", "Reverb", "Delay" } };
+            for (int k = 0; k < 3; ++k)
+            {
+                auto& r = rows[(size_t) k];
+                r.name = names[k];
+                r.feedId = feeds[k];
+                r.feed = std::make_unique<SegParam> (p.apvts, feeds[k], targets[k],
+                                                     juce::String ("Feed the ") + juce::String (names[k]).toLowerCase() + " return into another send (after its EQ, before ducking).");
+                r.amount = std::make_unique<HSlider> (p.apvts, amts[k], "Amount", "0 %", "100 %");
+                addAndMakeVisible (*r.feed);
+                addAndMakeVisible (*r.amount);
+            }
+            startTimerHz (10);
+        }
+        ~RoutingMatrix() override { stopTimer(); }
+
+        void paint (juce::Graphics& g) override
+        {
+            drawTitledGroup (g, getLocalBounds(), "ROUTING BETWEEN SENDS");
+            for (int k = 0; k < 3; ++k)
+            {
+                const auto& r = rows[(size_t) k];
+                g.setColour (white);
+                g.setFont (font (12.0f, 2, 0.08f));
+                g.drawText (r.name + juce::String (juce::CharPointer_UTF8 ("  \xe2\x86\x92")), r.label, juce::Justification::centredLeft);
+                const bool blocked = proc.feedBlocked[(size_t) k].load();
+                const int choice = juce::roundToInt (plain (proc.apvts, r.feedId));
+                g.setColour (blocked ? amber : steel);
+                g.setFont (font (11.5f, 0));
+                g.drawFittedText (blocked ? "Not active: it would feed back into itself (a loop)."
+                                          : choice == 0 ? "Off" : "Feeds the " + juce::String (k == 0 ? (choice == 1 ? "delay" : "widener")
+                                                                                              : k == 1 ? (choice == 1 ? "reverb" : "widener")
+                                                                                                       : (choice == 1 ? "reverb" : "delay")),
+                                  r.note, juce::Justification::centredLeft, 2);
+            }
+        }
+
+        void resized() override
+        {
+            auto b = getLocalBounds().reduced (12, 8).withTrimmedTop (24);
+            const int h = b.getHeight() / 3;
+            for (auto& r : rows)
+            {
+                auto row = b.removeFromTop (h);
+                r.label = row.removeFromLeft (110);
+                r.feed->setBounds (row.removeFromLeft (300).withSizeKeepingCentre (300, 26));
+                row.removeFromLeft (24);
+                r.amount->setBounds (row.removeFromLeft (200).withSizeKeepingCentre (200, 44));
+                row.removeFromLeft (20);
+                r.note = row;
+            }
+        }
+
+        bool rowActive (int k) const { return juce::roundToInt (plain (proc.apvts, rows[(size_t) k].feedId)) != 0 && ! proc.feedBlocked[(size_t) k].load(); }
+
+    private:
+        void timerCallback() override
+        {
+            for (int k = 0; k < 3; ++k)
+            {
+                auto& r = rows[(size_t) k];
+                const bool active = rowActive (k);
+                if (r.amount->isEnabled() != active) { r.amount->setEnabled (active); r.amount->setAlpha (active ? 1.0f : 0.38f); }
+            }
+            repaint();
+        }
+
+        struct Row
+        {
+            juce::String name, feedId;
+            std::unique_ptr<SegParam> feed;
+            std::unique_ptr<HSlider> amount;
+            juce::Rectangle<int> label, note;
+        };
+        KaminariVocalProcessor& proc;
+        std::array<Row, 3> rows;
+    };
+
     // Overlay that replaces a Reverb or Delay panel's controls (below its header) with the return EQ, or with
     // ducking, wet gain and Delay / Reverb routing.
     class ReturnFxView : public juce::Component, private juce::Timer
@@ -1262,21 +1350,19 @@ namespace kvui
               attack (p.apvts, pfx (returnIndex) + "duck_attack", "Attack", "fast", "slow"),
               release (p.apvts, pfx (returnIndex) + "duck_release", "Release", "fast", "slow"),
               wet (p.apvts, pfx (returnIndex) + "wet_gain", "Wet Gain", "-24", "+12", "Return level after ducking: makes up the level the ducking takes away."),
-              route (p.apvts, "fx_route", { "Off", "Delay > Reverb", "Reverb > Delay" },
-                     "Feeds one return into the other. One direction at a time, so the two can never feed back."),
-              routeAmt (p.apvts, "fx_route_amt", "Amount", "0 %", "100 %", "How much of the source return is sent into the other effect.")
+              routing (p)
         {
             setOpaque (true);
             addAndMakeVisible (eq);
-            for (auto* k : { &thresh, &depth, &attack, &release, &wet, &routeAmt }) { k->setLNF (&lnf); addChildComponent (k); }
-            for (auto* c : std::initializer_list<juce::Component*> { &duckOn, &source, &route }) addChildComponent (c);
+            for (auto* k : { &thresh, &depth, &attack, &release, &wet }) { k->setLNF (&lnf); addChildComponent (k); }
+            for (auto* c : std::initializer_list<juce::Component*> { &duckOn, &source, &routing }) addChildComponent (c);
             setView (Eq);
             startTimerHz (30);
         }
         ~ReturnFxView() override
         {
             stopTimer();
-            for (auto* k : { &thresh, &depth, &attack, &release, &wet, &routeAmt }) k->setLNF (nullptr);
+            for (auto* k : { &thresh, &depth, &attack, &release, &wet }) k->setLNF (nullptr);
         }
 
         void setView (int v)
@@ -1285,7 +1371,7 @@ namespace kvui
             const bool showEq = v == Eq;
             eq.setVisible (showEq);
             if (! showEq) proc.eqSoloFor (ri == 0 ? KaminariVocalProcessor::EqReverbReturn : KaminariVocalProcessor::EqDelayReturn).store (-1);
-            for (auto* c : std::initializer_list<juce::Component*> { &duckOn, &source, &route, &thresh, &depth, &attack, &release, &wet, &routeAmt })
+            for (auto* c : std::initializer_list<juce::Component*> { &duckOn, &source, &routing, &thresh, &depth, &attack, &release, &wet })
                 c->setVisible (! showEq);
             resized();
             repaint();
@@ -1306,7 +1392,6 @@ namespace kvui
             }
             drawTitledGroup (g, duckArea, "DUCKING");
             drawTitledGroup (g, wetArea, "OUTPUT");
-            drawTitledGroup (g, routeArea, "DELAY / REVERB ROUTING");
             drawCaption (g, source, "SOURCE");
             // ducking meter
             auto m = meterArea.toFloat();
@@ -1323,12 +1408,6 @@ namespace kvui
             g.setFont (font (12.0f, 0));
             g.drawText (shownGr < 0.05f ? juce::String ("0.0 dB") : minusSign (-shownGr, 1) + " dB", meterArea.getX(), meterArea.getBottom() + 4, 120, 14,
                         juce::Justification::centredLeft);
-            g.setColour (steel);
-            g.setFont (font (11.5f, 0));
-            const juce::String note = juce::roundToInt (plainValue (proc.apvts, "fx_route")) == 0
-                                          ? juce::String ("Routing is off: each return is fed only by its own send.")
-                                          : juce::String ("The source return (after its EQ, before ducking) is added to the other effect's input.");
-            g.drawFittedText (note, routeNote, juce::Justification::centredLeft, 2);
         }
 
         void resized() override
@@ -1357,21 +1436,14 @@ namespace kvui
             for (auto* k : { &thresh, &depth, &attack, &release }) k->setBounds (d.removeFromLeft (kw).withHeight (130));
             wet.setBounds (wetArea.reduced (12, 8).withTrimmedTop (22).withHeight (130));
             b.removeFromTop (12);
-            routeArea = b.removeFromTop (110);
-            auto r = routeArea.reduced (12, 8).withTrimmedTop (22);
-            route.setBounds (r.removeFromLeft (360).withSizeKeepingCentre (360, 28));
-            r.removeFromLeft (20);
-            routeAmt.setBounds (r.removeFromLeft (110));
-            r.removeFromLeft (20);
-            routeNote = r;
+            routing.setBounds (b.removeFromTop (juce::jmin (b.getHeight(), 176)));
         }
 
         EqEditor eq;
         ToggleBox duckOn;
         SegParam source;
         RangeKnob thresh, depth, attack, release, wet;
-        SegParam route;
-        RangeKnob routeAmt;
+        RoutingMatrix routing;
 
     private:
         static juce::String pfx (int r) { return r == 0 ? "rv_" : "dl_"; }
@@ -1380,13 +1452,6 @@ namespace kvui
             const float gr = proc.duckGr[(size_t) ri].load();
             const float next = gr > shownGr ? gr : shownGr * 0.9f;
             if (std::abs (next - shownGr) > 0.01f) { shownGr = next; if (view == Duck) repaint (meterArea.expanded (2, 20)); }
-            const bool routeOn = juce::roundToInt (plainValue (proc.apvts, "fx_route")) != 0;
-            if (routeAmt.isEnabled() != routeOn)
-            {
-                routeAmt.setEnabled (routeOn);
-                routeAmt.setAlpha (routeOn ? 1.0f : 0.38f);
-                repaint (routeNote);
-            }
             const bool duck = plainValue (proc.apvts, (pfx (ri) + "duck_on").toRawUTF8()) > 0.5f;
             for (auto* k : { &thresh, &depth, &attack, &release })
                 k->setAlpha (duck ? 1.0f : 0.45f);
@@ -1396,7 +1461,7 @@ namespace kvui
         ModuleLNF lnf;
         int view = Eq;
         float shownGr = 0;
-        juce::Rectangle<int> duckArea, wetArea, routeArea, meterArea, routeNote;
+        juce::Rectangle<int> duckArea, wetArea, meterArea;
     };
 
     class SendTab : public juce::Button
@@ -1437,15 +1502,25 @@ namespace kvui
         juce::RangedAudioParameter& levelParam;
     };
 
+    // Widener's Route view: the routing between the sends (the widener has no return EQ or ducking).
+    class WidenerRouteView : public juce::Component
+    {
+    public:
+        explicit WidenerRouteView (KaminariVocalProcessor& p) : routing (p) { setOpaque (true); addAndMakeVisible (routing); }
+        void paint (juce::Graphics& g) override { g.fillAll (navy900); }
+        void resized() override { routing.setBounds (getLocalBounds().withTrimmedTop (8).removeFromTop (juce::jmin (getHeight() - 8, 176))); }
+        RoutingMatrix routing;
+    };
+
     class SendsPage : public juce::Component, private juce::Timer
     {
     public:
         SendsPage (KaminariVocalProcessor& p, ReverbPanel& r, DelayPanel& d, WidenerPanel& w)
-            : panels { &r, &d, &w }, rvFx (p, 0), dlFx (p, 1)
+            : panels { &r, &d, &w }, rvFx (p, 0), dlFx (p, 1), wdRoute (p)
         {
             const char* viewNames[] = { "SOUND", "EQ", "DUCK & ROUTE" };
-            const char* viewTips[] = { "The effect's own controls.", "Four-band EQ on the return (wet signal only), with its spectrum.",
-                                       "Ducking from the vocal, wet gain, and Delay / Reverb routing." };
+            const char* viewTips[] = { "The effect's own controls.", "EQ on the return (wet signal only), with its spectrum: the main EQ's editor.",
+                                       "Ducking from the vocal, wet gain, and routing between the sends." };
             for (int v = 0; v < 3; ++v)
             {
                 auto* b = viewButtons.add (new juce::TextButton (viewNames[v]));
@@ -1458,6 +1533,7 @@ namespace kvui
             }
             addChildComponent (rvFx);
             addChildComponent (dlFx);
+            addChildComponent (wdRoute);
             const char* names[] = { "Reverb", "Delay", "Widener" };
             const char* on[] = { kvid::rvOn, kvid::dlOn, kvid::wdOn };
             const char* lv[] = { kvid::rvSend, kvid::dlSend, kvid::wdSend };
@@ -1510,11 +1586,13 @@ namespace kvui
             auto row = b.removeFromTop (34);
             for (auto* t : tabs) { t->setBounds (row.removeFromLeft (150)); row.removeFromLeft (8); }
             auto views = row.removeFromRight (330).withSizeKeepingCentre (330, 30);
-            for (auto* v : viewButtons) v->setBounds (views.removeFromLeft (110));
+            for (int v = viewButtons.size(); --v >= 0;)   // right-aligned; the widener has no EQ button
+                if (viewButtons[v]->isVisible()) viewButtons[v]->setBounds (views.removeFromRight (110));
             b.removeFromTop (12);
             for (auto* p : panels) p->setBounds (b);
             rvFx.setBounds (b.withTrimmedTop (90));
             dlFx.setBounds (b.withTrimmedTop (90));
+            wdRoute.setBounds (b.withTrimmedTop (90));
         }
     private:
         void timerCallback() override { for (auto* t : tabs) t->repaint(); }
@@ -1525,20 +1603,31 @@ namespace kvui
                 tabs[i]->setToggleState (i == current, juce::dontSendNotification);
                 panels[(size_t) i]->setVisible (i == current);
             }
-            const bool hasFx = current == 0 || current == 1;
+            // Reverb and Delay: Sound / EQ / Duck & Route. Widener: Sound / Route (no return EQ or ducking).
+            const bool widener = current == 2;
+            if (widener && view == 1) view = 0;
             for (int v = 0; v < viewButtons.size(); ++v)
             {
-                viewButtons[v]->setVisible (hasFx);
+                viewButtons[v]->setVisible (! (widener && v == 1));
                 viewButtons[v]->setToggleState (v == view, juce::dontSendNotification);
             }
+            viewButtons[2]->setButtonText (widener ? "ROUTE" : "DUCK & ROUTE");
+            viewButtons[0]->setConnectedEdges (juce::Button::ConnectedOnRight);
+            viewButtons[2]->setConnectedEdges (juce::Button::ConnectedOnLeft);
             rvFx.setVisible (current == 0 && view > 0);
             dlFx.setVisible (current == 1 && view > 0);
+            wdRoute.setVisible (widener && view == 2);
             if (view > 0) { rvFx.setView (view == 1 ? ReturnFxView::Eq : ReturnFxView::Duck); dlFx.setView (view == 1 ? ReturnFxView::Eq : ReturnFxView::Duck); }
             rvFx.toFront (false);
             dlFx.toFront (false);
+            wdRoute.toFront (false);
+            resized();
         }
         std::array<juce::Component*, numPanels> panels;
         ReturnFxView rvFx, dlFx;
+    public:
+        WidenerRouteView wdRoute;
+    private:
         juce::OwnedArray<SendTab> tabs;
         juce::OwnedArray<juce::TextButton> viewButtons;
         int current = 0, view = 0;
