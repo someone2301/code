@@ -139,13 +139,20 @@ KaminariVocalEditor::KaminariVocalEditor (KaminariVocalProcessor& p)
     undo.onClick = [this] { proc.undoManager.undo(); };
     redo.onClick = [this] { proc.undoManager.redo(); };
 
+    animations.setClickingTogglesState (true);
+    animations.getProperties().set ("kvStyle", "light");
+    animations.setToggleState (proc.hostTempo.animations.load(), juce::dontSendNotification);
+    animations.setTooltip ("Animations on or off: the hammers' lightning and the EQ node lightning. Off saves processing on slower computers.");
+    animations.setTitle ("Animations");
+    animations.onClick = [this] { proc.hostTempo.animations.store (animations.getToggleState()); root.repaint(); };
+
     for (int z : { 75, 100, 125, 150, 200 }) zoom.addItem (juce::String (z) + "%", z);
     zoom.setSelectedId (juce::roundToInt (proc.uiScale.load() * 100.0f), juce::dontSendNotification);
     zoom.setTooltip ("Window size");
     zoom.setTitle ("Window size");
     zoom.onChange = [this] { setZoom ((float) zoom.getSelectedId() / 100.0f); };
 
-    for (auto* c : std::initializer_list<juce::Component*> { &chain, &abA, &abB, &abCopy, &undo, &redo, &zoom, &inRail, &outRail })
+    for (auto* c : std::initializer_list<juce::Component*> { &chain, &abA, &abB, &abCopy, &undo, &redo, &animations, &zoom, &inRail, &outRail })
         root.addAndMakeVisible (c);
     chain.name.setTooltip ("Chain presets set every module and send at once.");
     chain.onLoaded = [this]
@@ -279,7 +286,7 @@ void KaminariVocalEditor::layoutRoot()
     basicButton.setBounds (views.removeFromLeft (80));
     advancedButton.setBounds (views);
     header.removeFromLeft (16);
-    chain.setBounds (header.removeFromLeft (290));
+    chain.setBounds (header.removeFromLeft (210));
     header.removeFromLeft (12);
     auto ab = header.removeFromLeft (84);
     abA.setBounds (ab.removeFromLeft (26));
@@ -290,6 +297,8 @@ void KaminariVocalEditor::layoutRoot()
     redo.setBounds (header.removeFromRight (34));
     header.removeFromRight (6);
     undo.setBounds (header.removeFromRight (34));
+    header.removeFromRight (8);
+    animations.setBounds (header.removeFromRight (52));
 
     auto body = b.reduced (16, 16);
     inRail.setBounds (body.removeFromLeft (62));

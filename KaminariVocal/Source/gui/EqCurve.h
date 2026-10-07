@@ -275,7 +275,7 @@ public:
             // each node is a small orb; the selected one carries plasma lightning, kept close around it
             kvfx::paintOrb (g, c, r, col, i == selected, s[i].on);
             if (i == selected)
-                nodeFx.paint (g, c, r, col, animMs);
+                if (proc.hostTempo.animations.load (std::memory_order_relaxed)) nodeFx.paint (g, c, r, col, animMs);
             g.setColour (white);
             g.setFont (uiFont (10.0f, true));
             g.drawText (juce::String (i + 1), juce::Rectangle<float> (2 * r, 2 * r).withCentre (c.translated (0.0f, 0.5f)), juce::Justification::centred);
@@ -407,7 +407,8 @@ private:
     {
         analyzers.update (proc, proc.eqAnalyserFor (target, false), proc.eqAnalyserFor (target, true), proc.eqAnalyserModeFor (target).load());
         animMs = juce::Time::getMillisecondCounterHiRes();
-        if (selected >= 0 && state.getRawParameterValue (prefix + juce::String (selected + 1) + "_used")->load() > 0.5f)
+        if (selected >= 0 && proc.hostTempo.animations.load (std::memory_order_relaxed)
+            && state.getRawParameterValue (prefix + juce::String (selected + 1) + "_used")->load() > 0.5f)
             nodeFx.tick (animMs, 10.0f);
         repaint();
     }

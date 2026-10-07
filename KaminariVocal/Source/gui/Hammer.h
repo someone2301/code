@@ -138,6 +138,15 @@ public:
         const float g = HostTempo::glow (HostTempo::beatsAt (s, nowMs), s.bpm);
         const bool glowMoved = std::abs (g - glow) > 0.004f;
         if (glowMoved) glow = g;
+        if (! tempo.animations.load (std::memory_order_relaxed))
+        {
+            // animations off: no lightning, sparks or moving aura; the hammer still shows its fill and glow
+            const bool had = ! bolts.empty() || ! particles.empty();
+            bolts.clear(); particles.clear();
+            animMs = nowMs;
+            if (had || (glowMoved && norm > 0.0f)) repaint();
+            return;
+        }
         const bool animating = intensity() > 0.0f || ! bolts.empty() || ! particles.empty();
         // Frame pacing: while a frame takes longer than about 2.5 ms to draw (slow graphics, several hammers moving),
         // the lightning is redrawn on every other display frame (30 fps on a 60 Hz screen) so the host's interface
@@ -176,14 +185,15 @@ public:
         const auto art = artArea();
         const float fillY = fillLevel();
 
-        const float I = intensity();
+        const bool animOn = tempo.animations.load (std::memory_order_relaxed);
+        const float I = animOn ? intensity() : 0.0f;
         if (I > 0.0f && animMs <= 0.0)
             advanceAnimation (480.0);   // first paint (or a snapshot): start mid-animation, not empty
         if (enabled && I > 0.0f)
             paintAura (g, I, pulse);
         else
             auraOuter.clear();
-        if (enabled)
+        if (enabled && animOn)
         {
             paintParticles (g, false);
             paintBolts (g, false);   // behind the hammer
@@ -256,7 +266,7 @@ public:
             g.restoreState();
         }
 
-        if (enabled)
+        if (enabled && animOn)
         {
             paintBolts (g, true);    // in front of the hammer
             paintParticles (g, true);

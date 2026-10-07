@@ -69,7 +69,7 @@ private:
     juce::TextButton basicButton { "BASIC" }, advancedButton { "ADVANCED" };
     PresetBar chain;
     juce::TextButton abA { "A" }, abB { "B" }, abCopy;
-    juce::TextButton undo, redo;
+    juce::TextButton undo, redo, animations { "ANIM" };
     juce::ComboBox zoom;
     juce::String latencyText;
 

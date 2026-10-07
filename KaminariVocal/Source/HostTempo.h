@@ -20,6 +20,10 @@ struct TempoSnapshot
 class HostTempo
 {
 public:
+    // Editor setting (saved with the session): hammer lightning and the EQ node lightning animate only while this is
+    // on. Kept here because every animated control already holds the HostTempo.
+    std::atomic<bool> animations { true };
+
     // A host anchor older than this is treated as unavailable (host stopped calling processBlock).
     static constexpr double maxAnchorAgeMs = 250.0;
 

@@ -808,6 +808,7 @@ void KaminariVocalProcessor::getStateInformation (juce::MemoryBlock& destData)
     state.setProperty ("ui_send", advancedSend.load(), nullptr);
     state.setProperty ("ui_tab", advancedTab.load(), nullptr);
     state.setProperty ("ui_scale", uiScale.load(), nullptr);
+    state.setProperty ("ui_animations", hostTempo.animations.load(), nullptr);
     state.setProperty ("analyser_mode", analyserMode.load(), nullptr);
     state.setProperty ("analyser_resolution", analyserResolution.load(), nullptr);
     state.setProperty ("analyser_speed", analyserSpeed.load(), nullptr);
@@ -836,6 +837,7 @@ void KaminariVocalProcessor::setStateInformation (const void* data, int sizeInBy
                 tab += 1;                       // v4: Flanger tab inserted before Distortion
             advancedTab.store (juce::jlimit (0, 8, tab));
             uiScale.store (juce::jlimit (0.75f, 2.0f, (float) state.getProperty ("ui_scale", 1.0f)));
+            hostTempo.animations.store ((bool) state.getProperty ("ui_animations", true));
             analyserMode.store (juce::jlimit (0, 3, (int) state.getProperty ("analyser_mode", 3)));
             analyserResolution.store (juce::jlimit (0, 3, (int) state.getProperty ("analyser_resolution", (int) SpectrumProcessor::High)));
             analyserSpeed.store (juce::jlimit (0, 4, (int) state.getProperty ("analyser_speed", (int) SpectrumProcessor::Fast)));

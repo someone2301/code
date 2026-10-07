@@ -1939,6 +1939,22 @@ int main (int argc, char** argv)
                        "hammer: at rest no lightning or particles; at 40 % " + juce::String (b1, 1) + " bolts and " + juce::String (p1, 0)
                        + " particles on average, full " + juce::String (b2, 1) + " bolts and " + juce::String (p2, 0) + " particles");
             }
+            {
+                // the ANIM switch: off stops the hammer lightning and is saved with the session
+                setParam (p, "mb1_thresh", -50.0f);
+                LightningSlider h (*p.apvts.getParameter ("mb1_thresh"), p.hostTempo, "Threshold", true);
+                h.setBounds (0, 0, 150, 180);
+                p.hostTempo.animations.store (false);
+                double now = juce::Time::getMillisecondCounterHiRes();
+                int bolts = 0;
+                for (int k = 0; k < 30; ++k) { now += 16.7; h.updateGlow (now); bolts += h.activeBolts() + h.activeParticles(); }
+                juce::MemoryBlock st;
+                p.getStateInformation (st);
+                KaminariVocalProcessor q;
+                q.setStateInformation (st.getData(), (int) st.getSize());
+                check (bolts == 0 && ! q.hostTempo.animations.load(), "Animations off: no hammer lightning, and the setting is saved with the session");
+                p.hostTempo.animations.store (true);
+            }
             // hammer close-up at rest, just past activation, half and full
             {
                 juce::Image sheet (juce::Image::ARGB, 4 * 300, 360, true);
