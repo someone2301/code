@@ -16,6 +16,10 @@ namespace kv
 
         void setHop (int samples) noexcept { hop = samples > 0 ? samples : 1; }
 
+        // Audio thread, before push(): the processor's own gain reduction for this block (dB). When given, the history
+        // stores it instead of the in / out peak ratio (a split-band de-esser barely changes the broadband peak).
+        void noteReduction (float db) noexcept { accGr = std::fmax (accGr, db); hasGr = true; }
+
         // Audio thread: feed matching input / output blocks.
         void push (const float* inL, const float* inR, const float* outL, const float* outR, int n) noexcept
         {
@@ -29,8 +33,9 @@ namespace kv
                     auto& e = data[(size_t) (w % (unsigned) N)];
                     e.in.store (accIn, std::memory_order_relaxed);
                     e.out.store (accOut, std::memory_order_relaxed);
-                    const float gr = accIn > 1e-6f ? 20.0f * std::log10 (accIn / std::fmax (accOut, 1e-9f)) : 0.0f;
+                    const float gr = hasGr ? accGr : (accIn > 1e-6f ? 20.0f * std::log10 (accIn / std::fmax (accOut, 1e-9f)) : 0.0f);
                     e.gr.store (gr, std::memory_order_relaxed);
+                    accGr = 0.0f;
                     writePos.store (w + 1, std::memory_order_release);
                     accIn = accOut = 0.0f;
                     count = 0;
@@ -53,7 +58,8 @@ namespace kv
         struct Slot { std::atomic<float> in { 0 }, out { 0 }, gr { 0 }; };
         std::array<Slot, (size_t) N> data {};
         std::atomic<unsigned> writePos { 0 };
-        float accIn = 0, accOut = 0;
+        float accIn = 0, accOut = 0, accGr = 0;
+        bool hasGr = false;
         int count = 0, hop = 128;
     };
 }

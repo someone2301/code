@@ -7,6 +7,8 @@
 // Kaminari Vocal: `inverted` maps a fuller hammer to a lower parameter value (thresholds, Retune Speed),
 // so pulling down always means more effect (DESIGN.md 6.5).
 #include <algorithm>
+#include <functional>
+#include <tuple>
 #include <vector>
 
 // Vertical slider drawn as a war hammer wrapped in lightning.
@@ -164,15 +166,34 @@ public:
             advanceAnimation (480.0);   // first paint (or a snapshot): start mid-animation, not empty
         if (enabled && I > 0.0f)
             paintAura (g, I, pulse);
+        else
+            auraOuter.clear();
         if (enabled)
+        {
             paintParticles (g, false);
+            paintBolts (g, false);   // behind the hammer
+        }
+
+        // glow around the filled part: grows as the hammer fills (the head keeps getting brighter as you pull further)
+        if (enabled && norm > 0.0f)
+        {
+            g.saveState();
+            g.reduceClipRegion (art.withBottom (fillY + 6.0f).toNearestInt().expanded (30, 30));
+            const float gl = 0.12f + 0.55f * norm * norm;
+            for (auto [w, a] : { std::pair { 16.0f, 0.10f }, { 9.0f, 0.22f }, { 4.0f, 0.45f } })
+            {
+                g.setColour (colours.bolt.withAlpha (juce::jmin (1.0f, a * gl * (0.85f + 0.3f * pulse))));
+                g.strokePath (body, juce::PathStrokeType (w * (0.6f + 0.6f * norm), juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+            }
+            g.restoreState();
+        }
 
         // steel body
         g.setGradientFill (juce::ColourGradient (colours.steelLight, art.getCentreX() - headWidth() * 0.3f, art.getY(),
                                                  colours.steelDark, art.getCentreX() + headWidth() * 0.5f, art.getY(), false));
         g.fillPath (body);
 
-        // colour fill from the top down to the value
+        // colour fill from the top down to the value, brightening as the hammer fills
         if (norm > 0.0f)
         {
             g.saveState();
@@ -182,6 +203,27 @@ public:
             fill.addColour (0.35, colours.bolt);
             g.setGradientFill (fill);
             g.fillRect (art.withBottom (fillY));
+            // bloom: the lit parts burn whiter the further the hammer is pulled
+            g.setColour (colours.core.withAlpha (0.05f + 0.42f * norm * norm));
+            g.fillRect (art.withBottom (fillY));
+            g.restoreState();
+        }
+
+        // 3D: cylindrical shading across the hammer (light from the upper left) and a specular streak on the head
+        {
+            g.saveState();
+            g.reduceClipRegion (body);
+            const auto hb = headBounds();
+            juce::ColourGradient shade (juce::Colours::white.withAlpha (0.22f), hb.getX(), 0.0f, juce::Colours::black.withAlpha (0.38f), hb.getRight(), 0.0f, false);
+            shade.addColour (0.3, juce::Colours::white.withAlpha (0.05f));
+            shade.addColour (0.55, juce::Colours::transparentBlack);
+            g.setGradientFill (shade);
+            g.fillRect (art);
+            g.setColour (juce::Colours::white.withAlpha (0.18f + 0.25f * norm));
+            g.fillRect (juce::Rectangle<float> (hb.getX() + hb.getWidth() * 0.18f, hb.getY() + 3.0f, juce::jmax (2.0f, hb.getWidth() * 0.06f), hb.getHeight() - 6.0f));
+            juce::ColourGradient top (juce::Colours::white.withAlpha (0.25f), 0.0f, hb.getY(), juce::Colours::transparentWhite, 0.0f, hb.getY() + hb.getHeight() * 0.25f, false);
+            g.setGradientFill (top);
+            g.fillRect (hb.withHeight (hb.getHeight() * 0.25f));
             g.restoreState();
         }
         g.setColour (colours.subText.withAlpha (0.7f));
@@ -201,7 +243,7 @@ public:
 
         if (enabled)
         {
-            paintBolts (g);
+            paintBolts (g, true);    // in front of the hammer
             paintParticles (g, true);
         }
 
@@ -442,14 +484,16 @@ private:
     //==================================================================================================================
     // Charged-up effect: aura, lightning and particles
 
-    enum Layer { Crawl, Branch, Wrap, Surge };
+    enum Layer { Crawl, Branch, Wrap, Ring, Surge };
 
     struct Bolt
     {
         juce::Path path;
+        std::function<void (juce::Path&)> regen;   // re-draws the bolt's jagged shape (it flickers between frames)
         double born = 0, life = 100;
         float width = 1.0f;
         int layer = Crawl;
+        bool front = true;                         // in front of the hammer, or behind it (dimmer, hidden by the body)
     };
 
     struct Particle
@@ -520,7 +564,8 @@ private:
 
     void spawnBolt (int layer, float I)
     {
-        if (bolts.size() >= 110) return;
+        if (bolts.size() >= 140) return;
+        if (layer == Ring) { spawnRing (I); return; }
         const auto a = artArea();
         const float reach = juce::jmax (a.getWidth(), a.getHeight());
         Bolt b;
@@ -546,8 +591,11 @@ private:
                     p = q;
                     ang = a0 + juce::MathConstants<float>::pi * randIn (0.4f, 0.6f) * (rand01() < 0.5f ? 1.0f : -1.0f);
                 }
-                addJagged (b.path, p, ang, reach * randIn (0.05f, 0.12f) * (0.7f + 0.6f * I), 3 + rng.nextInt (3), 2.2f, rand01() < 0.25f ? 1 : 0);
-                b.life = randIn (45.0f, 120.0f) * faster;
+                { const auto args = std::make_tuple (p, ang, reach * randIn (0.05f, 0.12f) * (0.7f + 0.6f * I), 3 + rng.nextInt (3), 2.2f, rand01() < 0.25f ? 1 : 0);
+                  b.regen = [this, args] (juce::Path& path) { path.clear(); std::apply ([this, &path] (auto... v) { addJagged (path, v...); }, args); };
+                  b.regen (b.path); }
+                b.life = randIn (35.0f, 90.0f) * faster;
+                b.front = rand01() < 0.65f;
                 b.width = randIn (0.7f, 1.15f);
                 break;
             }
@@ -559,17 +607,22 @@ private:
                 const bool fromLeft = rand01() < 0.5f;
                 const float span = box.getWidth() + randIn (14.0f, 30.0f) * (0.6f + 0.6f * I);
                 const juce::Point<float> p { fromLeft ? box.getX() - span * 0.2f : box.getRight() + span * 0.2f, randIn (box.getY(), box.getBottom()) };
-                addJagged (b.path, p, (fromLeft ? 0.0f : juce::MathConstants<float>::pi) + randIn (-0.35f, 0.35f), span * 1.25f,
+                { const auto args = std::make_tuple (p, (fromLeft ? 0.0f : juce::MathConstants<float>::pi) + randIn (-0.35f, 0.35f), span * 1.25f,
                            6 + rng.nextInt (4), 2.8f, 1);
-                b.life = randIn (70.0f, 160.0f) * faster;
+                  b.regen = [this, args] (juce::Path& path) { path.clear(); std::apply ([this, &path] (auto... v) { addJagged (path, v...); }, args); };
+                  b.regen (b.path); }
+                b.life = randIn (50.0f, 120.0f) * faster;
                 b.width = randIn (0.9f, 1.4f);
                 break;
             }
             case Branch:
             {
                 auto [p, ang] = pointOnHammer (false);
-                addJagged (b.path, p, ang, reach * randIn (0.14f, 0.28f) * (0.6f + 0.7f * I), 5 + rng.nextInt (4), 3.0f, 1 + (I > 0.5f ? 1 : 0));
-                b.life = randIn (110.0f, 240.0f) * faster;
+                { const auto args = std::make_tuple (p, ang, reach * randIn (0.14f, 0.28f) * (0.6f + 0.7f * I), 5 + rng.nextInt (4), 3.0f, 1 + (I > 0.5f ? 1 : 0));
+                  b.regen = [this, args] (juce::Path& path) { path.clear(); std::apply ([this, &path] (auto... v) { addJagged (path, v...); }, args); };
+                  b.regen (b.path); }
+                b.life = randIn (80.0f, 180.0f) * faster;
+                b.front = rand01() < 0.6f;
                 b.width = randIn (1.1f, 1.7f);
                 break;
             }
@@ -582,20 +635,62 @@ private:
                     const bool up = rand01() < 0.6f;
                     const juce::Point<float> p { a2.getCentreX() + randIn (-headBounds().getWidth() * 0.4f, headBounds().getWidth() * 0.4f),
                                                  up ? a2.getBottom() : a2.getY() };
-                    addJagged (b.path, p, (up ? -1.0f : 1.0f) * juce::MathConstants<float>::halfPi + randIn (-0.2f, 0.2f), a2.getHeight() * 1.05f,
+                    { const auto args = std::make_tuple (p, (up ? -1.0f : 1.0f) * juce::MathConstants<float>::halfPi + randIn (-0.2f, 0.2f), a2.getHeight() * 1.05f,
                                10 + rng.nextInt (5), 4.0f, 2);
+                  b.regen = [this, args] (juce::Path& path) { path.clear(); std::apply ([this, &path] (auto... v) { addJagged (path, v...); }, args); };
+                  b.regen (b.path); }
                 }
                 else
                 {
                     auto [p, ang] = pointOnHammer (rand01() < 0.6f);
-                    addJagged (b.path, p, ang, reach * randIn (0.32f, 0.55f) * (0.75f + 0.5f * I), 8 + rng.nextInt (5), 4.5f, 2);
+                    { const auto args = std::make_tuple (p, ang, reach * randIn (0.32f, 0.55f) * (0.75f + 0.5f * I), 8 + rng.nextInt (5), 4.5f, 2);
+                  b.regen = [this, args] (juce::Path& path) { path.clear(); std::apply ([this, &path] (auto... v) { addJagged (path, v...); }, args); };
+                  b.regen (b.path); }
                 }
-                b.life = randIn (180.0f, 380.0f) * faster;
+                b.life = randIn (140.0f, 300.0f) * faster;
                 b.width = randIn (1.5f, 2.2f);
                 break;
             }
         }
         bolts.push_back (std::move (b));
+    }
+
+    // A jagged ring of lightning orbiting the head or the grip, seen slightly from above: its far half is drawn behind the
+    // hammer and its near half in front, so it reads as wrapped around it.
+    void spawnRing (float I)
+    {
+        const auto a = artArea();
+        const auto head = headBounds();
+        const float y = rand01() < 0.5f ? randIn (head.getY() + 4.0f, head.getBottom() - 4.0f) : randIn (head.getBottom() + 6.0f, a.getBottom() - 6.0f);
+        const bool onHead = y < head.getBottom();
+        const float rx = (onHead ? head.getWidth() * 0.5f : gripBox().getWidth() * 0.5f) + randIn (5.0f, 12.0f) * (0.7f + 0.5f * I);
+        const float ry = rx * randIn (0.18f, 0.3f), tilt = randIn (-0.25f, 0.25f);
+        const juce::Point<float> c { a.getCentreX(), y };
+        const double born = animMs, life = randIn (60.0f, 140.0f) * (1.25f - 0.55f * I);
+        const float width = randIn (0.9f, 1.4f);
+        for (int half = 0; half < 2; ++half)
+        {
+            Bolt b;
+            b.layer = Ring;
+            b.born = born; b.life = life; b.width = width * (half == 0 ? 0.8f : 1.0f);
+            b.front = half == 1;
+            const float a0 = half == 0 ? juce::MathConstants<float>::pi : 0.0f;   // far half: upper arc on screen
+            b.regen = [this, c, rx, ry, tilt, a0] (juce::Path& path)
+            {
+                path.clear();
+                constexpr int steps = 16;
+                for (int k = 0; k <= steps; ++k)
+                {
+                    const float th = a0 + juce::MathConstants<float>::pi * (float) k / steps;
+                    const float jr = 1.0f + randIn (-0.12f, 0.12f);
+                    const float x = rx * jr * std::cos (th), yy = ry * jr * std::sin (th) + randIn (-1.5f, 1.5f);
+                    const juce::Point<float> pt { c.x + x * std::cos (tilt) - yy * std::sin (tilt), c.y + x * std::sin (tilt) + yy * std::cos (tilt) };
+                    if (k == 0) path.startNewSubPath (pt); else path.lineTo (pt);
+                }
+            };
+            b.regen (b.path);
+            bolts.push_back (std::move (b));
+        }
     }
 
     void spawnParticle (float I, bool wisp)
@@ -623,6 +718,8 @@ private:
         const float I = intensity();
 
         bolts.erase (std::remove_if (bolts.begin(), bolts.end(), [&] (const Bolt& b) { return animMs - b.born > b.life; }), bolts.end());
+        for (auto& b : bolts)   // the shapes dance from frame to frame
+            if (b.regen && rand01() < 0.45f) b.regen (b.path);
         for (auto& q : particles) q.pos += q.vel * dt;
         particles.erase (std::remove_if (particles.begin(), particles.end(), [&] (const Particle& q) { return animMs - q.born > q.life; }),
                          particles.end());
@@ -636,9 +733,10 @@ private:
             acc += rate * dt * randIn (0.4f, 1.6f);
             while (acc >= 1.0f) { acc -= 1.0f; make(); }
         };
-        emit (accCrawl,  24.0f + 230.0f * I,        [&] { spawnBolt (Crawl, I); });
-        emit (accWrap,   2.0f + 22.0f * I,          [&] { spawnBolt (Wrap, I); });
-        emit (accBranch, 2.0f + 36.0f * I * I,      [&] { spawnBolt (Branch, I); });
+        emit (accCrawl,  34.0f + 300.0f * I,        [&] { spawnBolt (Crawl, I); });
+        emit (accWrap,   3.0f + 28.0f * I,          [&] { spawnBolt (Wrap, I); });
+        emit (accRing,   2.0f + 22.0f * I,          [&] { spawnBolt (Ring, I); });
+        emit (accBranch, 3.0f + 44.0f * I * I,      [&] { spawnBolt (Branch, I); });
         emit (accSpark,  5.0f + 40.0f * I,          [&] { spawnParticle (I, false); });
         emit (accWisp,   1.5f + 9.0f * I,           [&] { spawnParticle (I, true); });
 
@@ -721,6 +819,7 @@ private:
         const float bright = juce::jlimit (0.0f, 1.0f, (0.4f + 0.55f * I) * (0.8f + 0.2f * pulse) + 0.35f * surge);
         const float tongue = 8.0f + 18.0f * I + 6.0f * surge;
         const juce::Path outer = auraLayer (6.0f + 6.0f * I, 26, tongue, t, 1);
+        auraOuter = outer;
         const juce::Path mid   = auraLayer (3.0f + 4.0f * I, 22, tongue * 0.7f, t * 1.3f, 2);
         const juce::Path core  = auraLayer (1.0f + 2.0f * I, 18, tongue * 0.45f, t * 1.7f, 3);
 
@@ -741,16 +840,23 @@ private:
         g.strokePath (core, st (0.8f));
     }
 
-    void paintBolts (juce::Graphics& g)
+    // frontLayer: bolts in front of the hammer (full strength) or behind it (dimmer and thinner; drawn before the body,
+    // which hides them). Both stay inside the aura.
+    void paintBolts (juce::Graphics& g, bool frontLayer)
     {
         const auto stroke = [] (float w) { return juce::PathStrokeType (w, juce::PathStrokeType::mitered, juce::PathStrokeType::rounded); };
+        g.saveState();
+        if (! auraOuter.isEmpty()) g.reduceClipRegion (auraOuter);
+        const float depth = frontLayer ? 1.0f : 0.5f;
         for (auto& b : bolts)
         {
+            if (b.front != frontLayer) continue;
             const float age = (float) ((animMs - b.born) / b.life);
             float alpha = std::sqrt (juce::jlimit (0.0f, 1.0f, 1.0f - age));
             alpha *= rand01() < 0.18f ? 0.25f : randIn (0.75f, 1.0f);   // flicker / strobe
+            alpha *= depth;
             if (alpha <= 0.02f) continue;
-            const float w = b.width * (b.layer == Surge ? 1.0f + 0.4f * surge : 1.0f);
+            const float w = b.width * (b.layer == Surge ? 1.0f + 0.4f * surge : 1.0f) * (frontLayer ? 1.0f : 0.75f);
             g.setColour (colours.bolt.withAlpha (0.14f * alpha));
             g.strokePath (b.path, stroke (w * 7.0f));
             g.setColour (colours.bolt.withAlpha (0.7f * alpha));
@@ -758,6 +864,7 @@ private:
             g.setColour (colours.core.withAlpha (alpha));
             g.strokePath (b.path, stroke (w * 0.9f));
         }
+        g.restoreState();
     }
 
     // front = sparks drawn over the hammer; behind = wisps drawn under it
@@ -796,7 +903,8 @@ private:
     std::vector<Particle> particles;
     juce::Random rng;
     double animMs = 0, nextSurgeMs = 0;
-    float surge = 0, accCrawl = 0, accWrap = 0, accBranch = 0, accSpark = 0, accWisp = 0;
+    float surge = 0, accCrawl = 0, accWrap = 0, accRing = 0, accBranch = 0, accSpark = 0, accWisp = 0;
+    juce::Path auraOuter;   // the aura's outline: lightning is kept inside it
 
     bool inverted = false;
     juce::RangedAudioParameter& param;

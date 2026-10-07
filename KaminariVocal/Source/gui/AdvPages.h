@@ -1484,7 +1484,8 @@ namespace kvui
                 grDb[(size_t) i] = juce::jmax (0.0f, h[(size_t) i].gr);
             }
             smooth (inDb); smooth (outDb); smooth (grDb);
-            for (int i = 0; i < N; ++i) outDb[(size_t) i] = std::min (outDb[(size_t) i], inDb[(size_t) i]);
+            // the removed part follows the de-esser's own reduction (a split-band cut barely moves the broadband peak)
+            for (int i = 0; i < N; ++i) outDb[(size_t) i] = std::max (floorDb, inDb[(size_t) i] - grDb[(size_t) i]);
             n = N;
             repaint();
         }

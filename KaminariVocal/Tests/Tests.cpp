@@ -1657,6 +1657,38 @@ int main (int argc, char** argv)
                 o.setPosition (0); o.truncate();
                 juce::PNGImageFormat().writeImageToStream (sheet, o);
             }
+            // Flanger on (vectorscope moving) and De-ess working on bursts of hiss
+            {
+                setParam (p, "fl_on", 1.0f);
+                ed->showTab (true, KaminariVocalEditor::TabFlanger);
+                for (int k = 0; k < 6; ++k) { render (p, 0.1, vocal); ed->flangerPanel().scope.advance(); }
+                save ("adv_flanger_on.png");
+                setParam (p, "fl_on", 0.0f);
+                setParam (p, "ds_on", 1.0f); setParam (p, "ds_thresh", -40.0f); setParam (p, "ds_range", 12.0f);
+                ed->showTab (true, KaminariVocalEditor::TabDeEss);
+                juce::Random rnd (7);
+                auto sibilant = [&rnd] (int, long n)
+                {
+                    const double t = (double) n / sr;
+                    const float voice = 0.2f * (float) std::sin (2.0 * kv::pi * 220.0 * t);
+                    const bool ess = std::fmod (t, 0.8) > 0.55;
+                    float hiss = ess ? 0.25f * (rnd.nextFloat() * 2.0f - 1.0f) : 0.0f;
+                    return voice + hiss;
+                };
+                float maxGr = 0;
+                for (int k = 0; k < 12; ++k)
+                {
+                    render (p, 0.5, sibilant, [&] (int) { maxGr = std::max (maxGr, p.moduleGr[KaminariVocalProcessor::ModDeEss].load()); });
+                    juce::MessageManager::getInstance()->runDispatchLoopUntil (20);
+                }
+                save ("adv_deess_active.png");
+                std::array<kv::LevelHistory<KaminariVocalProcessor::deessHistorySize>::Entry, (size_t) KaminariVocalProcessor::deessHistorySize> h;
+                p.deessHistory.read (h);
+                float shown = 0;
+                for (auto& e : h) shown = std::max (shown, e.gr);
+                check (maxGr > 3.0f && shown > 0.5f * maxGr, "De-ess display shows the de-esser's own reduction on hiss bursts (up to "
+                       + juce::String (shown, 1) + " dB; the de-esser reached " + juce::String (maxGr, 1) + " dB)");
+            }
             // Reverb return EQ and Delay ducking / routing views
             setParam (p, "rv_eq1_used", 1.0f); setParam (p, "rv_eq1_type", (float) kv::LowCut); setParam (p, "rv_eq1_freq", 180.0f);
             setParam (p, "rv_eq2_used", 1.0f); setParam (p, "rv_eq2_freq", 450.0f); setParam (p, "rv_eq2_gain", -4.0f);

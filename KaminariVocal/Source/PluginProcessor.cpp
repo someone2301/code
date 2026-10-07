@@ -332,6 +332,7 @@ void KaminariVocalProcessor::processModules (float* l, float* r, int n)
         d.lookaheadSamples *= factor;
         return d;
     }));
+    deessHistory.noteReduction (moduleOn[ModDeEss] ? moduleGr[ModDeEss].load() : 0.0f);
     deessHistory.push (dryCopy.getReadPointer (0), dryCopy.getReadPointer (1), l, r, n);
     crossfaded (ModResonance, [&]
     {
