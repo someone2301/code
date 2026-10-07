@@ -25,7 +25,8 @@
 // Layouts: mono -> mono, mono -> stereo, stereo -> stereo. A mono input is processed as dual mono, so the
 // sends' stereo returns stay stereo on a mono-in/stereo-out track.
 class KaminariVocalProcessor : public juce::AudioProcessor,
-                               private juce::AsyncUpdater
+                               private juce::AsyncUpdater,
+                               private juce::AudioProcessorParameter::Listener
 {
 public:
     enum SendIndex { Reverb, Delay, Widener, numSends };
@@ -41,7 +42,7 @@ public:
     static constexpr int engineVersion = 1;
 
     KaminariVocalProcessor();
-    ~KaminariVocalProcessor() override { cancelPendingUpdate(); }
+    ~KaminariVocalProcessor() override;
 
     void prepareToPlay (double sampleRate, int samplesPerBlock) override;
     void releaseResources() override {}
@@ -159,6 +160,11 @@ public:
 private:
     using Raw = std::atomic<float>*;
     void handleAsyncUpdate() override { setLatencySamples (pendingLatency.load()); }
+    // Any parameter change marks the settings for re-reading on the next block (reading them all every block
+    // costs more than most modules at small buffer sizes).
+    void parameterValueChanged (int, float) override { paramsDirty.store (true); }
+    void parameterGestureChanged (int, bool) override {}
+    void readAllSettings (double bpm);
     void processModules (float* l, float* r, int n);
     void readModuleSettings();
 
@@ -201,6 +207,14 @@ private:
     kv::WidenerSettings readWidener() const;
     kv::FlangerSettings readFlanger (double bpm) const;
     kv::FlangerSettings flSettings;
+    kv::ReverbSettings rvSettings;
+    kv::DelaySettings dlSettings;
+    kv::WidenerSettings wdSettings;
+    kv::DuckSettings duckSettings[2];
+    std::array<int, 3> feedTo {}, sendOrder {};
+    std::array<float, 3> feedAmt {};
+    std::atomic<bool> paramsDirty { true };
+    double settingsBpm = -1.0;
 
     struct SendPtrs { Raw on, level, tap; };
     std::array<SendPtrs, numSends> sendPtrs;

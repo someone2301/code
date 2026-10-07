@@ -225,6 +225,24 @@ int main (int argc, char** argv)
             for (auto* id : { "tn_on", "eq_on", "mb_on", "lv_on", "fl_on", "dt_on", "ds_on", "rs_on" }) setParam (p, id, 1.0f);
             for (int k = 0; k < numSends; ++k) { setParam (p, sendOn[k], 1.0f); setParam (p, sendLevel[k], -10.0f); }
         };
+        auto allOff = [] (KaminariVocalProcessor& p) { neutral (p); for (int k = 0; k < numSends; ++k) setParam (p, sendOn[k], 0.0f); };
+        runDsp ("every module and send off (base cost)", allOff);
+        for (auto [label, id] : { std::pair { "only Tune (Tracking)", "tn_on" }, { "only EQ", "eq_on" }, { "only Multiband", "mb_on" },
+                                  { "only Compression", "lv_on" }, { "only Flanger", "fl_on" }, { "only Distortion (2x OS)", "dt_on" },
+                                  { "only De-ess", "ds_on" }, { "only Resonance", "rs_on" } })
+            runDsp (label, [id = id, allOff] (KaminariVocalProcessor& p) { p.presets.loadChainPreset ("Pop Lead"); allOff (p); setParam (p, id, 1.0f); });
+        for (int k = 0; k < numSends; ++k)
+            runDsp ((juce::String ("only the ") + sendName[k] + " send").toRawUTF8(), [k, allOff] (KaminariVocalProcessor& p)
+            { p.presets.loadChainPreset ("Pop Lead"); allOff (p); setParam (p, sendOn[k], 1.0f); setParam (p, sendLevel[k], -10.0f); });
+        auto typical = [allOff] (KaminariVocalProcessor& p)
+        {
+            p.presets.loadChainPreset ("Pop Lead");
+            allOff (p);
+            for (auto* id : { "tn_on", "eq_on", "lv_on", "ds_on" }) setParam (p, id, 1.0f);
+        };
+        runDsp ("typical: Tune, EQ, Compression, De-ess", typical);
+        runDsp ("typical + Reverb and Delay sends", [typical] (KaminariVocalProcessor& p)
+        { typical (p); for (int k = 0; k < 2; ++k) { setParam (p, sendOn[k], 1.0f); setParam (p, sendLevel[k], -10.0f); } });
         runDsp ("default session", [] (KaminariVocalProcessor&) {});
         runDsp ("Tune only, Tracking", [] (KaminariVocalProcessor& p) { neutral (p); setParam (p, "tn_on", 1.0f); });
         runDsp ("Tune only, High quality (Deep)", [] (KaminariVocalProcessor& p) { neutral (p); setParam (p, "tn_on", 1.0f); setParam (p, "tn_quality", 1.0f); setParam (p, "tn_range", 3.0f); });

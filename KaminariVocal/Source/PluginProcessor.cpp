@@ -13,8 +13,18 @@ KaminariVocalProcessor::KaminariVocalProcessor()
     sendPtrs[Delay]   = { raw (kvid::dlOn), raw (kvid::dlSend), raw (kvid::dlTap) };
     sendPtrs[Widener] = { raw (kvid::wdOn), raw (kvid::wdSend), raw (kvid::wdTap) };
 
+    for (auto* prm : getParameters())
+        prm->addListener (this);
+
     // A new instance starts on the "Default" chain preset (a saved session replaces it in setStateInformation).
     presets.loadChainPreset ("Default");
+}
+
+KaminariVocalProcessor::~KaminariVocalProcessor()
+{
+    cancelPendingUpdate();
+    for (auto* prm : getParameters())
+        prm->removeListener (this);
 }
 
 bool KaminariVocalProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
@@ -88,6 +98,7 @@ void KaminariVocalProcessor::prepareToPlay (double sampleRate, int samplesPerBlo
         returnPeak[(size_t) s].store (0.0f);
         returnRms[(size_t) s].store (0.0f);
     }
+    paramsDirty.store (true);   // settings that depend on the sample rate are read again on the first block
     // Tune's fixed delay is always reported (also with Tune off); the sends add none.
     pendingLatency.store (computeLatency());
     setLatencySamples (pendingLatency.load());
@@ -470,6 +481,60 @@ kv::WidenerSettings KaminariVocalProcessor::readWidener() const
     return s;
 }
 
+void KaminariVocalProcessor::readAllSettings (double bpm)
+{
+    settingsBpm = bpm;
+    readModuleSettings();
+    const int latencyNow = computeLatency();
+    if (latencyNow != pendingLatency.load())
+    {
+        pendingLatency.store (latencyNow);
+        triggerAsyncUpdate();   // hosts expect setLatencySamples from the message thread
+    }
+    rvSettings = readReverb();
+    dlSettings = readDelay (bpm);
+    wdSettings = readWidener();
+    readEqBands ("rv_eq", retEqSettings[0]);
+    readEqBands ("dl_eq", retEqSettings[1]);
+    duckSettings[0] = readDuck (0);
+    duckSettings[1] = readDuck (1);
+    // Routing between the sends: each send may feed one other send. A feed that would close a loop is dropped
+    // (checked in the order Reverb, Delay, Widener), and the sends run so that every source comes before its target.
+    feedTo.fill (-1);
+    feedAmt.fill (0.0f);
+    {
+        static const char* ids[numSends] = { "fx_rv_feed", "fx_dl_feed", "fx_wd_feed" };
+        static const char* amts[numSends] = { "fx_rv_feed_amt", "fx_dl_feed_amt", "fx_wd_feed_amt" };
+        for (int s = 0; s < numSends; ++s)
+        {
+            const int choice = juce::roundToInt (raw (ids[s])->load());   // 0 Off, then the other sends in index order
+            const int target = choice <= 0 ? -1 : (choice - 1 >= s ? choice : choice - 1);
+            feedAmt[(size_t) s] = raw (amts[s])->load() / 100.0f;
+            bool loops = false;
+            for (int t = target, steps = 0; t >= 0 && steps < numSends; t = feedTo[(size_t) t], ++steps)
+                if (t == s) loops = true;
+            feedBlocked[(size_t) s].store (target >= 0 && loops);
+            if (target >= 0 && ! loops) feedTo[(size_t) s] = target;
+        }
+    }
+    {
+        std::array<bool, numSends> placed {};
+        int k = 0;
+        while (k < numSends)
+            for (int s = 0; s < numSends; ++s)
+            {
+                if (placed[(size_t) s]) continue;
+                bool ready = true;   // every send feeding s is placed already
+                for (int src = 0; src < numSends; ++src)
+                    if (! placed[(size_t) src] && feedTo[(size_t) src] == s) ready = false;
+                if (ready) { placed[(size_t) s] = true; sendOrder[(size_t) k++] = s; }
+            }
+    }
+    flSettings = readFlanger (bpm);
+    inGainSmooth.setTargetValue (juce::Decibels::decibelsToGain (raw (kvid::inGain)->load()));
+    outGainSmooth.setTargetValue (juce::Decibels::decibelsToGain (raw (kvid::outGain)->load()));
+}
+
 void KaminariVocalProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer&)
 {
     juce::ScopedNoDenormals noDenormals;
@@ -489,23 +554,13 @@ void KaminariVocalProcessor::processBlock (juce::AudioBuffer<float>& buffer, juc
     if (chs == 0 || total == 0)
         return;
 
-    readModuleSettings();
-    const int latencyNow = computeLatency();
-    if (latencyNow != pendingLatency.load())
-    {
-        pendingLatency.store (latencyNow);
-        triggerAsyncUpdate();   // hosts expect setLatencySamples from the message thread
-    }
+    if (paramsDirty.exchange (false) || std::abs (bpm - settingsBpm) > 1.0e-9)
+        readAllSettings (bpm);
 
     inPeak.store (buffer.getMagnitude (0, total));
     for (int c = 0; c < 2; ++c)
         inPeakCh[(size_t) c].store (buffer.getMagnitude (juce::jmin (c, chs - 1), 0, total));
 
-    const auto rvSettings = readReverb();
-    const auto dlSettings = readDelay (bpm);
-    const auto wdSettings = readWidener();
-    readEqBands ("rv_eq", retEqSettings[0]);
-    readEqBands ("dl_eq", retEqSettings[1]);
     int retSolo[2];
     bool retEqActive[2];
     for (int k = 0; k < 2; ++k)
@@ -516,45 +571,9 @@ void KaminariVocalProcessor::processBlock (juce::AudioBuffer<float>& buffer, juc
         for (auto& b : retEqSettings[k]) retEqActive[k] = retEqActive[k] || (b.used && b.on);
         if (retSolo[k] >= 0) setSoloFilter (retSoloBp[k], retEqSettings[k][retSolo[k]], sampleRateHz);
     }
-    const kv::DuckSettings duck[2] = { readDuck (0), readDuck (1) };
-    // Routing between the sends: each send may feed one other send. A feed that would close a loop is dropped
-    // (checked in the order Reverb, Delay, Widener), and the sends run so that every source comes before its target.
-    std::array<int, numSends> feedTo;
-    feedTo.fill (-1);
-    std::array<float, numSends> feedAmt {};
-    {
-        static const char* ids[numSends] = { "fx_rv_feed", "fx_dl_feed", "fx_wd_feed" };
-        static const char* amts[numSends] = { "fx_rv_feed_amt", "fx_dl_feed_amt", "fx_wd_feed_amt" };
-        for (int s = 0; s < numSends; ++s)
-        {
-            const int choice = juce::roundToInt (raw (ids[s])->load());   // 0 Off, then the other sends in index order
-            const int target = choice <= 0 ? -1 : (choice - 1 >= s ? choice : choice - 1);
-            feedAmt[(size_t) s] = raw (amts[s])->load() / 100.0f;
-            bool loops = false;
-            for (int t = target, steps = 0; t >= 0 && steps < numSends; t = feedTo[(size_t) t], ++steps)
-                if (t == s) loops = true;
-            feedBlocked[(size_t) s].store (target >= 0 && loops);
-            if (target >= 0 && ! loops) feedTo[(size_t) s] = target;
-        }
-    }
-    std::array<int, numSends> order {};
-    {
-        std::array<bool, numSends> placed {};
-        int k = 0;
-        while (k < numSends)
-            for (int s = 0; s < numSends; ++s)
-            {
-                if (placed[(size_t) s]) continue;
-                bool ready = true;   // every send feeding s is placed already
-                for (int src = 0; src < numSends; ++src)
-                    if (! placed[(size_t) src] && feedTo[(size_t) src] == s) ready = false;
-                if (ready) { placed[(size_t) s] = true; order[(size_t) k++] = s; }
-            }
-    }
+    const auto& duck = duckSettings;
+    const auto& order = sendOrder;
     std::array<float, 2> duckMax {};
-    flSettings = readFlanger (bpm);
-    inGainSmooth.setTargetValue (juce::Decibels::decibelsToGain (raw (kvid::inGain)->load()));
-    outGainSmooth.setTargetValue (juce::Decibels::decibelsToGain (raw (kvid::outGain)->load()));
 
     std::array<bool, numSends> preFader {};
     for (int s = 0; s < numSends; ++s)
@@ -768,6 +787,7 @@ void KaminariVocalProcessor::selectAB (int slot)
     if (abState[slot].isValid())
         apvts.replaceState (abState[slot].createCopy());
     abSlot = slot;
+    paramsDirty.store (true);
 }
 
 void KaminariVocalProcessor::copyAToB()
@@ -821,6 +841,7 @@ void KaminariVocalProcessor::setStateInformation (const void* data, int sizeInBy
             analyserSpeed.store (juce::jlimit (0, 4, (int) state.getProperty ("analyser_speed", (int) SpectrumProcessor::Fast)));
             apvts.replaceState (state);
             presets.readState (state);
+            paramsDirty.store (true);
         }
 }
 
