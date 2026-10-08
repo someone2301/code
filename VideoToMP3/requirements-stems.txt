@@ -1,0 +1,3 @@
+# Optional: stem splitting. Install CPU-only PyTorch first (see README).
+demucs>=4.1.0
+numpy

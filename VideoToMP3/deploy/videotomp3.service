@@ -8,6 +8,9 @@ User=videotomp3
 Group=videotomp3
 WorkingDirectory=/opt/videotomp3
 EnvironmentFile=/etc/videotomp3.env
+# Where Demucs stores its downloaded models
+Environment=TORCH_HOME=/var/lib/videotomp3/models/torch
+Environment=HF_HOME=/var/lib/videotomp3/models/hf
 ExecStart=/opt/videotomp3/.venv/bin/gunicorn -w 1 --threads 8 --timeout 600 -b 127.0.0.1:8000 web.app:app
 Restart=on-failure
 StateDirectory=videotomp3

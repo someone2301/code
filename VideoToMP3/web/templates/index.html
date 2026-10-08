@@ -1,10 +1,19 @@
 {% extends "base.html" %}
 {% block content %}
 <h1>VideoToMP3</h1>
-<p class="sub">Paste a video link to get an MP3. Max {{ max_min }} minutes per video.</p>
+<p class="sub">Paste a video link to get an MP3{% if stems_enabled %} or split it into stems{% endif %}.</p>
 <form id="form">
   <label for="url">Video link</label>
   <input id="url" type="url" placeholder="https://www.youtube.com/watch?v=..." required>
+  {% if stems_enabled %}
+  <label for="mode">Output</label>
+  <select id="mode">
+    <option value="mp3" selected>MP3 (max {{ max_min }} min)</option>
+    <option value="stems2">Stems: vocals + instrumental (max {{ stem_max_min }} min)</option>
+    <option value="stems4">Stems: vocals, drums, bass, other (max {{ stem_max_min }} min)</option>
+  </select>
+  {% endif %}
+  <div id="mp3-opts">
   <label for="quality">Quality</label>
   <select id="quality">
     <option value="128">128 kbps (smaller file)</option>
@@ -12,6 +21,18 @@
     <option value="256">256 kbps</option>
     <option value="320">320 kbps (best)</option>
   </select>
+  </div>
+  {% if stems_enabled %}
+  <div id="stem-opts" class="hidden">
+    <label for="format">Stem format</label>
+    <select id="format">
+      <option value="mp3" selected>MP3 320 kbps (smaller)</option>
+      <option value="wav">WAV (lossless, about 40 MB per stem)</option>
+    </select>
+    <p class="note">Stem splitting takes several minutes per song and runs one song at a time.
+      Your download is a ZIP of the stems.</p>
+  </div>
+  {% endif %}
   <button id="go" type="submit">Convert</button>
 </form>
 
@@ -30,17 +51,29 @@
 const $ = id => document.getElementById(id);
 const form = $("form"), go = $("go"), box = $("progress"), fill = $("fill"), msg = $("msg"), dl = $("dl");
 
+const mode = $("mode");
+function selectedMode() { return mode ? mode.value : "mp3"; }
+if (mode) mode.addEventListener("change", () => {
+  const stems = selectedMode() !== "mp3";
+  $("mp3-opts").classList.toggle("hidden", stems);
+  $("stem-opts").classList.toggle("hidden", !stems);
+});
+
+function fmtTime(sec) { const m = Math.floor(sec / 60), s = sec % 60; return m ? m + "m " + s + "s" : s + "s"; }
+let started = 0;
+
 function show(text, cls) { msg.textContent = text; msg.className = "msg " + (cls || ""); }
 
 form.addEventListener("submit", async e => {
   e.preventDefault();
   go.disabled = true; go.textContent = "Working...";
   box.classList.remove("hidden"); dl.classList.add("hidden");
-  fill.style.width = "0"; show("Starting...");
+  fill.style.width = "0"; show("Starting..."); started = Date.now();
   try {
     const r = await fetch("/api/convert", {
       method: "POST", headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({url: $("url").value, quality: $("quality").value})
+      body: JSON.stringify({url: $("url").value, quality: $("quality").value,
+                            mode: selectedMode(), format: $("format") ? $("format").value : "mp3"})
     });
     if (r.status === 401) { location.reload(); return; }
     const data = await r.json();
@@ -56,13 +89,22 @@ async function poll(id) {
     const j = await r.json();
     if (j.status === "error") return fail(j.error || "Conversion failed");
     if (j.status === "done") {
-      fill.style.width = "100%"; show("Ready: " + j.name, "ok");
+      fill.style.width = "100%";
+      show("Ready: " + j.name + (j.stems ? " (" + j.stems.join(", ") + ")" : ""), "ok");
+      dl.textContent = j.name.endsWith(".zip") ? "Download stems (ZIP)" : "Download MP3";
       dl.href = "/api/file/" + id; dl.classList.remove("hidden");
       return reset();
     }
     fill.style.width = (j.progress || 0) + "%";
-    show(j.status === "converting" ? "Converting to MP3..." :
-         j.status === "queued" ? "Waiting in queue..." : "Downloading... " + (j.progress || 0) + "%");
+    const elapsed = " · " + fmtTime(Math.round((Date.now() - started) / 1000));
+    const text = {
+      queued: j.queue_position ? "Waiting in queue (position " + j.queue_position + ")" : "Waiting in queue",
+      downloading: "Downloading... " + (j.progress || 0) + "%",
+      converting: "Converting audio...",
+      separating: "Splitting stems... " + (j.progress || 0) + "%",
+      packaging: "Packaging ZIP...",
+    }[j.status] || j.status;
+    show(text + elapsed);
     setTimeout(() => poll(id), 1000);
   } catch (err) { fail(err.message); }
 }

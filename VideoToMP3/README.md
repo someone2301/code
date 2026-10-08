@@ -148,10 +148,56 @@ Then open `https://mp3.yourdomain.com`.
 Recommended: add **Cloudflare Access** (Zero Trust > Access > Applications)
 in front of the hostname so only emails you approve can reach the site.
 
+## Stem splitting (optional)
+
+Adds two options to the site: **vocals + instrumental** and **vocals, drums,
+bass, other**. Uses [Demucs](https://github.com/adefossez/demucs) on your own
+server. Visitors get a ZIP of MP3 320 kbps or WAV stems.
+
+```sh
+# 1. CPU-only PyTorch (about 1 GB; the default build adds ~4 GB of GPU libraries)
+sudo /opt/videotomp3/.venv/bin/pip install torch torchaudio \
+    --index-url https://download.pytorch.org/whl/cpu
+# 2. Demucs
+sudo /opt/videotomp3/.venv/bin/pip install -r /opt/videotomp3/requirements-stems.txt
+sudo chown -R videotomp3:videotomp3 /opt/videotomp3
+
+# 3. Download the model once (about 80 MB) into the service's model folder
+sudo mkdir -p /var/lib/videotomp3/models && sudo chown -R videotomp3:videotomp3 /var/lib/videotomp3
+sudo -u videotomp3 env TORCH_HOME=/var/lib/videotomp3/models/torch HF_HOME=/var/lib/videotomp3/models/hf \
+    /opt/videotomp3/.venv/bin/python -c "from demucs.pretrained import get_model; get_model('htdemucs')"
+
+# 4. Restart; the log should say "Stem splitting: on (htdemucs)"
+sudo systemctl restart videotomp3
+journalctl -u videotomp3 -n 20
+```
+
+How it behaves:
+
+- One song is split at a time; others wait in a queue (max 5) and see their position.
+- Expect several minutes per song on a 4-core CPU without a GPU.
+- Songs longer than `VTM_STEM_MAX_DURATION_MIN` (default 10) are refused.
+- Each visitor can split `VTM_STEM_JOBS_PER_HOUR` songs per hour (default 5).
+- Demucs runs at low priority (`nice 10`) so the site stays responsive.
+- `VTM_STEM_MODEL=htdemucs_ft` gives slightly better quality but is about 4x slower.
+
+## Cleanup cron job (backup)
+
+The app deletes files 30 minutes after a job finishes. This cron job also
+removes anything left behind after a crash or restart:
+
+```sh
+sudo cp /opt/videotomp3/deploy/videotomp3-cleanup.cron /etc/cron.d/videotomp3-cleanup
+```
+
+Running stem jobs keep their folder's timestamp fresh, so the cron job never
+deletes a job that is still being processed.
+
 ## Updating
 
 ```sh
-sudo -u videotomp3 /opt/videotomp3/.venv/bin/pip install -U yt-dlp
+sudo /opt/videotomp3/.venv/bin/pip install -U yt-dlp
+sudo chown -R videotomp3:videotomp3 /opt/videotomp3
 sudo systemctl restart videotomp3
 ```
 
