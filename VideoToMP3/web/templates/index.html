@@ -9,9 +9,9 @@
   <label for="mode">Output</label>
   <select id="mode">
     <option value="mp3" selected>MP3 (max {{ max_min }} min)</option>
-    <option value="basic">Stems: Basic, 4 stems (max {{ stem_max_min }} min)</option>
+    <option value="basic">Stems: Basic (4 stems, max {{ stem_max_min }} min)</option>
     {% if options %}
-    <option value="advanced">Stems: Advanced, 4 stems + detailed splits (max {{ stem_max_min }} min)</option>
+    <option value="advanced">Stems: Advanced (4 + detailed, max {{ stem_max_min }} min)</option>
     {% endif %}
   </select>
   {% endif %}
@@ -112,7 +112,7 @@ function selectedOptions() {
 function plannedFiles() {
   const opts = selectedOptions();
   let names = [...PLAN.basic];
-  for (const key of Object.keys(PLAN.options)) if (opts.includes(key)) names = names.concat(PLAN.options[key].files);
+  for (const o of PLAN.options) if (opts.includes(o.key)) names = names.concat(o.files);
   return names;
 }
 function updatePlan() {

@@ -220,9 +220,9 @@ def cleanup_loop() -> None:
 def index():
     if not authorized():
         return render_template("login.html", error=None)
+    # A list, not a dict: tojson sorts dict keys, and the preview must match the ZIP order.
     plan = {"basic": stems.BASIC_STEMS,
-            "options": {k: {"label": stems.OPTIONS[k][0],
-                            "files": [z for _, z in stems.OPTIONS[k][1]]} for k in AVAILABLE_OPTIONS}}
+            "options": [{"key": k, "files": [z for _, z in stems.OPTIONS[k][1]]} for k in AVAILABLE_OPTIONS]}
     return render_template("index.html", max_min=MAX_DURATION_MIN, ttl_min=FILE_TTL_SEC // 60,
                            stems_enabled=STEMS_ENABLED, stem_max_min=STEM_MAX_DURATION_MIN,
                            options=AVAILABLE_OPTIONS, plan=plan)
