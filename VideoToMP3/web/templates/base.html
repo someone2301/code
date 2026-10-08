@@ -37,6 +37,19 @@
   .hidden { display:none; }
   .check { display:flex; gap:10px; align-items:flex-start; font-weight:400; margin-top:14px; }
   .check input { width:auto; margin-top:4px; }
+  .info { margin-top:14px; padding:10px 12px; border:1px solid var(--border); border-radius:8px;
+          font-size:.9rem; background:var(--bg); }
+  fieldset { border:1px solid var(--border); border-radius:8px; margin:14px 0 0; padding:4px 12px 10px; }
+  legend { font-weight:600; font-size:.9rem; padding:0 4px; }
+  .check span { display:block; }
+  .check small { display:block; color:var(--muted); font-size:.82rem; margin-top:2px; }
+  .check em { color:var(--muted); font-style:normal; font-size:.85rem; }
+  .files { margin-top:14px; font-size:.88rem; }
+  .files-head { font-weight:600; }
+  .files ul, .steps { margin:6px 0 0; padding-left:18px; }
+  .files li { word-break:break-word; color:var(--muted); }
+  .steps { list-style:none; padding-left:0; font-size:.92rem; }
+  .step.done { color:var(--ok); } .step.failed { color:var(--err); } .step.pending { color:var(--muted); }
   .row { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
   .note { margin:10px 0 0; font-size:.85rem; color:var(--muted); }
   footer { margin-top:22px; font-size:.8rem; color:var(--muted); display:flex;

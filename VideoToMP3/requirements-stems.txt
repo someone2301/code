@@ -1,3 +1,4 @@
-# Optional: stem splitting. Install CPU-only PyTorch first (see README).
+# Stem splitting (Basic). Install CPU-only PyTorch first (see README).
 demucs>=4.1.0
 numpy
+soundfile

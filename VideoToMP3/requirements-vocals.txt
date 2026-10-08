@@ -1,0 +1,2 @@
+# Optional lead/background vocal split. Install into its OWN virtualenv (see README).
+audio-separator[cpu]>=0.47.0

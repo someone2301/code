@@ -9,10 +9,9 @@
   <label for="mode">Output</label>
   <select id="mode">
     <option value="mp3" selected>MP3 (max {{ max_min }} min)</option>
-    <option value="stems2">Stems: vocals + instrumental (max {{ stem_max_min }} min)</option>
-    <option value="stems4">Stems: vocals, drums, bass, other (max {{ stem_max_min }} min)</option>
-    {% if stems6_enabled %}
-    <option value="stems6">Stems: 6 (adds guitar + piano, experimental)</option>
+    <option value="basic">Stems: Basic, 4 stems (max {{ stem_max_min }} min)</option>
+    {% if options %}
+    <option value="advanced">Stems: Advanced, 4 stems + detailed splits (max {{ stem_max_min }} min)</option>
     {% endif %}
   </select>
   {% endif %}
@@ -27,6 +26,36 @@
   </div>
   {% if stems_enabled %}
   <div id="stem-opts" class="hidden">
+    <div id="basic-info" class="info">
+      <strong>Basic:</strong> vocals, drums, bass, other. Faster and simpler, with fewer artifacts.
+      Guitar, keys, synths and everything else stay together in "other".
+    </div>
+    <div id="advanced-info" class="info hidden">
+      <strong>Advanced:</strong> the same 4 stems, plus the detailed parts you pick below. More parts to
+      work with, but slower and more likely to have bleed or artifacts, especially where instruments
+      overlap. The 4 main stems are always included.
+    </div>
+    <fieldset id="adv-opts" class="hidden">
+      <legend>Detailed splits</legend>
+      {% if "drums" in options %}
+      <label class="check"><input type="checkbox" name="opt" value="drums">
+        <span>Drum kit parts: kick, snare, toms, hi-hat, cymbals
+        <small>The full drum stem is kept. Expect some bleed between hi-hat and cymbals, and snare and toms.</small></span></label>
+      {% endif %}
+      {% if "vocals" in options %}
+      <label class="check"><input type="checkbox" name="opt" value="vocals">
+        <span>Lead / background vocals <em>(experimental)</em>
+        <small>The full vocal stem is kept. Works best with one clear lead; doubled or unison
+          backing vocals usually stay in the lead. Adds the most time of any option.</small></span></label>
+      {% endif %}
+      {% if "guitar_piano" in options %}
+      <label class="check"><input type="checkbox" name="opt" value="guitar_piano">
+        <span>Guitar and piano <em>(experimental)</em>
+        <small>Extra files from a separate model. They overlap with "other" (nothing is removed from
+          it) and piano often has bleed and artifacts.</small></span></label>
+      {% endif %}
+      <p class="note">No synth stem: no model tested here separates synths reliably, so synths stay in "other".</p>
+    </fieldset>
     <div class="row">
       <div>
         <label for="rate">Sample rate</label>
@@ -46,14 +75,11 @@
         </select>
       </div>
     </div>
-    {% if drums_enabled %}
-    <label class="check hidden" id="drums-row">
-      <input type="checkbox" id="drums">
-      Also split the drum kit into kick, snare, toms, hi-hat and cymbals (slower)
-    </label>
-    {% endif %}
-    <p class="note">Stems are WAV files in a ZIP. <span id="size"></span>
-      Splitting takes several minutes per song and runs one song at a time.</p>
+    <div class="files">
+      <div class="files-head">Your ZIP will contain <span id="file-count"></span>:</div>
+      <ul id="file-list"></ul>
+      <p class="note"><span id="size"></span> Runs one song at a time; expect several minutes per song.</p>
+    </div>
   </div>
   {% endif %}
   <button id="go" type="submit">Convert</button>
@@ -61,7 +87,9 @@
 
 <div id="progress" class="hidden">
   <div class="bar"><div id="fill"></div></div>
+  <ul id="steps" class="steps hidden"></ul>
   <div id="msg" class="msg"></div>
+  <div id="warn" class="msg err hidden"></div>
   <a id="dl" class="btn hidden" href="#">Download MP3</a>
 </div>
 
@@ -71,52 +99,63 @@
 </footer>
 
 <script>
+const PLAN = {{ plan | tojson }};
 const $ = id => document.getElementById(id);
 const form = $("form"), go = $("go"), box = $("progress"), fill = $("fill"), msg = $("msg"), dl = $("dl");
-
 const mode = $("mode");
+
 function selectedMode() { return mode ? mode.value : "mp3"; }
-function updateSize() {
-  if (!$("size")) return;
-  const drumsOn = $("drums") && !$("drums-row").classList.contains("hidden") && $("drums").checked;
-  const count = ({stems2: 2, stems4: 4, stems6: 6}[selectedMode()] || 4) + (drumsOn ? 5 : 0);
+function selectedOptions() {
+  if (selectedMode() !== "advanced") return [];
+  return [...document.querySelectorAll('input[name="opt"]:checked')].map(i => i.value);
+}
+function plannedFiles() {
+  const opts = selectedOptions();
+  let names = [...PLAN.basic];
+  for (const key of Object.keys(PLAN.options)) if (opts.includes(key)) names = names.concat(PLAN.options[key].files);
+  return names;
+}
+function updatePlan() {
+  if (!mode) return;
+  const m = selectedMode(), stemsOn = m !== "mp3";
+  $("mp3-opts").classList.toggle("hidden", stemsOn);
+  $("stem-opts").classList.toggle("hidden", !stemsOn);
+  $("basic-info").classList.toggle("hidden", m !== "basic");
+  $("advanced-info").classList.toggle("hidden", m !== "advanced");
+  $("adv-opts").classList.toggle("hidden", m !== "advanced");
+  const names = plannedFiles(), list = $("file-list");
+  list.replaceChildren(...names.map(n => { const li = document.createElement("li"); li.textContent = "<song title> - " + n + ".wav"; return li; }),
+    Object.assign(document.createElement("li"), {textContent: "<song title> - README.txt (file list, notes, credits)"}));
+  $("file-count").textContent = names.length + " WAV files";
   const bytes = $("depth").value === "16" ? 2 : $("depth").value === "24" ? 3 : 4;
   const perStemMB = 240 * Number($("rate").value) * 2 * bytes / 1e6;  // 4-minute stereo song
-  $("size").textContent = "A 4-minute song is about " + Math.round(perStemMB) + " MB per stem, " +
-    Math.round(perStemMB * count) + " MB total.";
+  $("size").textContent = "A 4-minute song is about " + Math.round(perStemMB) + " MB per file, " +
+    Math.round(perStemMB * names.length) + " MB total.";
+  go.disabled = m === "advanced" && selectedOptions().length === 0;
 }
 if (mode) {
-  mode.addEventListener("change", () => {
-    const stems = selectedMode() !== "mp3";
-    $("mp3-opts").classList.toggle("hidden", stems);
-    $("stem-opts").classList.toggle("hidden", !stems);
-    if ($("drums-row")) $("drums-row").classList.toggle("hidden", !["stems4", "stems6"].includes(selectedMode()));
-    updateSize();
-  });
-  $("rate").addEventListener("change", updateSize);
-  $("depth").addEventListener("change", updateSize);
-  if ($("drums")) $("drums").addEventListener("change", updateSize);
-  updateSize();
+  [mode, $("rate"), $("depth")].forEach(el => el.addEventListener("change", updatePlan));
+  document.querySelectorAll('input[name="opt"]').forEach(el => el.addEventListener("change", updatePlan));
+  updatePlan();
 }
 
 function fmtTime(sec) { const m = Math.floor(sec / 60), s = sec % 60; return m ? m + "m " + s + "s" : s + "s"; }
 let started = 0;
-
 function show(text, cls) { msg.textContent = text; msg.className = "msg " + (cls || ""); }
 
 form.addEventListener("submit", async e => {
   e.preventDefault();
   go.disabled = true; go.textContent = "Working...";
-  box.classList.remove("hidden"); dl.classList.add("hidden");
+  box.classList.remove("hidden"); dl.classList.add("hidden"); $("warn").classList.add("hidden");
+  $("steps").classList.add("hidden");
   fill.style.width = "0"; show("Starting..."); started = Date.now();
   try {
     const r = await fetch("/api/convert", {
       method: "POST", headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({url: $("url").value, quality: $("quality").value,
-                            mode: selectedMode(),
+      body: JSON.stringify({url: $("url").value, quality: $("quality").value, mode: selectedMode(),
                             rate: $("rate") ? $("rate").value : "44100",
                             depth: $("depth") ? $("depth").value : "24",
-                            drums: !!($("drums") && !$("drums-row").classList.contains("hidden") && $("drums").checked)})
+                            options: selectedOptions()})
     });
     if (r.status === 401) { location.reload(); return; }
     const data = await r.json();
@@ -125,35 +164,55 @@ form.addEventListener("submit", async e => {
   } catch (err) { fail(err.message); }
 });
 
+const ICON = {pending: "○", running: "◐", done: "●", failed: "✕"};
+function renderSteps(steps) {
+  const ul = $("steps");
+  ul.classList.remove("hidden");
+  ul.replaceChildren(...steps.map(s => {
+    const li = document.createElement("li");
+    li.className = "step " + s.state;
+    li.textContent = ICON[s.state] + " " + s.label +
+      (s.state === "running" ? " " + s.progress + "%" : s.state === "failed" ? " failed" : "");
+    if (s.state === "failed" && s.detail) li.title = s.detail;
+    return li;
+  }));
+  const done = steps.filter(s => s.state === "done" || s.state === "failed").length;
+  const running = steps.find(s => s.state === "running");
+  fill.style.width = Math.round(100 * (done + (running ? running.progress / 100 : 0)) / steps.length) + "%";
+}
+
 async function poll(id) {
   try {
     const r = await fetch("/api/status/" + id);
     if (!r.ok) throw new Error("Job not found");
     const j = await r.json();
+    if (j.steps) renderSteps(j.steps);
     if (j.status === "error") return fail(j.error || "Conversion failed");
     if (j.status === "done") {
       fill.style.width = "100%";
-      show("Ready: " + j.name + (j.stems ? " (" + j.stems.join(", ") + ")" : ""), "ok");
-      dl.textContent = j.name.endsWith(".zip") ? "Download stems (ZIP)" : "Download MP3";
+      show("Ready: " + j.name, "ok");
+      const warnings = Object.entries(j.warnings || {});
+      if (warnings.length) {
+        $("warn").textContent = "Some optional splits failed, so those files are not in the ZIP: " +
+          warnings.map(([k, v]) => k + " (" + v + ")").join("; ") + ". All other files are complete.";
+        $("warn").classList.remove("hidden");
+      }
+      dl.textContent = j.name.endsWith(".zip") ? "Download stems (ZIP, " + j.files.length + " WAV files)" : "Download MP3";
       dl.href = "/api/file/" + id; dl.classList.remove("hidden");
       return reset();
     }
-    fill.style.width = (j.progress || 0) + "%";
     const elapsed = " · " + fmtTime(Math.round((Date.now() - started) / 1000));
-    const text = {
-      queued: j.queue_position ? "Waiting in queue (position " + j.queue_position + ")" : "Waiting in queue",
-      downloading: "Downloading... " + (j.progress || 0) + "%",
-      converting: "Converting audio...",
-      separating: "Splitting stems... " + (j.progress || 0) + "%",
-      drums: "Splitting drum kit... " + (j.progress || 0) + "%",
-      packaging: "Packaging ZIP...",
-    }[j.status] || j.status;
-    show(text + elapsed);
+    if (j.status === "queued") show((j.queue_position ? "Waiting in queue (position " + j.queue_position + ")" : "Waiting in queue") + elapsed);
+    else if (j.steps) show("Working" + elapsed);
+    else {
+      fill.style.width = (j.progress || 0) + "%";
+      show((j.status === "converting" ? "Converting audio..." : "Downloading... " + (j.progress || 0) + "%") + elapsed);
+    }
     setTimeout(() => poll(id), 1000);
   } catch (err) { fail(err.message); }
 }
 
 function fail(text) { show(text, "err"); reset(); }
-function reset() { go.disabled = false; go.textContent = "Convert"; }
+function reset() { go.textContent = "Convert"; go.disabled = false; if (mode) updatePlan(); }
 </script>
 {% endblock %}

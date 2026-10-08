@@ -148,26 +148,43 @@ Then open `https://mp3.yourdomain.com`.
 Recommended: add **Cloudflare Access** (Zero Trust > Access > Applications)
 in front of the hostname so only emails you approve can reach the site.
 
-## Stem splitting (optional)
+## Stem splitting
 
-Adds stem options to the site, using [Demucs](https://github.com/adefossez/demucs)
-on your own server:
+Two modes, both using [Demucs](https://github.com/adefossez/demucs) on your server:
 
-| Option | Stems | Model |
-|--------|-------|-------|
-| 2 stems | vocals, no_vocals (instrumental) | `htdemucs` |
-| 4 stems | vocals, drums, bass, other | `htdemucs` |
-| 6 stems (experimental) | vocals, drums, bass, guitar, piano, other | `htdemucs_6s` |
+| Mode | Files | Trade-off |
+|------|-------|-----------|
+| **Basic** | vocals, drums, bass, other | Faster, simpler, fewest artifacts. Guitar, keys, synths and anything else stay together in "other". |
+| **Advanced** | the same 4 stems **plus** only the detailed splits picked | More parts to work with, but slower and more likely to have bleed or artifacts. |
 
-Stems are always WAV, delivered as a ZIP. Visitors choose:
+Advanced options (each one must be installed **and** switched on, see below):
 
-- **Bit depth:** 16-bit (dithered), **24-bit (default)**, or 32-bit float
-- **Sample rate:** **44.1 kHz (default)**, 48, 88.2 or 96 kHz
+| Option | Extra files | Model | Status |
+|--------|-------------|-------|--------|
+| Drum kit parts | `drums - kick/snare/toms/hi-hat/cymbals` | LarsNet on the Demucs drum stem | Code path tested; real weights not yet verified on a song |
+| Lead / background vocals (experimental) | `vocals - lead`, `vocals - background` | Mel-Band RoFormer karaoke (aufr33 & viperx) on the full mix; background = vocals - lead | Verified on test mixes (see below) |
+| Guitar and piano (experimental) | `experimental - guitar`, `experimental - piano` | Second Demucs pass with `htdemucs_6s`; only guitar and piano kept | Not verified (model could not be downloaded in the build sandbox) |
 
-Demucs separates at 44.1 kHz internally and writes 32-bit float; the app then
-converts each stem to the chosen format with ffmpeg (SoX resampler when
-available). Rates above 44.1 kHz are upsampled, so they add no detail; 48 kHz
-is useful for video projects. Drums can optionally be split further (next section).
+- The 4 main stems are always in the ZIP, and the full `vocals` and `drums`
+  stems stay next to their detailed parts.
+- Guitar/piano files overlap with `other`; nothing is subtracted from `other`.
+  Demucs' authors call the 6-source model experimental and say piano has a lot
+  of bleeding and artifacts.
+- **No synth stem.** No model tested here separates synths reliably, so synths stay in `other`.
+- Every ZIP also has a `README.txt` listing its files, any optional split that
+  failed, and the model credits (LarsNet's license requires attribution).
+- All WAVs in a ZIP have the same length, channel count (stereo), sample rate
+  and bit depth, and start at the same time. The app checks this before
+  offering the download.
+- If an optional split fails, the job still finishes with the other files and
+  the page says which split failed.
+
+Output format: WAV only. **Bit depth:** 16-bit (dithered), **24-bit (default)**,
+or 32-bit float. **Sample rate:** **44.1 kHz (default)**, 48, 88.2 or 96 kHz.
+Every model works at 44.1 kHz; other rates are resampled at the end, so rates
+above 44.1 kHz add no detail.
+
+### Basic install
 
 ```sh
 # 1. CPU-only PyTorch (about 1 GB; the default build adds ~4 GB of GPU libraries)
@@ -182,35 +199,22 @@ sudo mkdir -p /var/lib/videotomp3/models && sudo chown -R videotomp3:videotomp3 
 sudo -u videotomp3 env TORCH_HOME=/var/lib/videotomp3/models/torch HF_HOME=/var/lib/videotomp3/models/hf \
     /opt/videotomp3/.venv/bin/python -c "from demucs.pretrained import get_model; get_model('htdemucs'); get_model('htdemucs_6s')"
 
-# 4. Restart; the log should say "Stem splitting: on (htdemucs)"
+# 4. Restart; the log lists Basic and each Advanced option with on/off and why
 sudo systemctl restart videotomp3
 journalctl -u videotomp3 -n 20
 ```
 
-How it behaves:
+General behaviour: one stem job runs at a time and others queue (max 5, with
+their position shown); songs over `VTM_STEM_MAX_DURATION_MIN` (default 10) are
+refused; each visitor gets `VTM_STEM_JOBS_PER_HOUR` jobs (default 5); every
+model runs at low priority (`nice 10`) in its own process, started only if its
+step was selected, so its memory is freed when the step ends.
 
-- One song is split at a time; others wait in a queue (max 5) and see their position.
-- Expect several minutes per song on a 4-core CPU without a GPU.
-- Songs longer than `VTM_STEM_MAX_DURATION_MIN` (default 10) are refused.
-- Each visitor can split `VTM_STEM_JOBS_PER_HOUR` songs per hour (default 5).
-- Demucs runs at low priority (`nice 10`) so the site stays responsive.
-- `VTM_STEM_MODEL=htdemucs_ft` gives slightly better 2/4-stem quality but is about 4x slower.
-- `VTM_STEMS6=0` hides the 6-stem option.
-- WAV ZIPs are large: a 4-minute song at 24-bit/44.1 kHz is about 64 MB per stem
-  (about 254 MB for 4 stems). At 32-bit float/96 kHz it is about 184 MB per stem.
+### Advanced option: drum kit parts (LarsNet)
 
-## Drum-kit splitting (optional)
-
-Adds a checkbox for the 4- and 6-stem options that also splits the drum stem
-into **kick, snare, toms, hi-hat and cymbals** using
-[LarsNet](https://github.com/polimi-ispl/larsnet). The full `drums.wav` stays
-in the ZIP next to `drums-kick.wav`, `drums-snare.wav`, and so on.
-
-**License:** LarsNet's pretrained weights are CC BY-NC 4.0, non-commercial use
-only. LarsNet's code is not copied into this repository; it is downloaded
-during install.
-
-Requires stem splitting (previous section) to be installed first.
+**License:** LarsNet's weights are CC BY-NC 4.0: non-commercial use, with
+attribution (the ZIP's README.txt carries it). LarsNet's code repository has
+no license file, so it is downloaded at install rather than copied here.
 
 ```sh
 # 1. LarsNet code, pinned to a tested version
@@ -232,21 +236,81 @@ ls /opt/larsnet/pretrained_larsnet_models/*/    # expect 5 folders, one .pth eac
 # 3. One-time conversion so the site loads the weights in PyTorch's safe mode
 sudo /opt/videotomp3/.venv/bin/python -I /opt/videotomp3/web/drum_split.py \
     --larsnet-dir /opt/larsnet --prepare-weights
-
-# 4. Restart; the log should say "Drum splitting: on (/opt/larsnet)"
-sudo systemctl restart videotomp3
-journalctl -u videotomp3 -n 20
 ```
 
-How it behaves:
+Measured in the build sandbox with same-size stand-in weights: about 50 s and
+3.1 GB peak memory for a 4-minute drum stem on 4 CPU cores. LarsNet was trained
+on synthesized drum kits; expect some bleed between hi-hat and cymbals, and
+between snare and toms. `VTM_DRUM_BATCH` (default 4) lowers memory if reduced.
 
-- Runs after Demucs, in the same one-at-a-time queue.
-- About 1 minute extra for a 4-minute song on a 4-core CPU; peak memory about 3 GB.
-- Adds 5 WAV files to the ZIP (about 320 MB more for 4 minutes at 24-bit/44.1 kHz).
-- LarsNet was trained on synthesized drum kits, so results on real recordings
-  vary; expect some bleed between hi-hat and cymbals, and between snare and toms.
-- `VTM_DRUM_BATCH` (default 4) sets how many 12-second chunks are processed at
-  once. Lower it if memory is tight. `VTM_DRUMS=0` hides the option.
+### Advanced option: lead / background vocals
+
+**How it works:** karaoke models are trained on full songs, so the model is
+run on the **full mix** to get the lead vocal, and
+`background = Demucs vocals - lead`. Running it on the vocal stem alone was
+tested and rejected: it split a solo singer roughly in half.
+
+**Verified** in the build sandbox on mixes built from real CC BY singing
+recordings with a known lead and background, over an instrumental (higher is
+better; "before" is the vocal stem as-is):
+
+| Test | Lead SDR | Background SDR |
+|------|----------|----------------|
+| Same singer + 2 panned harmonies | 28.8 dB (before 11.0) | 17.7 dB |
+| Male lead + different female backing | 22.0 dB (before 8.2) | 13.8 dB |
+| Lead only, no backing | 29.7 dB | background came out 30 dB below the lead |
+| Unison double (same notes) | not separated; stays in lead (expected limit) | |
+
+**License:** the authors (aufr33 and viperx) have not published a license for
+these weights, and no other karaoke model checked has one either. UVR's own
+`UVR_MDXNET_KARA_2` has usage terms (credit UVR) but separated poorly in the
+same tests, so it is not used. Enable this option only if you accept that.
+
+It runs in its own virtualenv because audio-separator pins different library
+versions than Demucs:
+
+```sh
+sudo python3 -m venv /opt/videotomp3/.venv-vocals
+sudo /opt/videotomp3/.venv-vocals/bin/pip install torch \
+    --index-url https://download.pytorch.org/whl/cpu
+sudo /opt/videotomp3/.venv-vocals/bin/pip install -r /opt/videotomp3/requirements-vocals.txt
+sudo mkdir -p /var/lib/videotomp3/models/audio-separator
+sudo /opt/videotomp3/.venv-vocals/bin/audio-separator --download_model_only \
+    --model_file_dir /var/lib/videotomp3/models/audio-separator \
+    -m mel_band_roformer_karaoke_aufr33_viperx_sdr_10.1956.ckpt     # about 913 MB
+sudo chown -R videotomp3:videotomp3 /opt/videotomp3 /var/lib/videotomp3
+```
+
+Runtime and memory: measurement in progress; run `tools/stem_benchmark.py` on your server for real figures.
+
+### Advanced option: guitar and piano (experimental)
+
+Uses `htdemucs_6s` (downloaded in Basic install step 3). It is a full second
+Demucs pass, so it roughly doubles the Basic time. Only its guitar and piano
+outputs are kept, as extra files; the 4 main stems still come from `htdemucs`.
+
+### Verify on your server, then switch options on
+
+Every Advanced option is **off** until you switch it on in `/etc/videotomp3.env`.
+First run the benchmark on several varied songs you own (about 4 minutes each).
+It uses the same code as the site and records time, peak memory, failures,
+and format/alignment checks for each step:
+
+```sh
+sudo -u videotomp3 bash -c 'set -a; . /etc/videotomp3.env; set +a;
+  /opt/videotomp3/.venv/bin/python /opt/videotomp3/tools/stem_benchmark.py \
+    --options drums,vocals,guitar_piano --out /var/lib/videotomp3/stem-report.md \
+    /path/to/song1.flac /path/to/song2.mp3 /path/to/song3.wav'
+```
+
+Listen to the results, then enable only the options you are happy with and
+restart:
+
+```sh
+VTM_ENABLE_DRUM_SPLIT=1
+VTM_ENABLE_VOCAL_SPLIT=1
+VTM_ENABLE_GUITAR_PIANO=1
+```
 
 ## Cleanup cron job (backup)
 

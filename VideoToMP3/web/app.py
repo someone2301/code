@@ -29,7 +29,9 @@ from flask import (Flask, abort, jsonify, redirect, render_template, request,
                    send_file, session, url_for)
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 import yt_dlp  # noqa: E402
+import stems  # noqa: E402
 from video_to_mp3 import build_options, ensure_ffmpeg  # noqa: E402
 
 ACCESS_CODE = os.environ.get("VTM_ACCESS_CODE", "")
@@ -41,53 +43,18 @@ WORK_DIR = Path(os.environ.get("VTM_WORK_DIR", tempfile.gettempdir())) / "vtm_jo
 ALLOWED_QUALITIES = {"128", "192", "256", "320"}
 ALLOW_PRIVATE = os.environ.get("VTM_ALLOW_PRIVATE", "0") == "1"  # testing only
 
-# Stem splitting (Demucs). Enabled automatically when the demucs package is installed.
+# Stem splitting. Basic (4 Demucs stems) is enabled when demucs is installed;
+# the detailed Advanced splits are configured in web/stems.py and the env file.
 STEMS_ENABLED = (os.environ.get("VTM_STEMS", "1") == "1"
                  and importlib.util.find_spec("demucs") is not None)
-STEM_MODEL = os.environ.get("VTM_STEM_MODEL", "htdemucs")
-STEM_DEVICE = os.environ.get("VTM_STEM_DEVICE", "")  # "", "cpu" or "cuda"
 STEM_MAX_DURATION_MIN = int(os.environ.get("VTM_STEM_MAX_DURATION_MIN", "10"))
 STEM_JOBS_PER_HOUR = int(os.environ.get("VTM_STEM_JOBS_PER_HOUR", "5"))
-STEM_TIMEOUT_SEC = int(os.environ.get("VTM_STEM_TIMEOUT_MIN", "30")) * 60
 STEM_QUEUE_MAX = int(os.environ.get("VTM_STEM_QUEUE_MAX", "5"))
-# mode -> (Demucs model, --two-stems value)
-STEM_MODES = {
-    "stems2": (STEM_MODEL, "vocals"),
-    "stems4": (STEM_MODEL, None),
-    "stems6": ("htdemucs_6s", None),  # adds guitar + piano; piano is weak
-}
-# Stems are always WAV. Demucs works at 44.1 kHz; other rates are resampled.
-STEM_RATES = {"44100", "48000", "88200", "96000"}
-STEM_DEPTHS = {"16": "pcm_s16le", "24": "pcm_s24le", "32f": "pcm_f32le"}
 DEFAULT_RATE, DEFAULT_DEPTH = "44100", "24"
-STEMS6_ENABLED = os.environ.get("VTM_STEMS6", "1") == "1"
-
-# Drum-kit splitting (LarsNet): kick, snare, toms, hi-hat, cymbals.
-LARSNET_DIR = Path(os.environ.get("VTM_LARSNET_DIR", "/opt/larsnet"))
-DRUM_BATCH = os.environ.get("VTM_DRUM_BATCH", "4")
-DRUM_SPLIT_SCRIPT = Path(__file__).resolve().parent / "drum_split.py"
-
-
-def _larsnet_ready() -> tuple[bool, str]:
-    if os.environ.get("VTM_DRUMS", "1") != "1":
-        return False, "off (VTM_DRUMS=0)"
-    if not STEMS_ENABLED:
-        return False, "off (needs stem splitting)"
-    config = LARSNET_DIR / "config.yaml"
-    if not config.is_file():
-        return False, f"off (LarsNet not found in {LARSNET_DIR})"
-    try:
-        import yaml
-        paths = yaml.safe_load(config.read_text())["inference_models"].values()
-    except Exception as exc:  # noqa: BLE001
-        return False, f"off (cannot read {config}: {exc})"
-    missing = [p for p in paths if not (LARSNET_DIR / p).is_file()]
-    if missing:
-        return False, f"off (missing weights: {LARSNET_DIR / missing[0]})"
-    return True, f"on ({LARSNET_DIR})"
-
-
-DRUMS_ENABLED, DRUMS_STATUS = _larsnet_ready()
+STEM_CFG = stems.Config.from_env()
+OPTION_STATUS = stems.option_status(STEM_CFG) if STEMS_ENABLED else {
+    k: (False, "off (needs demucs)") for k in stems.OPTIONS}
+AVAILABLE_OPTIONS = [k for k in stems.OPTIONS if OPTION_STATUS[k][0]]
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("VTM_SECRET_KEY") or secrets.token_hex(32)
@@ -185,158 +152,56 @@ def run_job(job_id: str, url: str, quality: str) -> None:
         jobs[job_id]["finished_at"] = time.time()
 
 
-def _has_soxr() -> bool:
-    try:
-        return subprocess.run(
-            ["ffmpeg", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i",
-             "anullsrc=r=44100", "-t", "0.05", "-af", "aresample=48000:resampler=soxr",
-             "-f", "null", "-"], capture_output=True, timeout=30).returncode == 0
-    except (OSError, subprocess.TimeoutExpired):
-        return False
-
-
-def convert_stem(src: Path, dst: Path, rate: str, depth: str) -> None:
-    """Convert a 32-bit float Demucs stem to the requested sample rate and bit depth."""
-    filt = f"aresample={rate}"
-    if HAS_SOXR:
-        filt += ":resampler=soxr:precision=28"
-    if depth == "16":
-        filt += ":osf=s16:dither_method=triangular"
-    subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-i", str(src),
-                    "-af", filt, "-c:a", STEM_DEPTHS[depth], "-ar", rate, str(dst)],
-                   check=True, capture_output=True, timeout=600)
-
-
-def run_tool(job_id: str, job_dir: Path, cmd: list[str], what: str,
-             passes_expected: int = 1) -> None:
-    """Run a separation tool in a low-priority child process, tracking its progress bar.
-
-    A child process frees all of the model's memory when it exits.
-    """
-    passes, last_pct, tail = 0, 0, deque(maxlen=15)
-    proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
-                            preexec_fn=(lambda: os.nice(10)) if os.name == "posix" else None)
-    timer = threading.Timer(STEM_TIMEOUT_SEC, proc.kill)
-    timer.start()
-    try:
-        buf = b""
-        while chunk := os.read(proc.stderr.fileno(), 4096):
-            buf += chunk
-            *lines, buf = re.split(rb"[\r\n]", buf)
-            for raw in lines:
-                line = raw.decode("utf-8", "replace").strip()
-                if not line:
-                    continue
-                tail.append(line)
-                m = re.search(r"(\d{1,3})%\|", line)
-                if m:
-                    pct = int(m.group(1))
-                    if pct + 50 < last_pct:
-                        passes += 1
-                    last_pct = pct
-                    overall = (min(passes, passes_expected - 1) * 100 + pct) / passes_expected
-                    jobs[job_id]["progress"] = min(99, int(overall))
-                    os.utime(job_dir)  # keeps the cleanup cron from removing a running job
-        code = proc.wait()
-    finally:
-        timer.cancel()
-    if code != 0:
-        if code < 0:
-            raise RuntimeError(f"{what} took too long and was stopped.")
-        detail = next((l for l in reversed(tail) if "Error" in l), tail[-1] if tail else "")
-        raise RuntimeError(f"{what} failed. {detail}"[:300])
-
-
-def run_demucs(job_id: str, job_dir: Path, source: Path, mode: str) -> Path:
-    model, two_stems = STEM_MODES[mode]
-    out_dir = job_dir / "stems"
-    # 32-bit float output keeps full precision until the final conversion.
-    cmd = [sys.executable, "-m", "demucs", "-n", model, "-o", str(out_dir),
-           "--filename", "{stem}.{ext}", "-j", "1", "--float32"]
-    if STEM_DEVICE:
-        cmd += ["-d", STEM_DEVICE]
-    if two_stems:
-        cmd += ["--two-stems", two_stems]
-    cmd.append(str(source))
-    # Fine-tuned models ("_ft") are a bag of 4 models, so the progress bar runs 4 times.
-    run_tool(job_id, job_dir, cmd, "Stem splitting", 4 if model.endswith("_ft") else 1)
-    model_dir = out_dir / model
-    return model_dir if model_dir.is_dir() else out_dir
-
-
-def split_drums(job_id: str, job_dir: Path, stem_dir: Path) -> None:
-    """Replace nothing; add drums-kick.wav, drums-snare.wav, ... next to drums.wav."""
-    drums = stem_dir / "drums.wav"
-    if not drums.exists():
-        return
-    parts_dir = job_dir / "drumparts"
-    cmd = [sys.executable, "-I", str(DRUM_SPLIT_SCRIPT), "--larsnet-dir", str(LARSNET_DIR),
-           "--batch", DRUM_BATCH, str(drums), str(parts_dir)]
-    if STEM_DEVICE:
-        cmd += ["--device", STEM_DEVICE]
-    run_tool(job_id, job_dir, cmd, "Drum splitting")
-    for part in parts_dir.glob("*.wav"):
-        part.rename(stem_dir / f"drums-{part.stem}.wav")
-    shutil.rmtree(parts_dir, ignore_errors=True)
-
-
-def run_stem_job(job_id: str, url: str, mode: str, rate: str, depth: str,
-                 drums: bool) -> None:
+def run_stem_job(job_id: str, url: str, options: set[str], rate: str, depth: str) -> None:
+    job = jobs[job_id]
     with jobs_lock:
         if job_id in stem_queue:
             stem_queue.remove(job_id)
     job_dir = WORK_DIR / job_id
     job_dir.mkdir(parents=True, exist_ok=True)
+
+    def report(step: str, state: str, progress: int, detail: str) -> None:
+        job["steps"][step].update(state=state, progress=progress, detail=detail)
+
+    def download_hook(d):
+        if d.get("status") == "downloading":
+            total = d.get("total_bytes") or d.get("total_bytes_estimate")
+            if total:
+                report("download", "running", int(d.get("downloaded_bytes", 0) * 100 / total), "")
+
     opts = {
         "format": "bestaudio/best",
         "outtmpl": str(job_dir / "source.%(ext)s"),
         "noplaylist": True,
         "postprocessors": [{"key": "FFmpegExtractAudio", "preferredcodec": "wav"}],
         "quiet": True, "no_warnings": True, "noprogress": True, "retries": 5,
-        "progress_hooks": [download_progress_hook(job_id)],
+        "progress_hooks": [download_hook],
         "match_filter": duration_filter(STEM_MAX_DURATION_MIN),
     }
-    jobs[job_id].update(status="downloading", progress=0)
+    job["status"] = "running"
     try:
+        report("download", "running", 0, "")
         with yt_dlp.YoutubeDL(opts) as ydl:
             info = ydl.extract_info(url, download=True) or {}
         source = job_dir / "source.wav"
         if not source.exists():
             raise RuntimeError(f"Skipped: video may be longer than {STEM_MAX_DURATION_MIN} minutes")
-
-        jobs[job_id].update(status="separating", progress=0)
-        stem_dir = run_demucs(job_id, job_dir, source, mode)
-        source.unlink(missing_ok=True)
-        if drums:
-            jobs[job_id].update(status="drums", progress=0)
-            split_drums(job_id, job_dir, stem_dir)
-
-        jobs[job_id].update(status="packaging", progress=99)
-        stems = sorted(p for p in stem_dir.iterdir() if p.suffix == ".wav")
-        if not stems:
-            raise RuntimeError("Stem splitting produced no files.")
+        report("download", "done", 100, "")
         title = yt_dlp.utils.sanitize_filename(info.get("title") or "track")[:120]
-        depth_label = "32-bit float" if depth == "32f" else f"{depth}-bit"
-        spec = f"{depth_label} {int(rate) / 1000:g}kHz"
-        zip_path = job_dir / f"{title} - stems ({spec}).zip"
-        final_dir = job_dir / "final"
-        final_dir.mkdir(exist_ok=True)
-        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_STORED, allowZip64=True) as zf:
-            for p in stems:
-                out = final_dir / p.name
-                convert_stem(p, out, rate, depth)
-                p.unlink()  # free disk space as we go
-                zf.write(out, arcname=f"{title} - {p.stem}.wav")
-                out.unlink()
-                os.utime(job_dir)
-        shutil.rmtree(job_dir / "stems", ignore_errors=True)
-        shutil.rmtree(final_dir, ignore_errors=True)
-        jobs[job_id].update(status="done", progress=100, file=str(zip_path), name=zip_path.name,
-                            stems=[p.stem for p in stems])
+        result = stems.run_pipeline(source, job_dir, title, options, rate, depth, STEM_CFG, report)
+        source.unlink(missing_ok=True)
+        job.update(status="done", file=str(result.zip_path), name=result.zip_path.name,
+                   files=[f"{title} - {n}.wav" for n in result.files],
+                   warnings={stems.OPTIONS[k][0]: msg for k, msg in result.failures.items()})
+        app.logger.info("job %s done: %s", job_id,
+                        {k: (round(v.seconds), round(v.peak_mem_mb)) for k, v in result.stats.items()})
     except Exception as exc:  # noqa: BLE001
-        jobs[job_id].update(status="error", error=clean_error(exc))
+        for step in job["steps"].values():
+            if step["state"] == "running":
+                step["state"] = "failed"
+        job.update(status="error", error=clean_error(exc))
     finally:
-        jobs[job_id]["finished_at"] = time.time()
+        job["finished_at"] = time.time()
 
 
 def cleanup_loop() -> None:
@@ -355,9 +220,12 @@ def cleanup_loop() -> None:
 def index():
     if not authorized():
         return render_template("login.html", error=None)
+    plan = {"basic": stems.BASIC_STEMS,
+            "options": {k: {"label": stems.OPTIONS[k][0],
+                            "files": [z for _, z in stems.OPTIONS[k][1]]} for k in AVAILABLE_OPTIONS}}
     return render_template("index.html", max_min=MAX_DURATION_MIN, ttl_min=FILE_TTL_SEC // 60,
                            stems_enabled=STEMS_ENABLED, stem_max_min=STEM_MAX_DURATION_MIN,
-                           stems6_enabled=STEMS6_ENABLED, drums_enabled=DRUMS_ENABLED)
+                           options=AVAILABLE_OPTIONS, plan=plan)
 
 
 @app.post("/login")
@@ -386,8 +254,10 @@ def convert():
     mode = str(data.get("mode", "mp3"))
     rate = str(data.get("rate", DEFAULT_RATE))
     depth = str(data.get("depth", DEFAULT_DEPTH))
-    drums = data.get("drums") is True
-    if mode != "mp3" and (mode not in STEM_MODES or not STEMS_ENABLED):
+    requested = data.get("options") or []
+    if mode not in ("mp3", "basic", "advanced"):
+        return jsonify(error="Unknown output option."), 400
+    if mode != "mp3" and not STEMS_ENABLED:
         return jsonify(error="Stem splitting is not available."), 400
     if not url.startswith(("http://", "https://")) or len(url) > 2000:
         return jsonify(error="Enter a valid http(s) link."), 400
@@ -395,13 +265,17 @@ def convert():
         return jsonify(error="That link is not allowed."), 400
     if quality not in ALLOWED_QUALITIES:
         quality = "192"
-    if mode == "stems6" and not STEMS6_ENABLED:
-        return jsonify(error="6-stem splitting is turned off."), 400
-    if drums and (not DRUMS_ENABLED or mode not in ("stems4", "stems6")):
-        return jsonify(error="Drum splitting is not available for this option."), 400
-    if rate not in STEM_RATES:
+    options: set[str] = set()
+    if mode == "advanced":
+        if not isinstance(requested, list) or not requested:
+            return jsonify(error="Pick at least one detailed split, or use Basic."), 400
+        unavailable = [str(o) for o in requested if o not in AVAILABLE_OPTIONS]
+        if unavailable:
+            return jsonify(error=f"Not available on this server: {', '.join(unavailable)}"), 400
+        options = set(requested)
+    if rate not in stems.RATES:
         rate = DEFAULT_RATE
-    if depth not in STEM_DEPTHS:
+    if depth not in stems.DEPTHS:
         depth = DEFAULT_DEPTH
 
     job_id = uuid.uuid4().hex
@@ -418,10 +292,14 @@ def convert():
             return jsonify(error="The stem splitter is busy. Try again in a few minutes."), 503
     if rate_limited((client_ip(), "stems"), STEM_JOBS_PER_HOUR):
         return jsonify(error=f"Stem splitting is limited to {STEM_JOBS_PER_HOUR} songs per hour."), 429
+    steps = ["download", "prepare", "stems"] + [k for k in stems.OPTIONS if k in options] + ["package"]
+    labels = {"download": "Downloading audio", **stems.STEP_LABELS}
     with jobs_lock:
-        jobs[job_id] = {"status": "queued", "progress": 0}
+        jobs[job_id] = {"status": "queued", "mode": mode,
+                        "steps": {k: {"label": labels[k], "state": "pending", "progress": 0, "detail": ""}
+                                  for k in steps}}
         stem_queue.append(job_id)
-    stem_executor.submit(run_stem_job, job_id, url, mode, rate, depth, drums)
+    stem_executor.submit(run_stem_job, job_id, url, options, rate, depth)
     return jsonify(id=job_id)
 
 
@@ -432,7 +310,9 @@ def status(job_id):
     job = jobs.get(job_id)
     if not job:
         abort(404)
-    result = {k: job.get(k) for k in ("status", "progress", "error", "name", "stems")}
+    result = {k: job.get(k) for k in ("status", "progress", "error", "name", "files", "warnings")}
+    if "steps" in job:
+        result["steps"] = [{"key": k, **v} for k, v in job["steps"].items()]
     with jobs_lock:
         if job_id in stem_queue:
             result["queue_position"] = stem_queue.index(job_id) + 1
@@ -462,11 +342,11 @@ def security_headers(resp):
 WORK_DIR.mkdir(parents=True, exist_ok=True)
 if not ensure_ffmpeg():
     sys.exit("ffmpeg not available. Run: pip install -r requirements.txt")
-HAS_SOXR = _has_soxr()
 if not ACCESS_CODE:
     print("WARNING: VTM_ACCESS_CODE is not set. Anyone who finds the site can use it.")
-print(f"Stem splitting: {'on (' + STEM_MODEL + ')' if STEMS_ENABLED else 'off (demucs not installed)'}")
-print(f"Drum splitting: {DRUMS_STATUS}")
+print(f"Stem splitting: {'on (' + STEM_CFG.demucs_model + ')' if STEMS_ENABLED else 'off (demucs not installed)'}")
+for _key, (_ok, _why) in OPTION_STATUS.items():
+    print(f"  Advanced option {_key}: {_why}")
 threading.Thread(target=cleanup_loop, daemon=True).start()
 
 if __name__ == "__main__":
