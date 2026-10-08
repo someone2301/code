@@ -1,7 +1,8 @@
 // Offline renderer: runs kv::Tune over a mono WAV (16/24-bit PCM) and writes a 24-bit mono WAV, latency removed.
 // usage: render in.wav out.wav quality speedMs humanizePct key scale [range]
-//   quality 0 Tracking, 1 High quality; key 0 = C .. 11 = B; scale index as in Params (0 Chromatic, 1 Major,
-//   2 Natural Minor, ...); range 0 High, 1 Middle, 2 Low, 3 Deep.
+//   quality: kept so the full edition's command lines still work; the Alt edition's original Tune has no modes and
+//   ignores it. key 0 = C .. 11 = B; scale index as in Params (0 Chromatic, 1 Major, 2 Natural Minor, ...);
+//   range 0 High, 1 Middle, 2 Low, 3 Deep.
 // build: g++ -O2 -std=c++17 -I../../Source render.cpp -o render
 #include "dsp/Tune.h"
 #include <cstdio>
@@ -66,11 +67,11 @@ int main (int argc, char** argv)
     std::vector<float> x; int sr = 44100;
     if (! readWav (argv[1], x, sr)) { std::fprintf (stderr, "cannot read %s\n", argv[1]); return 1; }
     kv::TuneSettings s;
-    s.quality = std::atoi (argv[3]); s.speedMs = (float) std::atof (argv[4]); s.humanize = (float) std::atof (argv[5]) / 100.0f;
+    s.speedMs = (float) std::atof (argv[4]); s.humanize = (float) std::atof (argv[5]) / 100.0f;
     s.range = argc > 8 ? std::atoi (argv[8]) : 1;
     kv::scaleNotes (std::atoi (argv[6]), std::atoi (argv[7]), s.notes);
     kv::Tune t; t.prepare (sr);
-    const int lat = kv::Tune::latencyFor (sr, s.quality, s.range);
+    const int lat = kv::Tune::latencyFor (sr);
     std::vector<float> l (x.size() + (size_t) lat, 0.0f);
     std::copy (x.begin(), x.end(), l.begin());
     std::vector<float> r = l;

@@ -1,5 +1,5 @@
-# Builds the Kaminari Vocal macOS installer (VST3 + AU, universal: Intel and Apple Silicon) and runs the tests.
-# The .pkg is attached to each run as the artifact "KaminariVocal-macOS" (Actions tab -> run -> Artifacts).
+# Builds the Kaminari Vocal Alt macOS installer (VST3 + AU, universal: Intel and Apple Silicon) and runs the tests.
+# The .pkg is attached to each run as the artifact "KaminariVocalAlt-macOS" (Actions tab -> run -> Artifacts).
 name: Kaminari Vocal macOS installer
 
 on:
@@ -24,7 +24,7 @@ jobs:
       - name: Upload the installer
         uses: actions/upload-artifact@v4
         with:
-          name: KaminariVocal-macOS
+          name: KaminariVocalAlt-macOS
           path: KaminariVocal/dist/*.pkg
           if-no-files-found: error
 

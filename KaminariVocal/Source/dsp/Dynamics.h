@@ -24,14 +24,12 @@ namespace kv
     inline float coeffMs (float ms, float fs) noexcept { return ms <= 0.0f ? 0.0f : std::exp (-1.0f / (0.001f * ms * fs)); }
 
     //==================================================================================================================
+    // Compression (Alt edition): one optical, LA-2A style mode. Compression (the LA-2A's Peak Reduction) sets how hard
+    // the side chain drives the opto cell; Gain is the output makeup. The side-chain EQ shapes what the detector hears.
     struct CompressorSettings
     {
-        enum Style { Clean, Vocal, Opto, Classic, Punch };
-        int style = Clean;
-        float threshDb = -14, ratio = 3, attackMs = 8, releaseMs = 150, kneeDb = 8, rangeDb = 15;
-        bool autoRelease = true, smoothDetector = true, autoGain = true;
-        float holdMs = 0, mix = 1.0f, wetGainDb = 0, dryDb = -60, scLevelDb = 0, outGainDb = 0, stereoLink = 1.0f;
-        int lookaheadSamples = 0;
+        float peakReduction = 50.0f;   // 0..100
+        float gainDb = 0.0f;           // makeup, -12 .. +24 dB
 
         // Side-chain detection EQ: shapes what the detector hears (the audio itself is not filtered). Same bands and
         // filter designs as the main EQ.
@@ -42,56 +40,45 @@ namespace kv
     class Compressor
     {
     public:
+        // The opto model (original implementation, modelled on published LA-2A behaviour):
+        //  - side-chain gain from Compression: (Compression - 50) x 0.4 dB, against a fixed -20 dBFS threshold. Calibrated on a
+        //    dry vocal peaking at -6 dBFS: 30 touches only the loudest words, 50 levels about 4 dB (7 dB on peaks), 100 about
+        //    19 dB (25 dB on peaks);
+        //  - a soft 12 dB knee; the ratio rises from about 3:1 near the knee to about 6:1 far above it;
+        //  - the cell responds in about 10 ms; it releases in two stages: half of the reduction in about 60 ms, the rest
+        //    in 0.5 to 3.5 s, slower the longer and harder it has been compressing (the cell's memory).
+        static constexpr float thresholdDb = -20.0f, kneeDb = 12.0f;
+
+        static float sideChainGainDb (float peakReduction) noexcept { return (std::clamp (peakReduction, 0.0f, 100.0f) - 50.0f) * 0.4f; }
+
+        // Static reduction (dB) for a detector level already including the side-chain gain.
+        static float staticGr (float levelDb) noexcept
+        {
+            const float over = levelDb - thresholdDb;
+            if (over <= -0.5f * kneeDb) return 0.0f;
+            const float ratio = 3.0f + 3.0f * std::clamp ((over - 6.0f) / 30.0f, 0.0f, 1.0f);
+            const float slope = 1.0f - 1.0f / ratio;
+            if (over < 0.5f * kneeDb)
+            {
+                const float x = over + 0.5f * kneeDb;
+                return slope * x * x / (2.0f * kneeDb);
+            }
+            return slope * over;
+        }
+
         void prepare (double sampleRate)
         {
             fs = (float) sampleRate;
-            for (auto& d : look) d.prepare ((int) (0.021 * fs) + 4);
-            makeup.prepare (fs, 300.0f);
             reset();
         }
 
         void reset()
         {
-            for (auto& d : look) d.reset();
-            gr = 0; env[0] = env[1] = 0; hold = 0; slow = 0; lastOut[0] = lastOut[1] = 0;
-            rms[0] = rms[1] = 0;
+            env = 0.0f; grFast = grSlow = 0.0f; memory = 0.0f; makeupNow = -1.0f;
             for (auto& ch : scState) for (auto& b : ch) for (auto& z : b) z = {};
-            makeup.snap (0.0f);
-            inPow = outPow = 0.0; activeSec = 0.0f; fastPow = 0.0f; agCount = 0;
         }
 
-        // Starting point for Auto Gain before any audio has been measured: half the reduction a -12 dBFS signal
-        // gets, at most 12 dB.
-        static float staticMakeup (const CompressorSettings& s)
-        {
-            const float g = std::min (s.rangeDb, downwardGr (-12.0f, s.threshDb, s.ratio, s.kneeDb));
-            return std::min (12.0f, 0.5f * g);
-        }
-
-        // Auto Gain (loudness match): the makeup is the level difference between the input and the compressed signal,
-        // averaged over the last couple of seconds in which the vocal was actually sounding (pauses and tails below
-        // -50 dBFS are ignored). The compressed vocal therefore comes out as loud as it went in, whatever the
-        // threshold, ratio or style. The first second adapts faster.
-        void updateAutoGain (float in, float compressed)
-        {
-            const float p = in * in;
-            fastPow = p + fastC * (fastPow - p);   // 50 ms level for the gate
-            if (fastPow > gatePow)
-            {
-                activeSec += 1.0f / fs;
-                const double c = activeSec < 1.0f ? warmC : slowC;
-                inPow = p + c * (inPow - p);
-                outPow = compressed * compressed + c * (outPow - compressed * compressed);
-            }
-            if (++agCount >= 64)
-            {
-                agCount = 0;
-                if (activeSec > 0.05f && outPow > 1.0e-12)
-                    makeup.setTarget (std::clamp (10.0f * (float) std::log10 (inPow / outPow), 0.0f, 24.0f));
-            }
-        }
-
-        // detectorOut (optional, n samples): the mono signal the detector hears, after the side-chain bands and level
+        // detectorOut (optional, n samples): the mono signal the detector hears, after the side-chain bands
         float process (float* l, float* r, int n, const CompressorSettings& s, float* detectorOut = nullptr)
         {
             bool scOn[CompressorSettings::numScBands];
@@ -110,117 +97,55 @@ namespace kv
             for (int k = 0; k < CompressorSettings::numScBands; ++k)
                 scWasActive[k] = scOn[k];
 
-            const float ratioBase = s.ratio;
-            float knee = s.kneeDb, attack = s.attackMs, release = s.releaseMs;
-            switch (s.style)
-            {
-                case CompressorSettings::Vocal: knee = std::max (knee, 12.0f); break;
-                case CompressorSettings::Opto:  knee = std::max (knee, 18.0f); attack *= 3.0f; release *= 1.5f; break;
-                case CompressorSettings::Punch: attack = std::max (attack, 5.0f); break;
-                default: break;
-            }
-            const float aC = coeffMs (attack, fs), rC = coeffMs (release, fs);
-            const float rmsC = coeffMs (10.0f, fs);
-            const float holdSamples = s.holdMs * 0.001f * fs;
-            const float sc = dbToGain (s.scLevelDb);
-            const float wetGain = dbToGain (s.wetGainDb);
-            const float dryGain = s.dryDb <= -60.0f ? 0.0f : dbToGain (s.dryDb);
-            const float outGain = dbToGain (s.outGainDb);
-            if (! s.autoGain) { makeup.setTarget (0.0f); activeSec = 0.0f; inPow = outPow = 0.0; }
-            else if (activeSec <= 0.05f) makeup.setTarget (staticMakeup (s));
-            fastC = coeffMs (50.0f, fs); warmC = std::exp (-1.0 / (0.3 * fs)); slowC = std::exp (-1.0 / (2.5 * fs));
-            const int la = std::clamp (s.lookaheadSamples, 0, look[0].capacity() - 2);
+            const float scGain = dbToGain (sideChainGainDb (s.peakReduction));
+            const bool off = s.peakReduction <= 0.0f;
+            const float envAttack = coeffMs (1.0f, fs), envRelease = coeffMs (30.0f, fs);
+            const float cellAttack = coeffMs (10.0f, fs), fastRelease = coeffMs (60.0f, fs);
+            const float memUp = coeffMs (2000.0f, fs), memDown = coeffMs (5000.0f, fs);
+            const float slowRelease = coeffMs (500.0f + 3000.0f * memory, fs);   // per block: memory changes slowly
+            const float makeup = dbToGain (s.gainDb), makeupGlide = coeffMs (20.0f, fs);
+            if (makeupNow < 0.0f) makeupNow = makeup;   // first block after a reset: no glide
             float maxGr = 0.0f;
 
             for (int i = 0; i < n; ++i)
             {
-                float x[2] = { l[i], r[i] };
-                float det[2];
+                float peak = 0.0f, det = 0.0f;
                 for (int c = 0; c < 2; ++c)
                 {
-                    float src = (s.style == CompressorSettings::Classic ? lastOut[c] : x[c]) * sc;   // Classic = feedback
+                    float src = (c == 0 ? l : r)[i];
                     if (anySc)
                         for (int k = 0; k < CompressorSettings::numScBands; ++k)
                             if (scOn[k]) src = scFilterSample (c, k, src);
-                    if (detectorOut != nullptr)
-                        detectorOut[i] = c == 0 ? 0.5f * src : detectorOut[i] + 0.5f * src;
-                    if (s.smoothDetector)
-                    {
-                        rms[c] = src * src + rmsC * (rms[c] - src * src);
-                        det[c] = toDb (std::sqrt (rms[c]) * 1.4142f);
-                    }
-                    else det[c] = toDb (std::abs (src));
+                    det += 0.5f * src;
+                    peak = std::max (peak, std::abs (src));
                 }
-                const float linked = std::max (det[0], det[1]);
-                const float level = linked;   // stereo link: one gain for both channels at 100 %
-                float ratio = ratioBase;
-                if (s.style == CompressorSettings::Vocal)   // automatic ratio: grows with the overshoot
-                    ratio = std::clamp (2.0f + std::max (0.0f, level - s.threshDb) / 6.0f, 2.0f, 8.0f);
+                if (detectorOut != nullptr) detectorOut[i] = det;
+                peak *= scGain;
+                env = peak > env ? peak + envAttack * (env - peak) : peak + envRelease * (env - peak);
+                const float target = off ? 0.0f : staticGr (toDb (env));
 
-                float target = std::min (s.rangeDb, downwardGr (level, s.threshDb, ratio, knee));
-                if (s.stereoLink < 1.0f)
-                {
-                    // partially unlinked: blend towards the louder channel's own reduction (applied to both, kept simple)
-                    const float own = std::min (s.rangeDb, downwardGr (std::min (det[0], det[1]), s.threshDb, ratio, knee));
-                    target = own + (target - own) * s.stereoLink;
-                }
-
-                if (target > gr)
-                {
-                    gr = target + aC * (gr - target);
-                    hold = holdSamples;
-                }
-                else if (hold > 0.0f)
-                {
-                    hold -= 1.0f;
-                }
-                else
-                {
-                    float rel = rC;
-                    if (s.autoRelease)
-                    {
-                        // program dependent: short peaks recover fast, sustained reduction recovers slowly
-                        slow = target + coeffMs (400.0f, fs) * (slow - target);
-                        rel = coeffMs (release * (slow > 3.0f ? 1.6f : 0.6f), fs);
-                    }
-                    gr = target + rel * (gr - target);
-                }
+                // opto cell: both stages follow a rising reduction; on release one half recovers fast, one slowly
+                for (float* g : { &grFast, &grSlow })
+                    if (target > *g) *g = target + cellAttack * (*g - target);
+                grFast = grFast > target ? target + fastRelease * (grFast - target) : grFast;
+                grSlow = grSlow > target ? target + slowRelease * (grSlow - target) : grSlow;
+                const float gr = 0.5f * (grFast + grSlow);
+                // memory: charges while the cell is working hard, so long, heavy compression releases more slowly
+                const float memTarget = gr > 3.0f ? 1.0f : 0.0f;
+                memory = memTarget + (memTarget > memory ? memUp : memDown) * (memory - memTarget);
                 maxGr = std::max (maxGr, gr);
 
-                const float g = dbToGain (-gr + makeup.next());
-                if (s.autoGain)
-                {
-                    // measured on the delayed input (what the gain is applied to) against the reduced signal
-                    const float in0 = la > 0 ? look[0].readInt (la - 1) : x[0], in1 = la > 0 ? look[1].readInt (la - 1) : x[1];
-                    const float louder = std::abs (in0) > std::abs (in1) ? in0 : in1;
-                    updateAutoGain (louder, louder * dbToGain (-gr));
-                }
-                for (int c = 0; c < 2; ++c)
-                {
-                    look[c].push (x[c]);
-                    const float delayed = la > 0 ? look[c].readInt (la) : x[c];
-                    float wet = delayed * g * wetGain;
-                    if (s.style == CompressorSettings::Punch)
-                        wet = softClip (wet * 1.2f) / 1.2f;
-                    lastOut[c] = wet;
-                    // Mix 0..200 %: above 100 % pushes past the compressed signal
-                    float y = delayed + (wet - delayed) * s.mix + delayed * dryGain;
-                    (c == 0 ? l : r)[i] = flushDenormal (y * outGain);
-                }
+                makeupNow = makeup + makeupGlide * (makeupNow - makeup);   // Gain changes glide over about 20 ms
+                const float g = dbToGain (-gr) * makeupNow;
+                l[i] = flushDenormal (l[i] * g);
+                r[i] = flushDenormal (r[i] * g);
             }
             return maxGr;
         }
 
-        float currentMakeup() const noexcept { return makeup.value; }
-
     private:
         float fs = 48000.0f;
-        DelayLine look[2];
-        Smoother makeup;
-        double inPow = 0.0, outPow = 0.0, warmC = 0.0, slowC = 0.0;
-        float fastPow = 0.0f, fastC = 0.0f, activeSec = 0.0f;
-        int agCount = 0;
-        static constexpr float gatePow = 1.0e-5f;   // -50 dBFS
+        float env = 0.0f, grFast = 0.0f, grSlow = 0.0f, memory = 0.0f, makeupNow = -1.0f;
         struct ScState { double z1 = 0, z2 = 0; };
         EqDesign scDesign[CompressorSettings::numScBands];
         ScState scState[2][CompressorSettings::numScBands][4];
@@ -242,104 +167,75 @@ namespace kv
             }
             return (float) v;
         }
-        float gr = 0, env[2] {}, hold = 0, slow = 0, lastOut[2] {}, rms[2] {};
     };
 
     //==================================================================================================================
+    // De-ess (Alt edition): Frequency and Range only. The detector compares the level above Frequency with the level
+    // of the whole vocal, so it works the same at any input level (no threshold to set): reduction starts when the
+    // sibilant band comes within 12 dB of the full signal and grows 1 dB per dB, up to Range. Split band: only the
+    // part above Frequency is turned down (complementary split, so with no reduction the output equals the input).
     struct DeEsserSettings
     {
-        float threshDb = -28, rangeDb = 8, detLo = 3500, detHi = 8600;
-        bool fullBand = false, wideband = false;
-        float stereoLink = 1.0f;
-        int linkMode = 0;          // 0 Stereo, 1 Mid, 2 Side
-        int lookaheadSamples = 0;
-        bool listen = false, audition = false;
+        float freqHz = 5000.0f, rangeDb = 6.0f;
     };
 
     class DeEsser
     {
     public:
+        static constexpr float relativeThresholdDb = -12.0f, gateDb = -60.0f;
+
         void prepare (double sampleRate)
         {
             fs = (float) sampleRate;
-            for (auto& d : look) d.prepare ((int) (0.016 * fs) + 4);
             reset();
         }
 
         void reset()
         {
-            for (auto& d : look) d.reset();
-            for (int c = 0; c < 2; ++c) { hp[c].reset(); lp[c].reset(); split[c].reset(); env[c] = 0; gr[c] = 0; }
+            for (int c = 0; c < 2; ++c) { hp[c].reset(); split[c].reset(); }
+            envHi = envAll = 0.0f; gr = 0.0f;
         }
 
         float process (float* l, float* r, int n, const DeEsserSettings& s)
         {
-            const float lo = std::clamp (s.detLo, 1000.0f, 0.45f * fs), hi = std::clamp (std::max (s.detHi, lo * 1.2f), 1200.0f, 0.45f * fs);
+            const float f = std::clamp (s.freqHz, 1000.0f, 0.45f * fs);
             for (int c = 0; c < 2; ++c)
             {
-                hp[c].set (Biquad::HighPass, fs, lo, 0.707f);
-                lp[c].set (Biquad::LowPass, fs, hi, 0.707f);
-                split[c].set (Biquad::LowPass, fs, lo, 0.707f);   // split follows the detector's low edge
+                hp[c].set (Biquad::HighPass, fs, f, 0.707f);
+                split[c].set (Biquad::LowPass, fs, f, 0.707f);
             }
-            const float aC = coeffMs (0.3f, fs);
-            const float relFast = coeffMs (60.0f, fs), relSlow = coeffMs (150.0f, fs);   // all-round timing (one mode)
-            const int la = std::clamp (s.lookaheadSamples, 0, look[0].capacity() - 2);
+            const float aC = coeffMs (0.5f, fs), rC = coeffMs (60.0f, fs), grRelease = coeffMs (40.0f, fs);
             float maxGr = 0.0f;
-
             for (int i = 0; i < n; ++i)
             {
-                // work in L/R, or on mid or side only
-                float a = l[i], b = r[i];
-                if (s.linkMode != 0) { const float m = 0.5f * (a + b), sd = 0.5f * (a - b); a = s.linkMode == 1 ? m : sd; b = s.linkMode == 1 ? sd : m; }
-                float in[2] = { a, b };
-                float lvl[2], detSig[2];
+                const float in[2] = { l[i], r[i] };
+                float hiPeak = 0.0f, allPeak = 0.0f;
                 for (int c = 0; c < 2; ++c)
                 {
-                    detSig[c] = s.fullBand ? hp[c].process (in[c]) : lp[c].process (hp[c].process (in[c]));
-                    const float x = std::abs (detSig[c]);
-                    env[c] = x > env[c] ? x + aC * (env[c] - x) : x + (env[c] > 0.05f ? relSlow : relFast) * (env[c] - x);
-                    lvl[c] = toDb (env[c]);
+                    hiPeak = std::max (hiPeak, std::abs (hp[c].process (in[c])));
+                    allPeak = std::max (allPeak, std::abs (in[c]));
                 }
-                const float linked = std::max (lvl[0], lvl[1]);
-                float out[2];
+                envHi = hiPeak > envHi ? hiPeak + aC * (envHi - hiPeak) : hiPeak + rC * (envHi - hiPeak);
+                envAll = allPeak > envAll ? allPeak + aC * (envAll - allPeak) : allPeak + rC * (envAll - allPeak);
+                const float rel = toDb (envHi) - toDb (envAll);
+                const float target = toDb (envAll) < gateDb ? 0.0f : std::clamp (rel - relativeThresholdDb, 0.0f, std::max (0.0f, s.rangeDb));
+                gr = target > gr ? target : target + grRelease * (gr - target);
+                maxGr = std::max (maxGr, gr);
+                const float g = dbToGain (-gr);
                 for (int c = 0; c < 2; ++c)
                 {
-                    const bool processed = s.linkMode == 0 || c == 0;   // in Mid/Side mode only the chosen part is treated
-                    const float level = linked + (lvl[c] - linked) * (1.0f - s.stereoLink);
-                    const float target = processed ? std::min (s.rangeDb, std::max (0.0f, level - s.threshDb) * (5.0f / 6.0f)) : 0.0f;
-                    gr[c] = target;   // envelope already smooths; the reduction follows it directly
-                    maxGr = std::max (maxGr, gr[c]);
-                    look[c].push (in[c]);
-                    const float x = la > 0 ? look[c].readInt (la) : in[c];
-                    const float g = dbToGain (-gr[c]);
-                    float y;
-                    if (gr[c] <= 0.0f) { y = x; split[c].process (x); }   // no reduction: exact pass-through
-                    else if (s.wideband) y = x * g;
-                    else
-                    {
-                        const float low = split[c].process (x);
-                        y = low + (x - low) * g;   // complementary split: low + high = x
-                    }
-                    if (s.audition) y = x - y;      // hear only what is removed
-                    if (s.listen) y = detSig[c];    // hear the detector signal
-                    out[c] = y;
+                    const float low = split[c].process (in[c]);
+                    const float y = gr <= 0.0f ? in[c] : low + (in[c] - low) * g;   // no reduction: exact pass-through
+                    (c == 0 ? l : r)[i] = flushDenormal (y);
                 }
-                if (s.linkMode != 0)
-                {
-                    const float m = s.linkMode == 1 ? out[0] : out[1], sd = s.linkMode == 1 ? out[1] : out[0];
-                    out[0] = m + sd; out[1] = m - sd;
-                }
-                l[i] = flushDenormal (out[0]);
-                r[i] = flushDenormal (out[1]);
             }
             return maxGr;
         }
 
     private:
         float fs = 48000.0f;
-        DelayLine look[2];
-        Biquad hp[2], lp[2], split[2];
-        float env[2] {}, gr[2] {};
+        Biquad hp[2], split[2];
+        float envHi = 0.0f, envAll = 0.0f, gr = 0.0f;
     };
 
     //==================================================================================================================

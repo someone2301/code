@@ -2,6 +2,7 @@
 
 #include <juce_audio_processors/juce_audio_processors.h>
 #include "Look.h"
+#include "Widgets.h"   // visibleInWindow
 #include "../HostTempo.h"
 
 // Kaminari Vocal: `inverted` maps a fuller hammer to a lower parameter value (thresholds, Retune Speed),
@@ -134,6 +135,7 @@ public:
     // Recomputes the pulse from the host transport; repaints only when the glow moved.
     void updateGlow (double nowMs)
     {
+        if (! visibleInWindow (*this)) { animMs = nowMs; return; }   // hidden view: no animation work
         const auto s = tempo.read();
         const float g = HostTempo::glow (HostTempo::beatsAt (s, nowMs), s.bpm);
         const bool glowMoved = std::abs (g - glow) > 0.004f;

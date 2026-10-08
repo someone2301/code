@@ -1,5 +1,8 @@
 # Kaminari Vocal — Design Document (pre-implementation)
 
+> This branch builds the **Alt** edition (no sends, Flanger or Distortion; LA-2A style Compression; two-control
+> De-ess; original Tune). The differences from this document are listed in `VERSIONS.md`.
+
 Status: implemented in `KaminariVocal/`: all seven channel modules (first versions, section 2.12; Distortion 2.13), Tune's vibrato and tremolo (2.2.1), the four sends (2.9; Flanger 2.14), presets (2.10), session versioning (2.11), mono/stereo layouts, and the Mac build script and installer. The GUI follows the preview; the Distortion and Flanger pages and the Tune vibrato/tremolo groups were added after the preview and follow its style.
 
 ## 0. Current project state and recorded decisions

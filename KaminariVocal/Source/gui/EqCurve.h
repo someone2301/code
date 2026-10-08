@@ -128,15 +128,18 @@ public:
     juce::TextButton& postButton() { return post; }
 
 private:
-    void timerCallback() override { refresh(); }   // another view of the same analyzer may have changed it
+    void timerCallback() override { if (visibleInWindow (*this)) refresh(); }   // another view of the same analyzer may have changed it
     std::function<int()> get;
     std::function<void (int)> set;
     juce::TextButton pre, post;
 };
 
 // EQ response graph with draggable band nodes. One class for every EQ in the plug-in (main EQ in the Basic view and
-// on the EQ page, the compressor's side-chain detection EQ, the Reverb and Delay return EQs); `target` picks the
-// parameter set (KaminariVocalProcessor::EqTarget), its analyzers and its solo.
+// on the EQ page, the compressor's side-chain detection EQ); `target` picks the parameter set
+// (KaminariVocalProcessor::EqTarget), its analyzers and its solo.
+// Drawing cost: the band responses are computed and turned into paths only when a band, the size or the zoom changes;
+// every other frame only redraws the analyzer, the cached paths and the nodes. Band values are read through direct
+// parameter pointers (no string lookups per frame), and a dragged node is redrawn on every mouse move.
 //   - the selected node crackles with lightning
 //   - each band's own response is shaded between its curve and 0 dB, in the band's colour (as in Pro-Q)
 //   - analyzer: pre-EQ, post-EQ or both at once (pre filled dark, post as a light outline over it)
@@ -171,14 +174,39 @@ public:
     explicit EqCurve (KaminariVocalProcessor& p, int eqTarget = KaminariVocalProcessor::EqMain)
         : proc (p), state (p.apvts), target (eqTarget), prefix (KaminariVocalProcessor::eqPrefix (eqTarget))
     {
-        setTitle (target == KaminariVocalProcessor::EqSideChain ? "Side-chain EQ graph"
-                  : target == KaminariVocalProcessor::EqReverbReturn ? "Reverb return EQ graph"
-                  : target == KaminariVocalProcessor::EqDelayReturn ? "Delay return EQ graph" : "EQ graph");
+        setTitle (target == KaminariVocalProcessor::EqSideChain ? "Side-chain EQ graph" : "EQ graph");
+        for (int i = 0; i < kv::Equalizer::numBands; ++i)
+        {
+            const juce::String pre = prefix + juce::String (i + 1) + "_";
+            auto& b = ptrs[(size_t) i];
+            b = { state.getRawParameterValue (pre + "used"), state.getRawParameterValue (pre + "on"), state.getRawParameterValue (pre + "type"),
+                  state.getRawParameterValue (pre + "freq"), state.getRawParameterValue (pre + "gain"), state.getRawParameterValue (pre + "q"),
+                  state.getRawParameterValue (pre + "slope") };
+        }
+        onPtr = state.getRawParameterValue (KaminariVocalProcessor::eqOnId (target));
+        setOpaque (true);
         setDescription ("Click empty space to add a band; drag a node to change frequency and gain; mouse wheel changes Q.");
         startTimerHz (40);
     }
 
     void setRange (double db) { range = db; repaint(); }
+
+    // Current band settings (same values the audio thread uses), read through cached parameter pointers.
+    void readBands (kv::EqBandSettings (&out)[kv::Equalizer::numBands]) const
+    {
+        for (int i = 0; i < kv::Equalizer::numBands; ++i)
+        {
+            const auto& b = ptrs[(size_t) i];
+            auto& e = out[i];
+            e.used = b.used->load() > 0.5f;
+            e.on = b.on->load() > 0.5f;
+            e.type = juce::roundToInt (b.type->load());
+            e.freq = b.freq->load();
+            e.gainDb = b.gain->load();
+            e.q = b.q->load();
+            e.slopeIndex = juce::roundToInt (b.slope->load());
+        }
+    }
     double getRange() const { return range; }
     ~EqCurve() override { stopTimer(); }
 
@@ -194,6 +222,7 @@ public:
     {
         using namespace kvui::colours;
         auto b = getLocalBounds().toFloat();
+        g.fillAll (navy900);   // opaque: the parents (navy900 panels) are not redrawn behind the graph every frame
         g.setColour (navy950);
         g.fillRoundedRectangle (b, 4.0f);
         g.reduceClipRegion (getLocalBounds());
@@ -220,51 +249,30 @@ public:
                 g.drawText ("0", 6, (int) yForDb (db) - 13, 34, 12, juce::Justification::left);
 
         kv::EqBandSettings s[kv::Equalizer::numBands];
-        proc.readEqBands (prefix, s);
-        const double fs = 48000.0;
-        kv::EqDesign designs[kv::Equalizer::numBands];
-        for (int i = 0; i < kv::Equalizer::numBands; ++i)
-            designs[i] = kv::EqDesign::make (s[i], fs);
-        const bool on = state.getRawParameterValue (KaminariVocalProcessor::eqOnId (target))->load() > 0.5f;
+        readBands (s);
+        updateCurves (s);
+        const bool on = onPtr->load() > 0.5f;
         const int solo = proc.eqSoloFor (target).load();
-        // keep paths just outside the graph instead of clamping to its edge, so a deep cut leaves no line at the bottom
-        auto yFor = [this] (double db) { return juce::jlimit (-20.0f, (float) getHeight() + 20.0f, yForDb (db)); };
-        const float y0 = yForDb (0.0);
 
         // each band's own area between its curve and 0 dB
         for (int i = 0; i < kv::Equalizer::numBands; ++i)
         {
             if (! s[i].used || ! s[i].on) continue;
-            juce::Path area;
-            area.startNewSubPath (0.0f, y0);
-            for (int x = 0; x <= getWidth(); x += 2)
-                area.lineTo ((float) x, yFor (designs[i].magnitudeDb (std::min (freqForX ((float) x), 0.49 * fs), fs)));
-            area.lineTo ((float) getWidth(), y0);
-            area.closeSubPath();
             const auto col = bandColour (i);
             g.setColour (col.withAlpha ((i == selected ? 0.26f : 0.12f) * (on ? 1.0f : 0.5f)));
-            g.fillPath (area);
+            g.fillPath (bandArea[(size_t) i]);
             if (i == selected)
             {
                 g.setColour (col.withAlpha (0.55f));
-                g.strokePath (area, juce::PathStrokeType (1.0f));
+                g.strokePath (bandArea[(size_t) i], juce::PathStrokeType (1.0f));
             }
         }
 
-        // the sum of all bands
-        juce::Path curve;
-        for (int x = 0; x <= getWidth(); x += 2)
-        {
-            const double f = freqForX ((float) x);
-            double db = 0;
-            for (int i = 0; i < kv::Equalizer::numBands; ++i)
-                if (s[i].used && s[i].on) db += designs[i].magnitudeDb (std::min (f, 0.49 * fs), fs);
-            if (x == 0) curve.startNewSubPath ((float) x, yFor (db)); else curve.lineTo ((float) x, yFor (db));
-        }
+        // the sum of all bands (glow and line are cached as filled outlines)
         g.setColour (bolt.withAlpha (on ? 0.25f : 0.1f));
-        g.strokePath (curve, juce::PathStrokeType (6.0f));
+        g.fillPath (sumGlow);
         g.setColour (on ? bolt : mist.withAlpha (0.5f));
-        g.strokePath (curve, juce::PathStrokeType (2.0f));
+        g.fillPath (sumLine);
 
         for (int i = 0; i < kv::Equalizer::numBands; ++i)
         {
@@ -288,6 +296,58 @@ public:
         }
     }
 
+    static bool sameBand (const kv::EqBandSettings& a, const kv::EqBandSettings& b) noexcept
+    {
+        return a.used == b.used && a.on == b.on && a.type == b.type && juce::exactlyEqual (a.freq, b.freq)
+            && juce::exactlyEqual (a.gainDb, b.gainDb) && juce::exactlyEqual (a.q, b.q) && a.slopeIndex == b.slopeIndex;
+    }
+
+    // Recomputes the response of the bands that changed (all of them after a size or zoom change) and the sum.
+    void updateCurves (const kv::EqBandSettings (&s)[kv::Equalizer::numBands])
+    {
+        const bool geometry = getWidth() != cacheW || getHeight() != cacheH || ! juce::exactlyEqual (range, cacheRange);
+        cacheW = getWidth(); cacheH = getHeight(); cacheRange = range;
+        const int points = getWidth() / 2 + 1;
+        constexpr double fs = 48000.0;
+        // keep paths just outside the graph instead of clamping to its edge, so a deep cut leaves no line at the bottom
+        auto yFor = [this] (double db) { return juce::jlimit (-20.0f, (float) getHeight() + 20.0f, yForDb (db)); };
+        const float y0 = yForDb (0.0);
+        bool changed = geometry;
+        for (int i = 0; i < kv::Equalizer::numBands; ++i)
+        {
+            if (! geometry && cacheValid[(size_t) i] && sameBand (s[i], cached[i])) continue;
+            changed = true;
+            cached[i] = s[i];
+            cacheValid[(size_t) i] = true;
+            auto& db = bandDb[(size_t) i];
+            auto& area = bandArea[(size_t) i];
+            area.clear();
+            if (! s[i].used || ! s[i].on) { db.clear(); continue; }
+            const auto design = kv::EqDesign::make (s[i], fs);
+            db.resize ((size_t) points);
+            area.startNewSubPath (0.0f, y0);
+            for (int k = 0; k < points; ++k)
+            {
+                db[(size_t) k] = (float) design.magnitudeDb (std::min (freqForX ((float) (2 * k)), 0.49 * fs), fs);
+                area.lineTo ((float) (2 * k), yFor (db[(size_t) k]));
+            }
+            area.lineTo ((float) getWidth(), y0);
+            area.closeSubPath();
+        }
+        if (! changed) return;
+        juce::Path curve;
+        for (int k = 0; k < points; ++k)
+        {
+            double sum = 0;
+            for (auto& d : bandDb)
+                if (! d.empty()) sum += d[(size_t) k];
+            if (k == 0) curve.startNewSubPath (0.0f, yFor (sum)); else curve.lineTo ((float) (2 * k), yFor (sum));
+        }
+        sumGlow.clear(); sumLine.clear();
+        juce::PathStrokeType (6.0f).createStrokedPath (sumGlow, curve);
+        juce::PathStrokeType (2.0f).createStrokedPath (sumLine, curve);
+    }
+
     juce::Point<float> nodePos (const kv::EqBandSettings& s) const
     {
         const bool gainless = s.type == kv::LowCut || s.type == kv::HighCut || s.type == kv::Notch || s.type == kv::BandPass;
@@ -297,7 +357,7 @@ public:
     int bandAt (juce::Point<float> p) const
     {
         kv::EqBandSettings s[kv::Equalizer::numBands];
-        proc.readEqBands (prefix, s);
+        readBands (s);
         for (int i = kv::Equalizer::numBands - 1; i >= 0; --i)
             if (s[i].used && nodePos (s[i]).getDistanceFrom (p) < 12.0f) return i;
         return -1;
@@ -307,7 +367,7 @@ public:
     int addBandAt (juce::Point<float> p)
     {
         for (int i = 0; i < kv::Equalizer::numBands; ++i)
-            if (state.getRawParameterValue (prefix + juce::String (i + 1) + "_used")->load() < 0.5f)
+            if (ptrs[(size_t) i].used->load() < 0.5f)
             {
                 const double f = freqForX (p.x);
                 const int type = typeForFrequency (f);
@@ -349,9 +409,10 @@ public:
     {
         if (dragBand < 0) return;
         setPlain (param (dragBand, "freq"), (float) freqForX (e.position.x));
-        const int type = juce::roundToInt (state.getRawParameterValue (prefix + juce::String (dragBand + 1) + "_type")->load());
+        const int type = juce::roundToInt (ptrs[(size_t) dragBand].type->load());
         if (type != kv::LowCut && type != kv::HighCut && type != kv::Notch && type != kv::BandPass)
             setPlain (param (dragBand, "gain"), (float) juce::jlimit (-30.0, 30.0, dbForY (e.position.y)));
+        repaint();   // follow the mouse at once instead of waiting for the next analyzer frame
     }
 
     void mouseUp (const juce::MouseEvent&) override
@@ -405,10 +466,11 @@ private:
 
     void timerCallback() override
     {
+        if (! visibleInWindow (*this)) return;
         analyzers.update (proc, proc.eqAnalyserFor (target, false), proc.eqAnalyserFor (target, true), proc.eqAnalyserModeFor (target).load());
         animMs = juce::Time::getMillisecondCounterHiRes();
         if (selected >= 0 && proc.hostTempo.animations.load (std::memory_order_relaxed)
-            && state.getRawParameterValue (prefix + juce::String (selected + 1) + "_used")->load() > 0.5f)
+            && ptrs[(size_t) selected].used->load() > 0.5f)
             nodeFx.tick (animMs, 10.0f);
         repaint();
     }
@@ -421,6 +483,18 @@ private:
     juce::String prefix;
     kvfx::NodeLightning nodeFx;
     double animMs = 0;
+
+    struct BandPtrs { std::atomic<float>* used, * on, * type, * freq, * gain, * q, * slope; };
+    std::array<BandPtrs, kv::Equalizer::numBands> ptrs {};
+    std::atomic<float>* onPtr = nullptr;
+    // cached responses: per-band dB at every second pixel, the band areas and the summed curve
+    kv::EqBandSettings cached[kv::Equalizer::numBands];
+    std::array<bool, kv::Equalizer::numBands> cacheValid {};
+    std::array<std::vector<float>, kv::Equalizer::numBands> bandDb;
+    std::array<juce::Path, kv::Equalizer::numBands> bandArea;
+    juce::Path sumGlow, sumLine;
+    int cacheW = -1, cacheH = -1;
+    double cacheRange = 0;
     int dragBand = -1, createdBand = -1;
     double createdMs = 0;
     double range = 18.0;

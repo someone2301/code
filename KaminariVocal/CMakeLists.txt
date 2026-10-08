@@ -35,12 +35,19 @@ else()
 endif()
 set(_copy_default ${KV_COPY_AFTER_BUILD})
 
+# Identity. This is the "Alt" edition (original tuner, LA-2A style compressor, basic de-esser, no sends, Flanger or
+# Distortion). It has its own name, plug-in code and bundle ID so it installs beside the full Kaminari Vocal
+# (Kmni/KmVc, kept at commit 231f676, see docs/KaminariVocal/VERSIONS.md) and both can be used in one session.
+set(KV_PRODUCT_NAME "Kaminari Vocal Alt")
+set(KV_PLUGIN_CODE  KmVa)
+set(KV_BUNDLE_ID    com.kaminariaudio.kaminarivocalalt)
+
 juce_add_plugin(KaminariVocal
     COMPANY_NAME                "Kaminari Audio"
-    PRODUCT_NAME                "Kaminari Vocal"
-    BUNDLE_ID                   com.kaminariaudio.kaminarivocal
+    PRODUCT_NAME                "${KV_PRODUCT_NAME}"
+    BUNDLE_ID                   ${KV_BUNDLE_ID}
     PLUGIN_MANUFACTURER_CODE    Kmni
-    PLUGIN_CODE                 KmVc
+    PLUGIN_CODE                 ${KV_PLUGIN_CODE}
     FORMATS                     ${KV_FORMATS}
     VST3_CATEGORIES             Fx EQ Dynamics "Pitch Shift"
     AU_MAIN_TYPE                kAudioUnitType_Effect
@@ -69,7 +76,9 @@ set(KV_DEFINITIONS
     JUCE_WEB_BROWSER=0
     JUCE_USE_CURL=0
     JUCE_VST3_CAN_REPLACE_VST2=0
-    JUCE_DISPLAY_SPLASH_SCREEN=0)
+    JUCE_DISPLAY_SPLASH_SCREEN=0
+    KV_PRODUCT_NAME="${KV_PRODUCT_NAME}"
+    KV_EDITION_ALT=1)
 
 target_compile_definitions(KaminariVocal PUBLIC ${KV_DEFINITIONS})
 

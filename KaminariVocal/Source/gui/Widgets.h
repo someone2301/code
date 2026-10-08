@@ -6,6 +6,17 @@
 
 using APVTS = juce::AudioProcessorValueTreeState;
 
+// True when the component and all its parents below the window are visible, i.e. it is on the current view or page.
+// Displays skip their timer work (analyzers, history smoothing, animation) while they are on a hidden page, so the
+// visible graphs get the message thread to themselves. Unlike isShowing() it does not look at the window itself (the
+// host shows and hides that; the off-screen tests never show it).
+inline bool visibleInWindow (const juce::Component& c)
+{
+    for (auto* p = &c; p->getParentComponent() != nullptr; p = p->getParentComponent())
+        if (! p->isVisible()) return false;
+    return true;
+}
+
 // Rotary slider with the shared editing rules: vertical drag (Shift = 10 % speed), double-click resets to
 // the parameter default, mouse wheel (Shift = finer), arrow / Page / Home / End keys, right-click menu
 // (Enter Value, Reset, Copy, Paste), a hover tooltip with name, value and hints, and a focus outline.
@@ -85,9 +96,9 @@ public:
     {
         if (e.mods.isPopupMenu() || ! isEnabled())
             return;
-        if (isHorizontal())
+        if (isHorizontal() || isVertical())
         {
-            // horizontal sliders follow the mouse sideways, like any linear fader
+            // linear sliders follow the mouse, like any fader
             juce::Slider::mouseDrag (e);
             return;
         }

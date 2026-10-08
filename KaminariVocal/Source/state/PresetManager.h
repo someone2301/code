@@ -5,12 +5,12 @@
 
 // Factory and user presets at two levels (DESIGN.md section 2.10):
 //
-//   module presets  one per module (Tune, EQ, Multiband, Compression, De-ess, Resonance, Reverb, Delay, Widener).
+//   module presets  one per module (Tune, EQ, Multiband, Compression, De-ess, Resonance).
 //                   A module preset sets only that module's sound parameters; anything it does not list returns to
-//                   its default. It never changes the module's On switch, a send's On/level/tap, or Tune's key,
+//                   its default. It never changes the module's On switch or Tune's key,
 //                   scale, range and note map.
 //   chain presets   the whole plug-in (Basic view and the header in both views): one module preset per module,
-//                   then overrides such as On switches and send levels.
+//                   then overrides such as On switches and Basic hammers.
 //
 // Factory presets come from Presets/factory.json (embedded). User presets are XML files in
 //   <user presets folder>/<Module>/<name>.kvpreset  and  <user presets folder>/Chains/<name>.kvpreset

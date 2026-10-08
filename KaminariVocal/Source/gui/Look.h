@@ -251,6 +251,20 @@ public:
                            juce::Slider::SliderStyle style, juce::Slider& s) override
     {
         using namespace kvtheme;
+        if (style == juce::Slider::LinearVertical)
+        {
+            // same track and cap as the horizontal faders, standing up; the fill rises from the bottom
+            auto track = juce::Rectangle<float> (x + w * 0.5f - 5.0f, (float) y, 10.0f, (float) h);
+            g.setColour (navy950);
+            g.fillRoundedRectangle (track, 3.0f);
+            g.setColour (navy600);
+            g.drawRoundedRectangle (track, 3.0f, 1.0f);
+            g.setColour (accent.withAlpha (0.55f));
+            g.fillRoundedRectangle (track.withTop (pos).reduced (1.0f), 2.0f);
+            g.setColour (white);
+            g.fillRoundedRectangle (juce::Rectangle<float> (track.getX() - 3.0f, pos - 4.0f, track.getWidth() + 6.0f, 8.0f), 2.0f);
+            return;
+        }
         if (style != juce::Slider::LinearHorizontal)
         {
             juce::LookAndFeel_V4::drawLinearSlider (g, x, y, w, h, pos, 0, 0, style, s);

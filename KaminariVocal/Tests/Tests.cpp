@@ -1,12 +1,12 @@
 #include <numeric>
-// Offline checks for the Kaminari Vocal sends: routing, levels, bypass, effect selection, persistence and the editor.
+// Offline checks for Kaminari Vocal Alt: levels, the channel modules, persistence, presets and the editor.
 // Build with -DKV_BUILD_TESTS=ON and run: KaminariVocalTests [snapshot_dir]
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
 #include <cstdio>
 #include <functional>
 
-// The routing tests compare samples for exact (bit-identical) equality on purpose.
+// The pass-through tests compare samples for exact (bit-identical) equality on purpose.
 #pragma GCC diagnostic ignored "-Wfloat-equal"
 
 namespace
@@ -49,15 +49,13 @@ namespace
         return (float) (0.5 * env * s) + 0.01f * rnd.next();
     }
 
-    float impulse (int, long n) { return n == 0 ? 1.0f : 0.0f; }
-
     struct Render { juce::AudioBuffer<float> in, out; };
 
     // Renders `seconds` of audio; `perBlock` may change parameters before each block.
     // Switches every channel module off, so the dry path is a pure delay of the reported latency.
     void neutral (KaminariVocalProcessor& p)
     {
-        for (auto* id : { "tn_on", "eq_on", "mb_on", "lv_on", "fl_on", "dt_on", "ds_on", "rs_on" })
+        for (auto* id : { "tn_on", "eq_on", "mb_on", "lv_on", "ds_on", "rs_on" })
             setParam (p, id, 0.0f);
     }
 
@@ -106,27 +104,6 @@ namespace
         return m;
     }
 
-    double rmsOfReturn (const Render& r, int from = 0)
-    {
-        double e = 0;
-        long n = 0;
-        for (int c = 0; c < 2; ++c)
-            for (int i = from; i < r.out.getNumSamples(); ++i, ++n)
-            {
-                const double d = r.out.getSample (c, i) - r.in.getSample (c, i);
-                e += d * d;
-            }
-        return std::sqrt (e / std::max (1L, n));
-    }
-
-    std::vector<float> returnSignal (const Render& r, int ch)
-    {
-        std::vector<float> v ((size_t) r.out.getNumSamples());
-        for (int i = 0; i < r.out.getNumSamples(); ++i)
-            v[(size_t) i] = r.out.getSample (ch, i) - r.in.getSample (ch, i);
-        return v;
-    }
-
     double correlation (const std::vector<float>& a, const std::vector<float>& b)
     {
         double ab = 0, aa = 0, bb = 0;
@@ -138,21 +115,6 @@ namespace
         }
         return ab / std::sqrt (std::max (1e-30, aa * bb));
     }
-
-    // Energy envelope in 20 ms frames (for comparing reverb algorithms independent of fine phase).
-    std::vector<float> envelope (const std::vector<float>& v)
-    {
-        const int frame = (int) (0.02 * sr);
-        std::vector<float> e;
-        for (size_t i = 0; i + (size_t) frame <= v.size(); i += (size_t) frame)
-        {
-            double s = 0;
-            for (int k = 0; k < frame; ++k) s += (double) v[i + (size_t) k] * v[i + (size_t) k];
-            e.push_back ((float) std::sqrt (s / frame));
-        }
-        return e;
-    }
-
 
     // Level (dB) of one frequency in a channel over a sample range (Goertzel).
     float toneDb (const juce::AudioBuffer<float>& b, int ch, double freq, int from, int to)
@@ -181,11 +143,6 @@ namespace
             }
         return count > 0 ? sr * count / (double) (last - first) : 0.0;
     }
-
-    constexpr int numSends = KaminariVocalProcessor::numSends;
-    const char* sendOn[]    = { kvid::rvOn, kvid::dlOn, kvid::wdOn };
-    const char* sendLevel[] = { kvid::rvSend, kvid::dlSend, kvid::wdSend };
-    const char* sendName[]  = { "reverb", "delay", "widener" };
 }
 
 int main (int argc, char** argv)
@@ -222,34 +179,21 @@ int main (int argc, char** argv)
         auto busy = [] (KaminariVocalProcessor& p)
         {
             p.presets.loadChainPreset ("Pop Lead");
-            for (auto* id : { "tn_on", "eq_on", "mb_on", "lv_on", "fl_on", "dt_on", "ds_on", "rs_on" }) setParam (p, id, 1.0f);
-            for (int k = 0; k < numSends; ++k) { setParam (p, sendOn[k], 1.0f); setParam (p, sendLevel[k], -10.0f); }
+            for (auto* id : { "tn_on", "eq_on", "mb_on", "lv_on", "ds_on", "rs_on" }) setParam (p, id, 1.0f);
         };
-        auto allOff = [] (KaminariVocalProcessor& p) { neutral (p); for (int k = 0; k < numSends; ++k) setParam (p, sendOn[k], 0.0f); };
-        runDsp ("every module and send off (base cost)", allOff);
-        for (auto [label, id] : { std::pair { "only Tune (Tracking)", "tn_on" }, { "only EQ", "eq_on" }, { "only Multiband", "mb_on" },
-                                  { "only Compression", "lv_on" }, { "only Flanger", "fl_on" }, { "only Distortion (2x OS)", "dt_on" },
-                                  { "only De-ess", "ds_on" }, { "only Resonance", "rs_on" } })
-            runDsp (label, [id = id, allOff] (KaminariVocalProcessor& p) { p.presets.loadChainPreset ("Pop Lead"); allOff (p); setParam (p, id, 1.0f); });
-        for (int k = 0; k < numSends; ++k)
-            runDsp ((juce::String ("only the ") + sendName[k] + " send").toRawUTF8(), [k, allOff] (KaminariVocalProcessor& p)
-            { p.presets.loadChainPreset ("Pop Lead"); allOff (p); setParam (p, sendOn[k], 1.0f); setParam (p, sendLevel[k], -10.0f); });
-        auto typical = [allOff] (KaminariVocalProcessor& p)
+        runDsp ("every module off (base cost)", [] (KaminariVocalProcessor& p) { neutral (p); });
+        for (auto [label, id] : { std::pair { "only Tune", "tn_on" }, { "only EQ", "eq_on" }, { "only Multiband", "mb_on" },
+                                  { "only Compression", "lv_on" }, { "only De-ess", "ds_on" }, { "only Resonance", "rs_on" } })
+            runDsp (label, [id = id] (KaminariVocalProcessor& p) { p.presets.loadChainPreset ("Pop Lead"); neutral (p); setParam (p, id, 1.0f); });
+        runDsp ("typical: Tune, EQ, Compression, De-ess", [] (KaminariVocalProcessor& p)
         {
             p.presets.loadChainPreset ("Pop Lead");
-            allOff (p);
+            neutral (p);
             for (auto* id : { "tn_on", "eq_on", "lv_on", "ds_on" }) setParam (p, id, 1.0f);
-        };
-        runDsp ("typical: Tune, EQ, Compression, De-ess", typical);
-        runDsp ("typical + Reverb and Delay sends", [typical] (KaminariVocalProcessor& p)
-        { typical (p); for (int k = 0; k < 2; ++k) { setParam (p, sendOn[k], 1.0f); setParam (p, sendLevel[k], -10.0f); } });
+        });
         runDsp ("default session", [] (KaminariVocalProcessor&) {});
-        runDsp ("Tune only, Tracking", [] (KaminariVocalProcessor& p) { neutral (p); setParam (p, "tn_on", 1.0f); });
-        runDsp ("Tune only, High quality (Deep)", [] (KaminariVocalProcessor& p) { neutral (p); setParam (p, "tn_on", 1.0f); setParam (p, "tn_quality", 1.0f); setParam (p, "tn_range", 3.0f); });
-        runDsp ("every module + 3 sends, Tracking", busy);
-        runDsp ("every module + 3 sends, High quality", [&] (KaminariVocalProcessor& p) { busy (p); setParam (p, "tn_quality", 1.0f); });
-        runDsp ("every module + sends + 4x oversampling (4)", [&] (KaminariVocalProcessor& p)
-        { busy (p); for (auto* id : { "dt_os", "mb_os", "ds_os", "rs_os" }) setParam (p, id, 2.0f); });
+        runDsp ("every module on", busy);
+        runDsp ("every module + 4x oversampling (2)", [&] (KaminariVocalProcessor& p) { busy (p); for (auto* id : { "mb_os", "rs_os" }) setParam (p, id, 2.0f); });
 
         // drawing: one frame of each animated view, software renderer
         auto timePaint = [] (const char* name, juce::Component& c, float scale, std::function<void()> tick)
@@ -279,434 +223,36 @@ int main (int argc, char** argv)
         timePaint ("one hammer at full pull (1x)", h, 1.0f, [&] { h.advanceAnimation (16.7); });
         timePaint ("one hammer at full pull (2x Retina)", h, 2.0f, [&] { h.advanceAnimation (16.7); });
         busy (p);
+        for (int b = 1; b <= 6; ++b) setParam (p, ("eq" + juce::String (b) + "_used").toRawUTF8(), 1.0f);
         std::unique_ptr<KaminariVocalEditor> ed (dynamic_cast<KaminariVocalEditor*> (p.createEditor()));
         ed->showTab (false, KaminariVocalEditor::TabTune);
         timePaint ("whole window, Basic view (1x)", *ed, 1.0f, nullptr);
         timePaint ("whole window, Basic view (2x Retina)", *ed, 2.0f, nullptr);
+        auto& curve = ed->eqSection().curve;
+        timePaint ("Basic EQ graph, 6 bands (2x Retina)", curve, 2.0f, nullptr);
+        float gain = 0.0f;
+        timePaint ("Basic EQ graph, a band being dragged (2x)", curve, 2.0f, [&] { gain = gain > 10.0f ? -10.0f : gain + 0.5f; setParam (p, "eq2_gain", gain); });
         ed->showTab (true, KaminariVocalEditor::TabEq);
         timePaint ("whole window, EQ page (2x Retina)", *ed, 2.0f, nullptr);
+        ed->showTab (true, KaminariVocalEditor::TabMultiband);
+        timePaint ("whole window, Multiband page (2x Retina)", *ed, 2.0f, nullptr);
+        ed->showTab (true, KaminariVocalEditor::TabResonance);
+        timePaint ("whole window, Resonance page (2x Retina)", *ed, 2.0f, nullptr);
         return 0;
     }
 
-    // ---- routing and levels ---------------------------------------------------------------------------------------
+    // ---- levels and layouts ---------------------------------------------------------------------------------------
     {
         KaminariVocalProcessor p;
         neutral (p);
         prepare (p);
+        check (p.getLatencySamples() == 96, "reported latency is 96 samples (2 ms) at 48 kHz (Tune's fixed delay), also with Tune off");
         const auto r = render (p, 1.0, vocal);
-        check (maxDiff (r) == 0.0f, "default state: all sends off, output is bit-identical to the input");
-    }
-
-    for (int s = 0; s < numSends; ++s)
-    {
-        KaminariVocalProcessor p;
-        neutral (p);
-        setParam (p, sendOn[s], 1.0f);
-        setParam (p, sendLevel[s], kvp::sendOffDb);
-        prepare (p);
-        const auto r = render (p, 1.0, vocal);
-        check (maxDiff (r) == 0.0f, juce::String (sendName[s]) + " send on at minimum level: output is bit-identical to the dry signal");
-    }
-
-    for (int s = 0; s < numSends; ++s)
-    {
-        std::vector<double> levels;
-        bool othersSilent = true, finite = true;
-        for (float db : { -30.0f, -18.0f, -6.0f })
-        {
-            KaminariVocalProcessor p;
-            neutral (p);
-            setParam (p, sendOn[s], 1.0f);
-            setParam (p, sendLevel[s], db);
-            prepare (p);
-            double own = 0.0;
-            const auto r = render (p, 1.5, vocal, [&] (int)
-            {
-                own = std::max (own, (double) p.returnRms[(size_t) s].load());
-                for (int o = 0; o < numSends; ++o)
-                    if (o != s && p.returnRms[(size_t) o].load() != 0.0f)
-                        othersSilent = false;
-            });
-            for (int i = 0; i < r.out.getNumSamples(); ++i)
-                finite = finite && std::isfinite (r.out.getSample (0, i)) && std::isfinite (r.out.getSample (1, i));
-            levels.push_back (rmsOfReturn (r));
-        }
-        check (levels[0] > 0.0 && levels[0] < levels[1] && levels[1] < levels[2],
-               juce::String (sendName[s]) + " send: raising the level raises its return ("
-               + juce::String (juce::Decibels::gainToDecibels (levels[0]), 1) + " / "
-               + juce::String (juce::Decibels::gainToDecibels (levels[1]), 1) + " / "
-               + juce::String (juce::Decibels::gainToDecibels (levels[2]), 1) + " dB)");
-        check (othersSilent, juce::String (sendName[s]) + " send: the other returns stay at exactly zero");
-        check (finite, juce::String (sendName[s]) + " send: output is finite");
-    }
-
-    // dry is unchanged: output minus the returns equals the gained input
-    {
-        KaminariVocalProcessor p;
-        neutral (p);
-        setParam (p, kvid::rvOn, 1.0f);
-        setParam (p, kvid::rvSend, -6.0f);
+        check (maxDiff (r) == 0.0f, "every module off: the output is the input delayed by exactly the reported latency");
         setParam (p, kvid::outGain, -6.0f);
         prepare (p);
-        KaminariVocalProcessor dryOnly;
-        neutral (dryOnly);
-        setParam (dryOnly, kvid::outGain, -6.0f);
-        prepare (dryOnly);
-        const auto wet = render (p, 1.0, vocal);
-        const auto dry = render (dryOnly, 1.0, vocal);
-        // the reverb is mono-correlated with the input only through its own return; compare the first 5 ms,
-        // before the pre-delay (20 ms) lets any return through
-        float m = 0.0f;
-        for (int c = 0; c < 2; ++c)
-            for (int i = 0; i < (int) (0.005 * sr); ++i)
-                m = std::max (m, std::abs (wet.out.getSample (c, i) - dry.out.getSample (c, i)));
-        check (m == 0.0f, "reverb on: before the return arrives the output equals the dry-only output exactly");
-    }
-
-    // pre/post fader
-    {
-        double post = 0, pre = 0;
-        for (int tap = 0; tap < 2; ++tap)
-        {
-            KaminariVocalProcessor p;
-            neutral (p);
-            setParam (p, kvid::dlOn, 1.0f);
-            setParam (p, kvid::dlSend, -6.0f);
-            setParam (p, kvid::dlFeedback, 0.0f);
-            setParam (p, kvid::dlTap, (float) tap);
-            setParam (p, kvid::outGain, -12.0f);
-            prepare (p);
-            double e = 0;
-            render (p, 1.5, vocal, [&] (int) { e += p.returnRms[1].load(); });
-            (tap == 0 ? post : pre) = e;
-        }
-        const double diffDb = juce::Decibels::gainToDecibels (pre / post);
-        check (std::abs (diffDb - 12.0) < 1.5, "pre-fader send ignores Output Gain, post-fader follows it (difference "
-               + juce::String (diffDb, 1) + " dB for -12 dB Output Gain)");
-    }
-
-    // bypass
-    for (int s = 0; s < numSends; ++s)
-    {
-        KaminariVocalProcessor p;
-        neutral (p);
-        setParam (p, sendOn[s], 1.0f);
-        setParam (p, sendLevel[s], 0.0f);
-        prepare (p);
-        const int offBlock = (int) (1.0 * sr / block);
-        const auto r = render (p, 2.0, vocal, [&] (int b) { if (b == offBlock) setParam (p, sendOn[s], 0.0f); });
-        const bool wasOn = rmsOfReturn (r, 0) > 1e-4;
-        check (wasOn && maxDiff (r, 1.0f, (offBlock + 3) * block) == 0.0f,
-               juce::String (sendName[s]) + " send switched off: after the 10 ms fade the output equals the dry signal exactly");
-    }
-
-    // clipping: every send at +6 dB with a full-scale input
-    {
-        KaminariVocalProcessor p;
-        neutral (p);
-        for (int s = 0; s < numSends; ++s)
-        {
-            setParam (p, sendOn[s], 1.0f);
-            setParam (p, sendLevel[s], 6.0f);
-        }
-        setParam (p, kvid::dlFeedback, 100.0f);
-        setParam (p, kvid::rvDecay, 20.0f);
-        prepare (p);
-        float peak[numSends] = {};
-        render (p, 4.0, [] (int c, long n) { return (float) std::sin (2 * kv::pi * 300.0 * n / sr + c); },
-                [&] (int) { for (int s = 0; s < numSends; ++s) peak[s] = std::max (peak[s], p.returnPeak[(size_t) s].load()); });
-        check (peak[0] <= 1.0f && peak[1] <= 1.0f && peak[2] <= 1.0f,
-               "full-scale input, all sends +6 dB, 100 % feedback, 20 s decay: every return peak <= 0 dBFS ("
-               + juce::String (peak[0], 3) + ", " + juce::String (peak[1], 3) + ", " + juce::String (peak[2], 3) + ")");
-    }
-
-    // ---- reverb ---------------------------------------------------------------------------------------------------
-    {
-        std::vector<std::vector<float>> envs, irs;
-        bool allFinite = true, allNonZero = true;
-        for (int m = 0; m < kv::numReverbModes; ++m)
-        {
-            KaminariVocalProcessor p;
-            neutral (p);
-            setParam (p, kvid::rvOn, 1.0f);
-            setParam (p, kvid::rvSend, 0.0f);
-            setParam (p, kvid::rvMode, (float) m);
-            setParam (p, kvid::rvPreDelay, 0.0f);
-            prepare (p);
-            const auto r = render (p, 2.0, impulse);
-            auto ret = returnSignal (r, 0);
-            const auto retR = returnSignal (r, 1);
-            for (size_t i = 0; i < ret.size(); ++i)
-            {
-                allFinite = allFinite && std::isfinite (ret[i]) && std::isfinite (retR[i]);
-                ret[i] = 0.5f * (ret[i] + retR[i]);
-            }
-            double e = 0;
-            for (auto v : ret) e += (double) v * v;
-            allNonZero = allNonZero && e > 1e-8;
-            envs.push_back (envelope (ret));
-            irs.push_back (ret);
-        }
-        double worst = -1.0;
-        juce::String worstPair;
-        for (int a = 0; a < kv::numReverbModes; ++a)
-            for (int b = a + 1; b < kv::numReverbModes; ++b)
-            {
-                const double c = correlation (irs[(size_t) a], irs[(size_t) b]);
-                if (c > worst) { worst = c; worstPair = juce::String (kv::reverbMode (a).name) + " / " + kv::reverbMode (b).name; }
-            }
-        check (allFinite && allNonZero, "all 20 reverb modes produce a finite, non-zero return");
-        check (worst < 0.9, "all 20 reverb modes have different impulse responses (highest correlation "
-               + juce::String (worst, 3) + ": " + worstPair + ")");
-    }
-
-    {
-        // Decay changes the tail of an FDN mode; Attack changes Nonlin and Ambience; Decay is hidden for Nonlin
-        auto tailEnergy = [] (int mode, const char* id, float value)
-        {
-            KaminariVocalProcessor p;
-            neutral (p);
-            setParam (p, kvid::rvOn, 1.0f);
-            setParam (p, kvid::rvSend, 0.0f);
-            setParam (p, kvid::rvMode, (float) mode);
-            setParam (p, id, value);
-            prepare (p);
-            const auto r = render (p, 3.0, impulse);
-            const auto v = returnSignal (r, 0);
-            double late = 0;
-            for (size_t i = (size_t) (1.0 * sr); i < v.size(); ++i) late += (double) v[i] * v[i];
-            return std::pair<double, std::vector<float>> (late, v);
-        };
-        const auto shortTail = tailEnergy (0, kvid::rvDecay, 0.5f), longTail = tailEnergy (0, kvid::rvDecay, 8.0f);
-        check (longTail.first > 100.0 * shortTail.first, "Concert Hall: Decay 8 s leaves far more energy after 1 s than Decay 0.5 s");
-
-        const auto gated = tailEnergy (14, kvid::rvAttack, 0.0f), reverse = tailEnergy (14, kvid::rvAttack, 100.0f);
-        const auto eg = envelope (gated.second), er = envelope (reverse.second);
-        check (eg.size() > 10 && er[2] < er[8] && eg[2] > er[2], "Nonlin: Attack 0 is a flat gate, Attack 100 rises (reverse envelope)");
-
-        const auto ambER = tailEnergy (7, kvid::rvAttack, 0.0f), ambLate = tailEnergy (7, kvid::rvAttack, 100.0f);
-        check (correlation (ambER.second, ambLate.second) < 0.5, "Ambience: Attack moves the balance between early reflections and tail");
-
-        check (! kv::reverbControlUse (14).decay && kv::reverbControlUse (14).attack && ! kv::reverbControlUse (14).modulation,
-               "Nonlin exposes Attack, hides Decay and modulation (they have no effect)");
-        check (kv::reverbControlUse (0).decay && ! kv::reverbControlUse (0).attack, "Concert Hall exposes Decay, hides Attack");
-    }
-
-    // ---- delay ----------------------------------------------------------------------------------------------------
-    {
-        KaminariVocalProcessor p;
-        neutral (p);
-        setParam (p, kvid::dlOn, 1.0f);
-        setParam (p, kvid::dlSend, 0.0f);
-        setParam (p, kvid::dlStyle, 0.0f);        // clean
-        setParam (p, kvid::dlT1Unit, 1.0f);       // note, 1/4 at the default 120 BPM = 500 ms
-        setParam (p, kvid::dlT1Note, 1.0f);
-        setParam (p, kvid::dlFeedback, 0.0f);
-        setParam (p, kvid::dlWidth, 0.0f);
-        setParam (p, kvid::dlLoCut, 20.0f);
-        setParam (p, kvid::dlHiCut, 20000.0f);
-        prepare (p);
-        const auto r = render (p, 1.5, impulse);
-        const auto v = returnSignal (r, 0);
-        const auto peakAt = (int) (std::max_element (v.begin(), v.end(), [] (float a, float b) { return std::abs (a) < std::abs (b); }) - v.begin());
-        double late = 0;
-        for (size_t i = (size_t) (0.6 * sr); i < v.size(); ++i) late += (double) v[i] * v[i];
-        check (std::abs (peakAt - 24000) <= 3, "delay 1/4 note at 120 BPM: echo at 500 ms (sample " + juce::String (peakAt) + ")");
-        check (late < 1e-6, "delay with 0 % feedback: a single echo");
-    }
-    {
-        KaminariVocalProcessor p;
-        neutral (p);
-        setParam (p, kvid::dlOn, 1.0f);
-        setParam (p, kvid::dlSend, 0.0f);
-        setParam (p, kvid::dlMode, 2.0f);         // ping-pong
-        setParam (p, kvid::dlT1Unit, 0.0f);
-        setParam (p, kvid::dlT1Ms, 200.0f);
-        setParam (p, kvid::dlT2Unit, 0.0f);
-        setParam (p, kvid::dlT2Ms, 100.0f);
-        setParam (p, kvid::dlWidth, 75.0f);
-        setParam (p, kvid::dlFeedback, 0.0f);
-        prepare (p);
-        const auto r = render (p, 0.6, impulse);
-        const auto l = returnSignal (r, 0), rr = returnSignal (r, 1);
-        auto energyAround = [] (const std::vector<float>& v, double t)
-        {
-            double e = 0;
-            for (int i = (int) ((t - 0.01) * sr); i < (int) ((t + 0.02) * sr); ++i) e += (double) v[(size_t) i] * v[(size_t) i];
-            return e;
-        };
-        check (energyAround (l, 0.2) > 100 * energyAround (rr, 0.2) && energyAround (rr, 0.3) > 100 * energyAround (l, 0.3),
-               "ping-pong: ping (200 ms) on the left, pong (200 + 100 ms) on the right");
-    }
-    {
-        KaminariVocalProcessor p;
-        neutral (p);
-        setParam (p, kvid::dlOn, 1.0f);
-        setParam (p, kvid::dlSend, 6.0f);
-        setParam (p, kvid::dlFeedback, 100.0f);
-        setParam (p, kvid::dlT1Unit, 0.0f);
-        setParam (p, kvid::dlT1Ms, 30.0f);
-        setParam (p, kvid::dlStyle, 0.0f);
-        setParam (p, kvid::dlSaturation, 0.0f);
-        prepare (p);
-        float peak = 0;
-        render (p, 10.0, vocal, [&] (int) { peak = std::max (peak, p.returnPeak[1].load()); });
-        check (peak <= 1.0f && peak > 0.01f, "delay at 100 % feedback with short time stays bounded for 10 s (peak " + juce::String (peak, 3) + ")");
-    }
-    {
-        // groove: swing moves the first echo later and the second earlier relative to the straight grid
-        KaminariVocalProcessor p;
-        neutral (p);
-        setParam (p, kvid::dlOn, 1.0f);
-        setParam (p, kvid::dlSend, 0.0f);
-        setParam (p, kvid::dlStyle, 0.0f);
-        setParam (p, kvid::dlT1Unit, 0.0f);
-        setParam (p, kvid::dlT1Ms, 300.0f);
-        setParam (p, kvid::dlGroove, 100.0f);
-        setParam (p, kvid::dlFeedback, 50.0f);
-        setParam (p, kvid::dlWidth, 0.0f);
-        prepare (p);
-        const auto v = returnSignal (render (p, 1.0, impulse), 0);
-        auto peakNear = [&] (double t)
-        {
-            int best = 0; float bv = 0;
-            for (int i = (int) ((t - 0.15) * sr); i < (int) ((t + 0.15) * sr); ++i)
-                if (std::abs (v[(size_t) i]) > bv) { bv = std::abs (v[(size_t) i]); best = i; }
-            return best;
-        };
-        const int first = peakNear (0.4), second = peakNear (0.6);
-        check (std::abs (first - (int) (0.4 * sr)) < 10 && std::abs (second - (int) (0.6 * sr)) < 10,
-               "delay groove (full swing): echoes at 400 ms and 600 ms instead of 300 / 600 ms");
-    }
-
-    // ---- widener quality: MicroShift is smooth (no splice warble), SideWidener has no regular comb ------------------
-    {
-        // a steady 1030 Hz tone through MicroShift: the level of each side stays steady over 8 s (a two-tap shifter
-        // that mixes taps 20 ms apart dips by many dB whenever they cancel)
-        kv::MicroShiftEngine ms;
-        ms.prepare ((float) sr);
-        kv::WidenerSettings ws;
-        const int total = (int) sr * 8;
-        std::vector<float> l ((size_t) total), r ((size_t) total), ol ((size_t) total), orr ((size_t) total);
-        for (int i = 0; i < total; ++i) l[(size_t) i] = r[(size_t) i] = 0.25f * (float) std::sin (2.0 * kv::pi * 1030.0 * i / sr);
-        for (int start = 0; start < total; start += block)
-            ms.process (l.data() + start, r.data() + start, ol.data() + start, orr.data() + start, std::min (block, total - start), ws);
-        float lo = 1e9f, hi = -1e9f;
-        const int frame = (int) (0.02 * sr);
-        for (int f = (int) sr; f + frame < total; f += frame)
-            for (auto* ch : { &ol, &orr })
-            {
-                double e = 0;
-                for (int i = f; i < f + frame; ++i) e += (double) (*ch)[(size_t) i] * (*ch)[(size_t) i];
-                const float db = 10.0f * std::log10 ((float) (e / frame) + 1e-12f);
-                lo = std::min (lo, db); hi = std::max (hi, db);
-            }
-        check (hi - lo < 2.0f, "MicroShift: a steady tone stays steady through every splice (level range " + juce::String (hi - lo, 2) + " dB over 7 s)");
-
-        // SideWidener per speaker (dry + side): a plain short delay leaves a comb of evenly spaced deep notches (a
-        // pitched, metallic colour); the allpass decorrelators leave only a few irregular ones. Count notches deeper
-        // than 12 dB from 200 Hz to 4 kHz in 1/24-octave steps, for the new Mode 1 and for a 3.5 ms delay.
-        auto countNotches = [] (std::function<float (const std::vector<float>&, int)> sideAt)
-        {
-            int notches = 0;
-            bool inNotch = false;
-            for (double f = 200.0; f < 4000.0; f *= std::pow (2.0, 1.0 / 24.0))
-            {
-                const int len = (int) (0.25 * sr);
-                std::vector<float> in ((size_t) len);
-                for (int i = 0; i < len; ++i) in[(size_t) i] = 0.25f * (float) std::sin (2.0 * kv::pi * f * i / sr);
-                double e = 0, ei = 0;
-                for (int i = len / 2; i < len; ++i) { const double y = in[(size_t) i] + sideAt (in, i); e += y * y; ei += (double) in[(size_t) i] * in[(size_t) i]; }
-                const bool deep = 10.0 * std::log10 (e / ei + 1e-12) < -12.0;
-                if (deep && ! inNotch) ++notches;
-                inNotch = deep;
-            }
-            return notches;
-        };
-        const int delayNotches = countNotches ([] (const std::vector<float>& in, int i) { const int d = (int) (0.0035 * sr); return i >= d ? in[(size_t) (i - d)] : 0.0f; });
-        const int apNotches = countNotches ([] (const std::vector<float>& in, int i)
-        {
-            static std::vector<float> outL;
-            kv::SideWidenerEngine sw;
-            if (i == (int) in.size() / 2)
-            {
-                sw.prepare ((float) sr);
-                kv::WidenerSettings s1; s1.type = kv::WidenerSettings::SideWidener; s1.swMode = 0; s1.swWidth = 1.0f; s1.swTone = 1.0f;
-                outL.assign (in.size(), 0.0f);
-                std::vector<float> outR (in.size());
-                sw.process (in.data(), in.data(), outL.data(), outR.data(), (int) in.size(), s1);
-            }
-            return outL[(size_t) i];
-        });
-        check (apNotches == 0 && delayNotches >= 5, "SideWidener Mode 1 at full width: " + juce::String (apNotches) + " notches deeper than 12 dB per speaker "
-               "from 200 Hz to 4 kHz (a full-level 3.5 ms delay: " + juce::String (delayNotches) + ", evenly spaced)");
-    }
-
-    // ---- widener --------------------------------------------------------------------------------------------------
-    {
-        auto run = [] (int type, std::function<void (KaminariVocalProcessor&)> extra = nullptr)
-        {
-            auto p = std::make_unique<KaminariVocalProcessor>();
-            neutral (*p);
-            setParam (*p, kvid::wdOn, 1.0f);
-            setParam (*p, kvid::wdSend, 0.0f);
-            setParam (*p, kvid::wdType, (float) type);
-            if (extra) extra (*p);
-            prepare (*p);
-            return render (*p, 1.0, vocal);
-        };
-        const auto micro = run (0), side = run (1);
-        double monoSum = 0, sideEnergy = 0;
-        for (int i = 0; i < side.out.getNumSamples(); ++i)
-        {
-            const double rl = side.out.getSample (0, i) - side.in.getSample (0, i);
-            const double rr = side.out.getSample (1, i) - side.in.getSample (1, i);
-            monoSum = std::max (monoSum, std::abs (rl + rr));
-            sideEnergy += rl * rl;
-        }
-        check (sideEnergy > 1e-3 && monoSum < 1e-6, "SideWidener return is pure side: its mono sum is zero (mono compatible)");
-        check (correlation (returnSignal (micro, 0), returnSignal (side, 0)) < 0.5, "MicroShift and SideWidener produce different returns");
-
-        const auto ml = returnSignal (micro, 0), mr = returnSignal (micro, 1);
-        check (correlation (ml, mr) < 0.98 && rmsOfReturn (micro) > 1e-3, "MicroShift return differs left to right (widening)");
-
-        const auto focused = run (0, [] (KaminariVocalProcessor& p) { setParam (p, kvid::msFocus, 10000.0f); });
-        check (rmsOfReturn (focused) < 0.05 * rmsOfReturn (micro), "MicroShift Focus 10 kHz returns almost nothing from a 220 Hz vocal tone");
-
-        const auto noDetune = run (0, [] (KaminariVocalProcessor& p) { setParam (p, kvid::msDetune, 0.0f); setParam (p, kvid::msDelay, 0.0f); });
-        check (correlation (returnSignal (noDetune, 0), ml) < 0.99, "MicroShift Detune and Delay change the return");
-
-        // switching at run time: after the switch only SideWidener runs (the return stays pure side)
-        KaminariVocalProcessor p;
-        neutral (p);
-        setParam (p, kvid::wdOn, 1.0f);
-        setParam (p, kvid::wdSend, 0.0f);
-        prepare (p);
-        const int switchBlock = (int) (0.5 * sr / block);
-        const auto r = render (p, 1.0, vocal, [&] (int b) { if (b == switchBlock) setParam (p, kvid::wdType, 1.0f); });
-        double worstMono = 0;
-        for (int i = (switchBlock + 3) * block; i < r.out.getNumSamples(); ++i)
-            worstMono = std::max (worstMono, (double) std::abs (r.out.getSample (0, i) - r.in.getSample (0, i)
-                                                               + r.out.getSample (1, i) - r.in.getSample (1, i)));
-        check (worstMono < 1e-6, "switching MicroShift -> SideWidener replaces the algorithm instead of layering both");
-    }
-
-
-    // ---- channel modules ------------------------------------------------------------------------------------------
-    {
-        KaminariVocalProcessor p;
-        neutral (p);
-        prepare (p);
-        check (p.getLatencySamples() == 192, "reported latency is 192 samples (4 ms) at 48 kHz (Tune's Tracking delay), also with Tune off");
-        const auto r = render (p, 0.5, vocal);
-        check (maxDiff (r) == 0.0f, "all modules off: the output is the input delayed by exactly the reported latency");
-
-        setParam (p, "lv_lookahead", 5.0f);
-        setParam (p, "lv_on", 1.0f);
-        juce::AudioBuffer<float> buf (2, block); juce::MidiBuffer midi; buf.clear();
-        p.processBlock (buf, midi);
-        juce::MessageManager::getInstance()->runDispatchLoopUntil (20);
-        check (p.getLatencySamples() == 192 + 240, "Compression lookahead 5 ms adds 240 samples to the reported latency");
+        const auto g = render (p, 0.5, vocal);
+        check (maxDiff (g, juce::Decibels::decibelsToGain (-6.0f)) < 1.0e-6f, "Output Gain -6 dB scales the output by exactly -6 dB");
     }
     {
         KaminariVocalProcessor p;
@@ -719,27 +265,31 @@ int main (int argc, char** argv)
         check (p.checkBusesLayoutSupported (monoStereo) && ! p.checkBusesLayoutSupported (stereoMono),
                "mono-in / stereo-out is supported (stereo-in / mono-out is not)");
         p.setBusesLayout (monoStereo);
-        neutral (p);
-        setParam (p, kvid::wdOn, 1.0f);
-        setParam (p, kvid::wdSend, 0.0f);
-        setParam (p, kvid::wdType, 1.0f);   // SideWidener: pure side return
+        p.presets.loadChainPreset ("Pop Lead");
         p.setRateAndBufferSizeDetails (sr, block);
         p.prepareToPlay (sr, block);
         juce::AudioBuffer<float> buf (2, block); juce::MidiBuffer midi;
-        double side = 0, midErr = 0;
+        double diff = 0, level = 0;
         for (int b = 0; b < 100; ++b)
         {
             for (int i = 0; i < block; ++i) { buf.setSample (0, i, vocal (0, (long) b * block + i)); buf.setSample (1, i, 0.0f); }
-            juce::AudioBuffer<float> in (1, block); in.copyFrom (0, 0, buf, 0, 0, block);
             p.processBlock (buf, midi);
             for (int i = 0; i < block; ++i)
             {
-                const double l = buf.getSample (0, i), r = buf.getSample (1, i);
-                side += (l - r) * (l - r);
-                if (b > 2) midErr = std::max (midErr, std::abs (0.5 * (l + r) - 0.0));
+                diff = std::max (diff, (double) std::abs (buf.getSample (0, i) - buf.getSample (1, i)));
+                level = std::max (level, (double) std::abs (buf.getSample (0, i)));
             }
         }
-        check (side > 1e-3, "mono-in / stereo-out: the widener return is stereo (left and right differ)");
+        check (level > 0.01 && diff == 0.0, "mono-in / stereo-out: the vocal is processed as dual mono (both outputs identical)");
+    }
+
+    // ---- channel modules ------------------------------------------------------------------------------------------
+    {
+        // the pass-through above, with Tune on as well: still delayed by exactly the reported latency when not correcting
+        KaminariVocalProcessor p;
+        neutral (p);
+        prepare (p);
+        check (kv::Tune::latencyFor (sr) == 96 && kv::Tune::latencyFor (96000.0) == 192, "Tune latency: 96 samples at 48 kHz, 192 at 96 kHz (2 ms)");
     }
     {
         // EQ: a +6 dB bell at 1 kHz; a 24 dB/oct low cut at 100 Hz
@@ -760,55 +310,77 @@ int main (int argc, char** argv)
         check (std::abs (kv::EqDesign::make (e, sr).magnitudeDb (18000.0, sr) - 4.0) < 0.5, "EQ curve math: high shelf +4 dB reads +4 dB at 18 kHz");
     }
     {
-        // Compression: -6 dBFS sine, threshold -20, 4:1, hard knee, no makeup -> about -16.5 dBFS
-        KaminariVocalProcessor p;
-        neutral (p);
-        setParam (p, "lv_on", 1.0f); setParam (p, "lv_thresh", -20.0f); setParam (p, "lv_ratio", 4.0f); setParam (p, "lv_knee", 0.0f);
-        setParam (p, "lv_range", 40.0f); setParam (p, "lv_auto_gain", 0.0f); setParam (p, "lv_auto_release", 0.0f);
-        prepare (p);
-        const auto r = render (p, 1.0, sine (1000.0, -6.0f));
-        const float out = toneDb (r.out, 0, 1000.0, 36000, 48000);
-        check (std::abs (out + 16.5f) < 1.5f, "Compression 4:1 at -20 dB: a -6 dBFS tone comes out at " + juce::String (out, 1) + " dBFS (expected about -16.5)");
-        check (p.moduleGr[KaminariVocalProcessor::ModCompression].load() > 8.0f, "Compression reports its gain reduction to the meter");
-    }
-    {
-        // Compression Auto Gain matches the loudness: with light and heavy settings and every style, the vocal comes
-        // out as loud as it went in (measured over the last two seconds of a four-second phrase)
-        auto rmsDb = [] (const juce::AudioBuffer<float>& b, int from, int to)
-        {
-            double e = 0;
-            for (int i = from; i < to; ++i) e += (double) b.getSample (0, i) * b.getSample (0, i);
-            return 10.0 * std::log10 (e / (to - from) + 1e-20);
-        };
-        struct Setting { float thresh, ratio; int style; };
-        double worst = 0;
-        juce::String detail;
-        for (auto st : { Setting { -18.0f, 2.0f, 0 }, Setting { -35.0f, 8.0f, 0 }, Setting { -30.0f, 4.0f, 1 }, Setting { -30.0f, 4.0f, 2 },
-                         Setting { -30.0f, 4.0f, 3 }, Setting { -30.0f, 4.0f, 4 } })
+        // Compression (LA-2A style): Compression 0 and Gain 0 leave the signal untouched; switched off it is untouched
+        for (int variant = 0; variant < 2; ++variant)
         {
             KaminariVocalProcessor p;
             neutral (p);
-            setParam (p, "lv_on", 1.0f); setParam (p, "lv_thresh", st.thresh); setParam (p, "lv_ratio", st.ratio);
-            setParam (p, "lv_style", (float) st.style); setParam (p, "lv_auto_gain", 1.0f); setParam (p, "lv_range", 40.0f);
+            setParam (p, "lv_on", variant == 0 ? 1.0f : 0.0f);
+            setParam (p, "lv_peak", variant == 0 ? 0.0f : 80.0f);
+            setParam (p, "lv_gain", 0.0f);
             prepare (p);
-            const auto r = render (p, 4.0, vocal);
-            const double d = rmsDb (r.out, (int) (2.0 * sr), (int) (4.0 * sr)) - rmsDb (r.in, (int) (2.0 * sr), (int) (4.0 * sr));
-            worst = std::max (worst, std::abs (d));
-            detail << juce::String (d, 1) << " ";
+            const auto r = render (p, 1.0, vocal);
+            check (maxDiff (r) == 0.0f, variant == 0 ? "Compression 0 with Gain 0: output is bit-identical to the input"
+                                                     : "Compression switched off: output is bit-identical to the input");
         }
-        check (worst < 1.5, "Compression Auto Gain keeps the vocal as loud as the input in every style (differences in dB: " + detail.trim() + ")");
     }
     {
-        // De-ess: 7 kHz is reduced by about its range, 300 Hz is untouched (split band)
+        // more Compression = more reduction of a steady -6 dBFS tone; Gain adds exactly its dB on top
+        auto level = [] (float peak, float gain)
+        {
+            KaminariVocalProcessor p;
+            neutral (p);
+            setParam (p, "lv_on", 1.0f); setParam (p, "lv_peak", peak); setParam (p, "lv_gain", gain);
+            prepare (p);
+            const auto r = render (p, 2.0, sine (1000.0, -6.0f));
+            return std::pair { toneDb (r.out, 0, 1000.0, 72000, 96000), p.moduleGr[KaminariVocalProcessor::ModCompression].load() };
+        };
+        const auto none = level (0.0f, 0.0f), light = level (30.0f, 0.0f), mid = level (50.0f, 0.0f), heavy = level (75.0f, 0.0f);
+        const auto made = level (50.0f, 6.0f), plus = level (0.0f, 6.0f);
+        check (std::abs (none.first + 6.0f) < 0.1f && light.first < none.first - 1.0f && mid.first < light.first - 2.0f && heavy.first < mid.first - 2.0f,
+               "Compression 0 / 30 / 50 / 75 on a -6 dBFS tone: " + juce::String (none.first, 1) + " / " + juce::String (light.first, 1) + " / "
+               + juce::String (mid.first, 1) + " / " + juce::String (heavy.first, 1) + " dBFS");
+        check (std::abs (made.first - mid.first - 6.0f) < 0.2f && std::abs (plus.first - none.first - 6.0f) < 0.1f,
+               "Gain +6 dB raises the output by " + juce::String (made.first - mid.first, 2) + " dB (compressing) and "
+               + juce::String (plus.first - none.first, 2) + " dB (not compressing)");
+        check (mid.second > 4.0f && std::abs (mid.second - (-6.0f - mid.first)) < 1.0f,
+               "Compression reports its gain reduction to the meter (" + juce::String (mid.second, 1) + " dB)");
+    }
+    {
+        // optical release: after two seconds of heavy reduction, about half lets go within 200 ms, the rest over seconds
         KaminariVocalProcessor p;
         neutral (p);
-        setParam (p, "ds_on", 1.0f); setParam (p, "ds_thresh", -40.0f); setParam (p, "ds_range", 8.0f);
+        setParam (p, "lv_on", 1.0f); setParam (p, "lv_peak", 60.0f); setParam (p, "lv_gain", 0.0f);
         prepare (p);
-        auto r = render (p, 0.5, sine (7000.0, -10.0f));
-        const float ess = toneDb (r.out, 0, 7000.0, 12000, 24000) - toneDb (r.in, 0, 7000.0, 12000, 24000);
-        r = render (p, 0.5, sine (300.0, -10.0f));
-        const float low = toneDb (r.out, 0, 300.0, 12000, 24000) - toneDb (r.in, 0, 300.0, 12000, 24000);
-        check (ess < -6.0f && std::abs (low) < 0.3f, "De-ess: 7 kHz reduced " + juce::String (-ess, 1) + " dB, 300 Hz changed " + juce::String (low, 2) + " dB");
+        auto src = [] (int, long n) { return (n < (long) (2.0 * sr) ? 0.5f : 0.02f) * (float) std::sin (2 * kv::pi * 1000.0 * n / sr); };
+        std::vector<float> gr;
+        render (p, 4.0, src, [&] (int) { gr.push_back (p.moduleGr[KaminariVocalProcessor::ModCompression].load()); });
+        auto at = [&] (double t) { return gr[(size_t) juce::jlimit (0, (int) gr.size() - 1, (int) (t * sr / block) + 1)]; };
+        const float held = at (1.95), fast = at (2.2), slow = at (3.5);
+        check (held > 6.0f && fast > 0.25f * held && fast < 0.7f * held && slow > 0.05f * held && slow < 0.8f * fast,
+               "opto release: " + juce::String (held, 1) + " dB held; " + juce::String (fast, 1) + " dB 200 ms after the loud part ends; "
+               + juce::String (slow, 1) + " dB after 1.5 s");
+    }
+    {
+        // De-ess: esses are found relative to the vocal, so level does not matter; only the highs are turned down
+        auto ds = [] (float freq, float range, double toneHz, float db)
+        {
+            KaminariVocalProcessor p;
+            neutral (p);
+            setParam (p, "ds_on", 1.0f); setParam (p, "ds_det_lo", freq); setParam (p, "ds_range", range);
+            prepare (p);
+            const auto r = render (p, 0.5, sine (toneHz, db));
+            return toneDb (r.out, 0, toneHz, 12000, 24000) - toneDb (r.in, 0, toneHz, 12000, 24000);
+        };
+        const float ess = ds (5000.0f, 8.0f, 7000.0, -10.0f), quiet = ds (5000.0f, 8.0f, 7000.0, -40.0f), low = ds (5000.0f, 8.0f, 300.0, -10.0f);
+        check (ess < -5.0f && ess > -9.0f && std::abs (quiet - ess) < 1.0f && std::abs (low) < 0.01f,
+               "De-ess (Range 8 dB, Frequency 5 kHz): 7 kHz reduced " + juce::String (-ess, 1) + " dB at -10 dBFS and " + juce::String (-quiet, 1)
+               + " dB at -40 dBFS; 300 Hz changed " + juce::String (low, 3) + " dB");
+        const float at5k = ds (5000.0f, 10.0f, 4000.0, -10.0f), at10k = ds (10000.0f, 10.0f, 4000.0, -10.0f);
+        check (at5k < -2.0f && std::abs (at10k) < 0.01f, "De-ess Frequency: a 4 kHz tone is reduced " + juce::String (-at5k, 1)
+               + " dB at 5 kHz and left alone at 10 kHz (" + juce::String (at10k, 3) + " dB)");
+        const float none = ds (5000.0f, 0.0f, 7000.0, -10.0f);
+        check (std::abs (none) < 1.0e-4f, "De-ess Range 0: nothing is reduced (" + juce::String (none, 4) + " dB)");
     }
     {
         // Multiband default band (100-500 Hz): a loud 200 Hz tone is reduced, 3 kHz is not
@@ -871,120 +443,6 @@ int main (int argc, char** argv)
         r = render (p, 0.5, sine (in, -12.0f));
         check (maxDiff (r) == 0.0f, "Tune off: the signal passes unchanged (delayed by the reported latency)");
     }
-
-    // ---- tune: Tracking and High quality modes ---------------------------------------------------------------------
-    {
-        // pitch in 25 ms frames from zero crossings, in cents relative to ref
-        auto track = [] (const juce::AudioBuffer<float>& b, int from, int to, double ref)
-        {
-            std::vector<double> c;
-            const int frame = (int) (0.025 * sr);
-            for (int i = from; i + frame <= to; i += frame / 2)
-                if (const double f = zeroCrossFreq (b, 0, i, i + frame); f > 0) c.push_back (1200.0 * std::log2 (f / ref));
-            return c;
-        };
-        auto meanOf = [] (const std::vector<double>& v) { double m = 0; for (double x : v) m += x; return v.empty() ? 0.0 : m / (double) v.size(); };
-        auto rmsAbout = [] (const std::vector<double>& v, double ref) { double e = 0; for (double x : v) e += (x - ref) * (x - ref); return v.empty() ? 1e9 : std::sqrt (e / (double) v.size()); };
-        // A4 + 30 cents with +-40 cents of 5.5 Hz vibrato (phase from the first-order integral of the frequency)
-        auto vibratoTone = [] (long n)
-        {
-            const double t = (double) n / sr, f0 = 440.0 * std::pow (2.0, 0.30 / 12.0), d = 40.0 * std::log (2.0) / 1200.0, r = 5.5;
-            return 0.25f * (float) std::sin (2 * kv::pi * f0 * (t - d * std::cos (2 * kv::pi * r * t) / (2 * kv::pi * r)));
-        };
-        const char* modeName[] = { "Tracking", "High quality" };
-        for (int q = 0; q < 2; ++q)
-        {
-            const juce::String mode = juce::String (modeName[q]) + ": ";
-            KaminariVocalProcessor p;
-            neutral (p);
-            setParam (p, "tn_quality", (float) q);
-            prepare (p);
-            const int expectLat = kv::Tune::latencyFor (sr, q, 1);
-            check (p.getLatencySamples() == expectLat, mode + "reported latency " + juce::String (p.getLatencySamples()) + " samples ("
-                   + juce::String (1000.0 * p.getLatencySamples() / sr, 1) + " ms)");
-            auto r = render (p, 0.5, vocal);
-            check (maxDiff (r) == 0.0f, mode + "Tune off passes the signal unchanged");
-
-            setParam (p, "tn_on", 1.0f); setParam (p, "tn_speed", 0.0f); setParam (p, "tn_humanize", 0.0f);
-            for (const double startCents : { 30.0, -30.0, -8.0 })
-            {
-                prepare (p);
-                r = render (p, 1.0, sine (440.0 * std::pow (2.0, startCents / 1200.0), -12.0f));
-                const double c = 1200.0 * std::log2 (zeroCrossFreq (r.out, 0, 12000, 48000) / 440.0);
-                check (std::abs (c) < 3.0, mode + "hard tune pulls A4 " + juce::String (startCents, 0) + " cents to " + juce::String (c, 1) + " cents");
-            }
-            // hard tune flattens the singer's vibrato
-            prepare (p);
-            r = render (p, 2.0, [&] (int, long n) { return vibratoTone (n); });
-            const auto hard = track (r.out, 24000, 90000, 440.0);
-            check (rmsAbout (hard, 0.0) < 6.0, mode + "hard tune flattens +-40 cent vibrato to " + juce::String (rmsAbout (hard, 0.0), 1) + " cents RMS");
-            // natural speed: the note centre is corrected, the vibrato is kept
-            setParam (p, "tn_speed", 60.0f);
-            prepare (p);
-            r = render (p, 3.0, [&] (int, long n) { return vibratoTone (n); });
-            const auto nat = track (r.out, 48000, 138000, 440.0);
-            const double centre = meanOf (nat), depth = std::sqrt (2.0) * rmsAbout (nat, centre);
-            check (std::abs (centre) < 6.0 && depth > 28.0 && depth < 52.0, mode + "Retune Speed 60 ms centres the note at " + juce::String (centre, 1)
-                   + " cents and keeps the vibrato (" + juce::String (juce::roundToInt (depth)) + " of 40 cents)");
-        }
-        {
-            // sung-note behaviour (hard tune, both modes): a scoop from below into C4 sung 25 cents flat, then a
-            // legato step up to C#4 sung 20 cents sharp. Each note must land on its own note, not the one the scoop or glide
-            // passed through.
-            std::vector<float> sig ((size_t) (1.6 * sr));
-            {
-                double ph = 0;
-                for (size_t i = 0; i < sig.size(); ++i)
-                {
-                    const double t = (double) i / sr;
-                    double m;
-                    if (t < 0.10) m = 59.75 - 0.6 * (1.0 - t / 0.10) * (1.0 - t / 0.10);   // scoop into C4 -25 ct
-                    else if (t < 0.80) m = 59.75;
-                    else if (t < 0.87) m = 59.75 + (61.2 - 59.75) * (0.5 - 0.5 * std::cos (kv::pi * (t - 0.80) / 0.07));
-                    else m = 61.2;                                                        // C#4 +20 ct
-                    ph += 440.0 * std::pow (2.0, (m - 69.0) / 12.0) / sr;
-                    // a second harmonic gives the detector some structure and keeps one zero crossing per cycle
-                    const double v = std::sin (2 * kv::pi * ph) + 0.3 * std::sin (4 * kv::pi * ph);
-                    sig[i] = (float) (0.2 * v * std::min (1.0, t / 0.01));
-                }
-            }
-            for (int q = 0; q < 2; ++q)
-            {
-                KaminariVocalProcessor p;
-                neutral (p);
-                setParam (p, "tn_quality", (float) q);
-                setParam (p, "tn_on", 1.0f); setParam (p, "tn_speed", 0.0f); setParam (p, "tn_humanize", 0.0f);
-                setParam (p, "tn_range", 2.0f);
-                prepare (p);
-                const auto r = render (p, 1.6, [&] (int, long n) { return n < (long) sig.size() ? sig[(size_t) n] : 0.0f; });
-                const auto first = track (r.out, (int) (0.15 * sr), (int) (0.78 * sr), 440.0 * std::pow (2.0, (60.0 - 69.0) / 12.0));
-                const auto second = track (r.out, (int) (0.95 * sr), (int) (1.55 * sr), 440.0 * std::pow (2.0, (61.0 - 69.0) / 12.0));
-                double worst = 0;
-                for (double c : first) worst = std::max (worst, std::abs (c));
-                for (double c : second) worst = std::max (worst, std::abs (c));
-
-                check (! first.empty() && ! second.empty() && worst < 10.0, juce::String (modeName[q]) + ": a scoop and a legato step land on their own notes (worst "
-                       + juce::String (worst, 1) + " cents from C4 and C#4)");
-            }
-        }
-        {
-            // switching the mode changes the reported latency (from the message thread)
-            KaminariVocalProcessor p;
-            neutral (p);
-            prepare (p);
-            setParam (p, "tn_quality", 1.0f);
-            setParam (p, "tn_range", 3.0f);
-            juce::AudioBuffer<float> buf (2, block); juce::MidiBuffer midi; buf.clear();
-            p.processBlock (buf, midi);
-            juce::MessageManager::getInstance()->runDispatchLoopUntil (20);
-            check (p.getLatencySamples() == kv::Tune::latencyFor (sr, 1, 3) && kv::Tune::latencyFor (sr, 1, 3) < (int) (0.05 * sr),
-                   "High quality with Deep range reports " + juce::String (p.getLatencySamples()) + " samples (under 50 ms)");
-            setParam (p, "tn_quality", 0.0f);
-            p.processBlock (buf, midi);
-            juce::MessageManager::getInstance()->runDispatchLoopUntil (20);
-            check (p.getLatencySamples() == 192, "back to Tracking: 192 samples");
-        }
-    }
     {
         // the whole chain with a busy chain preset stays finite and bounded
         KaminariVocalProcessor p;
@@ -1003,15 +461,15 @@ int main (int argc, char** argv)
         KaminariVocalProcessor b;
         b.setStateInformation (st.getData(), (int) st.getSize());
         auto xml = juce::AudioProcessor::getXmlFromBinary (st.getData(), (int) st.getSize());
-        check (b.loadedStateVersion == KaminariVocalProcessor::stateVersion && xml != nullptr && (int) xml->getIntAttribute ("engine_reverb") == 1,
-               "sessions store a state version and per-module engine versions");
+        check (b.loadedStateVersion == KaminariVocalProcessor::stateVersion && xml != nullptr && (int) xml->getIntAttribute ("engine_tune") == 1
+               && ! xml->hasAttribute ("engine_reverb"), "sessions store a state version and per-module engine versions (this edition's modules only)");
     }
 
     {
-        // CPU estimate: every module and send on, Resonance at Ultra quality (information only, no pass/fail)
+        // CPU estimate: every module on, Resonance at Ultra quality (information only, no pass/fail)
         KaminariVocalProcessor p;
         p.presets.loadChainPreset ("Pop Lead");
-        setParam (p, "rs_on", 1.0f); setParam (p, "rs_quality", 2.0f); setParam (p, kvid::wdOn, 1.0f);
+        setParam (p, "rs_on", 1.0f); setParam (p, "rs_quality", 2.0f);
         prepare (p);
         const auto t0 = juce::Time::getMillisecondCounterHiRes();
         render (p, 10.0, vocal);
@@ -1023,13 +481,12 @@ int main (int argc, char** argv)
     {
         KaminariVocalProcessor a;
         const std::vector<std::pair<const char*, float>> values = {
-            { kvid::rvOn, 1 }, { kvid::rvSend, -9 }, { kvid::rvTap, 1 }, { kvid::rvMode, 12 }, { kvid::rvDecay, 4.5f },
-            { kvid::rvAttack, 30 }, { kvid::dlOn, 1 }, { kvid::dlMode, 1 }, { kvid::dlStyle, 3 }, { kvid::dlT2Note, 3 },
-            { kvid::dlGroove, -40 }, { kvid::dlPrime, 1 }, { kvid::dlWobbleShape, 4 }, { kvid::wdOn, 1 }, { kvid::wdType, 1 },
-            { kvid::msStyle, 2 }, { kvid::msFocus, 640 }, { kvid::swMode, 2 }, { kvid::swTone, 15 }, { kvid::swOutput, -6 } };
+            { "lv_peak", 63.0f }, { "lv_gain", 4.5f }, { "ds_det_lo", 6500.0f }, { "ds_range", 9.0f }, { "tn_speed", 22.0f },
+            { "eq1_used", 1.0f }, { "eq1_freq", 820.0f }, { "lv_sc1_used", 1.0f }, { "lv_sc1_freq", 140.0f }, { "rs_depth", 7.0f },
+            { kvid::inGain, -3.0f } };
         for (auto& [id, v] : values) setParam (a, id, v);
         a.advancedView.store (true);
-        a.advancedSend.store (2);
+        a.advancedTab.store (KaminariVocalProcessor::ModDeEss);
         juce::MemoryBlock state;
         a.getStateInformation (state);
 
@@ -1038,10 +495,27 @@ int main (int argc, char** argv)
         bool same = true;
         for (auto& [id, v] : values)
             if (std::abs (getParam (b, id) - getParam (a, id)) > 1e-3f) { same = false; std::printf ("  mismatch %s\n", id); }
-        check (same, "every send parameter survives a save / load round trip");
-        check (b.advancedView.load() && b.advancedSend.load() == 2, "Basic/Advanced view and the open send panel are saved with the session");
-    }
+        check (same, "module parameters survive a save / load round trip");
+        check (b.advancedView.load() && b.advancedTab.load() == KaminariVocalProcessor::ModDeEss, "Basic/Advanced view and the open tab are saved with the session");
 
+        // a session from the full edition (state version 4) opens on the matching tab, or on Tune for a tab this edition lacks
+        auto fromFull = [&] (int tab, int version = 4)
+        {
+            auto xml = juce::AudioProcessor::getXmlFromBinary (state.getData(), (int) state.getSize());
+            xml->setAttribute ("state_version", version);
+            xml->setAttribute ("ui_tab", tab);
+            juce::MemoryBlock old;
+            juce::AudioProcessor::copyXmlToBinary (*xml, old);
+            KaminariVocalProcessor c;
+            c.setStateInformation (old.getData(), (int) old.getSize());
+            return c.advancedTab.load();
+        };
+        check (fromFull (3) == KaminariVocalProcessor::ModCompression && fromFull (6) == KaminariVocalProcessor::ModDeEss
+               && fromFull (7) == KaminariVocalProcessor::ModResonance && fromFull (5) == KaminariVocalProcessor::ModTune
+               && fromFull (8) == KaminariVocalProcessor::ModTune && fromFull (4, 2) == KaminariVocalProcessor::ModDeEss
+               && fromFull (5, 3) == KaminariVocalProcessor::ModDeEss && fromFull (7, 3) == KaminariVocalProcessor::ModTune,
+               "full-edition sessions (any version): Compression, De-ess and Resonance tabs map across; Flanger, Distortion and Sends open on Tune");
+    }
 
     // ---- presets --------------------------------------------------------------------------------------------------
     {
@@ -1054,53 +528,43 @@ int main (int argc, char** argv)
 
         int moduleCount = 0, presetCount = 0;
         for (auto& m : pm.getModules()) { ++moduleCount; presetCount += (int) m.factory.size(); }
-        check (moduleCount == 11 && presetCount >= 80 && pm.getFactoryChains().size() >= 12,
-               "factory presets for all 11 modules (" + juce::String (presetCount) + " module presets) and "
+        check (moduleCount == 6 && presetCount >= 40 && pm.getFactoryChains().size() >= 12,
+               "factory presets for all 6 modules (" + juce::String (presetCount) + " module presets) and "
                + juce::String ((int) pm.getFactoryChains().size()) + " chain presets");
 
-        setParam (p, kvid::rvOn, 1.0f);
-        setParam (p, kvid::rvSend, -3.0f);
-        setParam (p, kvid::rvModRate, 3.0f);
-        setParam (p, kvid::dlFeedback, 77.0f);
-        check (pm.loadModulePreset ("reverb", "Vocal Plate"), "load reverb module preset 'Vocal Plate'");
-        check (juce::roundToInt (getParam (p, kvid::rvMode)) == 2 && std::abs (getParam (p, kvid::rvDecay) - 1.8f) < 0.01f
-               && std::abs (getParam (p, kvid::rvPreDelay) - 30.0f) < 0.05f,
-               "module preset sets its listed values (Plate, 1.8 s, 30 ms)");
-        check (std::abs (getParam (p, kvid::rvModRate) - 0.6f) < 0.01f, "module preset returns unlisted module values to their defaults");
-        check (getParam (p, kvid::rvOn) > 0.5f && std::abs (getParam (p, kvid::rvSend) + 3.0f) < 0.01f,
-               "module preset leaves the send's On switch and level alone");
-        check (std::abs (getParam (p, kvid::dlFeedback) - 77.0f) < 0.05f, "reverb preset does not touch the delay");
-        check (! pm.isModuleModified ("reverb") && pm.currentModulePreset ("reverb") == "Vocal Plate", "freshly loaded preset is not marked modified");
-        setParam (p, kvid::rvSize, 90.0f);
-        check (pm.isModuleModified ("reverb"), "changing a reverb control marks the reverb preset modified");
-        check (! pm.isModuleModified ("widener"), "untouched modules are not marked modified");
+        setParam (p, "lv_on", 0.0f);
+        setParam (p, "lv_gain", 11.0f);
+        setParam (p, "ds_range", 3.0f);
+        check (pm.loadModulePreset ("compression", "Upfront Pop"), "load compression module preset 'Upfront Pop'");
+        check (std::abs (getParam (p, "lv_peak") - 62.0f) < 0.05f && std::abs (getParam (p, "lv_gain") - 7.0f) < 0.01f,
+               "module preset sets its listed values (Compression 62, Gain +7 dB)");
+        check (getParam (p, "lv_on") < 0.5f, "module preset leaves the module's On switch alone");
+        check (std::abs (getParam (p, "ds_range") - 3.0f) < 0.05f, "compression preset does not touch the de-esser");
+        check (! pm.isModuleModified ("compression") && pm.currentModulePreset ("compression") == "Upfront Pop", "freshly loaded preset is not marked modified");
+        setParam (p, "lv_peak", 20.0f);
+        check (pm.isModuleModified ("compression"), "changing a compression control marks the compression preset modified");
+        check (! pm.isModuleModified ("eq"), "untouched modules are not marked modified");
 
         check (pm.loadChainPreset ("Pop Lead"), "load chain preset 'Pop Lead'");
-        check (getParam (p, kvid::rvOn) > 0.5f && std::abs (getParam (p, kvid::rvSend) + 14.0f) < 0.01f
-               && juce::roundToInt (getParam (p, kvid::rvMode)) == 2
-               && juce::roundToInt (getParam (p, kvid::dlT1Note)) == 2 && std::abs (getParam (p, kvid::msFocus) - 2000.0f) < 1.0f
-               && std::abs (getParam (p, kvid::dlFeedback) - 35.0f) < 0.05f,
-               "chain preset loads each module preset and its send overrides");
-        check (pm.currentChainPreset() == "Pop Lead" && pm.currentModulePreset ("delay") == "1/8 Throw"
-               && pm.currentModulePreset ("tune") == "Tight Pop", "chain preset records the module presets it used (built or not)");
-        pm.loadChainPreset ("Default");
-        check (getParam (p, kvid::rvOn) < 0.5f && getParam (p, kvid::dlOn) < 0.5f && getParam (p, kvid::wdOn) < 0.5f,
-               "chain preset 'Default' switches the sends off");
+        check (std::abs (getParam (p, "lv_peak") - 62.0f) < 0.05f && std::abs (getParam (p, "ds_range") - 10.0f) < 0.05f
+               && getParam (p, "lv_on") > 0.5f && getParam (p, "mb_on") > 0.5f,
+               "chain preset loads each module preset and its overrides");
+        check (pm.currentChainPreset() == "Pop Lead" && pm.currentModulePreset ("deess") == "Bright Singer"
+               && pm.currentModulePreset ("tune") == "Tight Pop", "chain preset records the module presets it used");
 
-        // every factory preset of the built modules loads and plays without problems
+        // every factory preset loads and plays without problems
         bool allOk = true;
         prepare (p);
-        for (auto key : { "reverb", "delay", "widener" })
-            for (auto& pr : pm.findModule (key)->factory)
+        for (auto& m : pm.getModules())
+            for (auto& pr : m.factory)
             {
-                allOk = pm.loadModulePreset (key, pr) && allOk;
-                setParam (p, kvid::rvOn, 1.0f); setParam (p, kvid::dlOn, 1.0f); setParam (p, kvid::wdOn, 1.0f);
-                setParam (p, kvid::rvSend, 0.0f); setParam (p, kvid::dlSend, 0.0f); setParam (p, kvid::wdSend, 0.0f);
-                const auto r = render (p, 0.3, vocal);
+                allOk = pm.loadModulePreset (m.key, pr) && allOk;
+                for (auto* id : { "tn_on", "eq_on", "mb_on", "lv_on", "ds_on", "rs_on" }) setParam (p, id, 1.0f);
+                const auto r = render (p, 0.2, vocal);
                 for (int i = 0; i < r.out.getNumSamples(); ++i)
                     allOk = allOk && std::isfinite (r.out.getSample (0, i)) && std::abs (r.out.getSample (0, i)) < 4.0f;
             }
-        check (allOk, "every reverb, delay and widener factory preset loads and plays (finite, bounded)");
+        check (allOk, "every module factory preset loads and plays (finite, bounded)");
         for (auto& c : pm.getFactoryChains())
             allOk = pm.loadChainPreset (c) && allOk;
         check (allOk, "every chain preset loads");
@@ -1108,43 +572,42 @@ int main (int argc, char** argv)
         // user presets
         auto tmp = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("kv-preset-test-" + juce::String (juce::Random::getSystemRandom().nextInt()));
         pm.setUserFolder (tmp);
-        pm.loadModulePreset ("delay", "Worn Tape Echo");
-        setParam (p, kvid::dlFeedback, 62.0f);
-        check (pm.saveModulePreset ("delay", "My Echo / test"), "save a user delay preset");
+        pm.loadModulePreset ("compression", "Smooth Leveler");
+        setParam (p, "lv_gain", 7.5f);
+        check (pm.saveModulePreset ("compression", "My Leveler / test"), "save a user compression preset");
         bool listed = false;
-        for (auto& pr : pm.listModulePresets ("delay"))
-            listed = listed || (! pr.factory && pr.name == PresetManager::sanitiseName ("My Echo / test"));
-        check (listed && tmp.getChildFile ("Delay").getNumberOfChildFiles (juce::File::findFiles) == 1,
-               "user preset is listed after the factory presets and stored in the Delay folder");
-        pm.loadModulePreset ("delay", "Slapback");
-        check (pm.loadModulePreset ("delay", PresetManager::sanitiseName ("My Echo / test"))
-               && std::abs (getParam (p, kvid::dlFeedback) - 62.0f) < 0.05f && juce::roundToInt (getParam (p, kvid::dlStyle)) == 2,
-               "user preset restores its values (feedback 62 %, Worn Tape)");
-        setParam (p, kvid::wdSend, -7.0f);
+        for (auto& pr : pm.listModulePresets ("compression"))
+            listed = listed || (! pr.factory && pr.name == PresetManager::sanitiseName ("My Leveler / test"));
+        check (listed && tmp.getChildFile ("Compression").getNumberOfChildFiles (juce::File::findFiles) == 1,
+               "user preset is listed after the factory presets and stored in the Compression folder");
+        pm.loadModulePreset ("compression", "Gentle Glue");
+        check (pm.loadModulePreset ("compression", PresetManager::sanitiseName ("My Leveler / test"))
+               && std::abs (getParam (p, "lv_gain") - 7.5f) < 0.01f && std::abs (getParam (p, "lv_peak") - 50.0f) < 0.05f,
+               "user preset restores its values (Compression 50, Gain +7.5 dB)");
+        setParam (p, "ds_det_lo", 7700.0f);
         check (pm.saveChainPreset ("My Chain"), "save a user chain preset");
         pm.loadChainPreset ("Default");
-        check (pm.loadChainPreset ("My Chain") && std::abs (getParam (p, kvid::wdSend) + 7.0f) < 0.01f
-               && std::abs (getParam (p, kvid::dlFeedback) - 62.0f) < 0.05f, "user chain preset restores every parameter");
-        for (auto& pr : pm.listModulePresets ("delay"))
+        check (pm.loadChainPreset ("My Chain") && std::abs (getParam (p, "ds_det_lo") - 7700.0f) < 1.0f
+               && std::abs (getParam (p, "lv_gain") - 7.5f) < 0.01f, "user chain preset restores every parameter");
+        for (auto& pr : pm.listModulePresets ("compression"))
             if (! pr.factory) pm.deleteUserPreset (pr);
-        check (tmp.getChildFile ("Delay").getNumberOfChildFiles (juce::File::findFiles) == 0, "user preset can be deleted");
+        check (tmp.getChildFile ("Compression").getNumberOfChildFiles (juce::File::findFiles) == 0, "user preset can be deleted");
         tmp.deleteRecursively();
 
         // stepping and session state
-        pm.loadModulePreset ("widener", "MicroShift Classic");
-        pm.stepModulePreset ("widener", 1);
-        const auto afterNext = pm.currentModulePreset ("widener");
-        pm.stepModulePreset ("widener", -1);
-        check (afterNext == "Subtle Doubler" && pm.currentModulePreset ("widener") == "MicroShift Classic", "next / previous step through the list");
+        pm.loadModulePreset ("compression", "Clean Vocal");
+        pm.stepModulePreset ("compression", 1);
+        const auto afterNext = pm.currentModulePreset ("compression");
+        pm.stepModulePreset ("compression", -1);
+        check (afterNext == "Smooth Leveler" && pm.currentModulePreset ("compression") == "Clean Vocal", "next / previous step through the list");
         pm.loadChainPreset ("R&B Smooth");
         juce::MemoryBlock state;
         p.getStateInformation (state);
         KaminariVocalProcessor q;
         q.setStateInformation (state.getData(), (int) state.getSize());
-        check (q.presets.currentChainPreset() == "R&B Smooth" && q.presets.currentModulePreset ("reverb") == "Big Ballad Hall"
+        check (q.presets.currentChainPreset() == "R&B Smooth" && q.presets.currentModulePreset ("compression") == "Smooth Leveler"
                && ! q.presets.isChainModified(), "preset names are saved with the session");
     }
-
 
     // ---- tune: vibrato and tremolo --------------------------------------------------------------------------------
     {
@@ -1255,155 +718,6 @@ int main (int argc, char** argv)
         check (maxDiff (r) == 0.0f, "Tune off: tremolo and vibrato settings have no effect");
     }
 
-    // ---- distortion ------------------------------------------------------------------------------------------------
-    {
-        KaminariVocalProcessor p;
-        neutral (p);
-        setParam (p, "dt_os", 1.0f);
-        prepare (p);
-        const int base = p.getLatencySamples();
-        auto r = render (p, 0.5, vocal);
-        check (maxDiff (r) == 0.0f, "Distortion off: no effect and no added latency");
-
-        setParam (p, "dt_on", 1.0f);
-        setParam (p, "dt_style", 4.0f);   // Clip
-        setParam (p, "dt_drive", 18.0f);
-        prepare (p);
-        const int withOs = p.getLatencySamples();
-        check (withOs > base && withOs - base < 64, "Distortion on with 2x oversampling adds " + juce::String (withOs - base) + " samples of latency");
-        r = render (p, 1.0, sine (1000.0, -12.0f));
-        const float h1 = toneDb (r.out, 0, 1000.0, 12000, 48000), h3 = toneDb (r.out, 0, 3000.0, 12000, 48000);
-        const float h3in = toneDb (r.in, 0, 3000.0, 12000, 48000);
-        check (h3 - h1 > -30.0f && h3in < -120.0f, "Clip at 18 dB drive adds harmonics (3rd harmonic " + juce::String (h3 - h1, 1) + " dB below the fundamental)");
-        const float inDb = toneDb (r.in, 0, 1000.0, 12000, 48000);
-        check (std::abs (h1 - inDb) < 4.0f, "Auto Gain keeps the level close to the input (" + juce::String (h1 - inDb, 1) + " dB)");
-
-        // Mix 0: the output is the input, delayed by exactly the reported latency
-        setParam (p, "dt_mix", 0.0f);
-        prepare (p);
-        r = render (p, 0.5, vocal);
-        check (maxDiff (r) < 1.0e-6f, "Distortion Mix 0 %: the dry path stays aligned with the reported latency (max diff "
-               + juce::String (maxDiff (r), 7) + ")");
-
-        // every style, every oversampling setting: finite and bounded on a hot vocal
-        bool ok = true;
-        for (int st = 0; st < 6; ++st)
-            for (int os = 0; os < 3; ++os)
-            {
-                setParam (p, "dt_style", (float) st);
-                setParam (p, "dt_os", (float) os);
-                setParam (p, "dt_mix", 100.0f);
-                setParam (p, "dt_drive", 36.0f);
-                setParam (p, "dt_bias", 60.0f);
-                prepare (p);
-                r = render (p, 0.5, vocal);
-                for (int i = 0; i < r.out.getNumSamples(); ++i)
-                    ok = ok && std::isfinite (r.out.getSample (0, i)) && std::abs (r.out.getSample (0, i)) < 4.0f;
-            }
-        check (ok, "Distortion: every style and oversampling setting stays finite and bounded at full drive and bias");
-    }
-
-    // ---- Reverb / Delay returns: EQ, ducking, routing ------------------------------------------------------------------
-    {
-        // return EQ: the main EQ's bands on the wet signal; a low cut at 2 kHz removes a 200 Hz tone from the reverb
-        // return, and soloing a 1 kHz bell leaves only its region of an 8 kHz tone
-        auto reverbReturn = [] (double toneHz, std::function<void (KaminariVocalProcessor&)> setup)
-        {
-            KaminariVocalProcessor p;
-            neutral (p);
-            setParam (p, kvid::rvOn, 1.0f);
-            setParam (p, kvid::rvSend, 0.0f);
-            if (setup) setup (p);
-            prepare (p);
-            double e = 0;
-            int blocks = 0;
-            render (p, 1.5, sine (toneHz, -12.0f), [&] (int b) { if (b > 40) { e += p.returnRms[KaminariVocalProcessor::Reverb].load(); ++blocks; } });
-            return 20.0f * std::log10 ((float) (e / std::max (1, blocks)) + 1.0e-9f);
-        };
-        const float plainLow = reverbReturn (200.0, nullptr);
-        const float cutLow = reverbReturn (200.0, [] (KaminariVocalProcessor& p)
-        {
-            setParam (p, "rv_eq1_used", 1.0f); setParam (p, "rv_eq1_type", (float) kv::LowCut); setParam (p, "rv_eq1_freq", 2000.0f);
-            setParam (p, "rv_eq1_slope", 3.0f);
-        });
-        const float plainHigh = reverbReturn (8000.0, nullptr);
-        const float soloHigh = reverbReturn (8000.0, [] (KaminariVocalProcessor& p)
-        {
-            setParam (p, "rv_eq2_used", 1.0f); setParam (p, "rv_eq2_type", (float) kv::Bell); setParam (p, "rv_eq2_freq", 1000.0f);
-            setParam (p, "rv_eq2_q", 4.0f);
-            p.returnEqSolo[0].store (1);
-        });
-        check (cutLow < plainLow - 25.0f && soloHigh < plainHigh - 20.0f,
-               "Reverb return EQ: a 2 kHz low cut takes a 200 Hz return from " + juce::String (plainLow, 1) + " to " + juce::String (cutLow, 1)
-               + " dB; soloing a 1 kHz bell takes an 8 kHz return from " + juce::String (plainHigh, 1) + " to " + juce::String (soloHigh, 1) + " dB");
-
-        // ducking: the return drops by the depth while the vocal is loud, and recovers when it stops
-        kv::Ducker d;
-        d.prepare (sr);
-        kv::DuckSettings ds; ds.on = true; ds.threshDb = -30.0f; ds.depthDb = 12.0f; ds.attackMs = 5.0f; ds.releaseMs = 100.0f;
-        std::vector<float> l ((size_t) sr), r ((size_t) sr), key ((size_t) sr);
-        for (int i = 0; i < (int) sr; ++i) { l[(size_t) i] = r[(size_t) i] = 0.1f; key[(size_t) i] = i < (int) sr / 2 ? 0.5f * (float) std::sin (0.05 * i) : 0.0f; }
-        d.process (l.data(), r.data(), (int) sr, key.data(), key.data(), ds);
-        const float duckedDb = 20.0f * std::log10 (l[(size_t) sr / 2 - 10] / 0.1f), recoveredDb = 20.0f * std::log10 (l[(size_t) sr - 1] / 0.1f);
-        check (std::abs (duckedDb + 12.0f) < 0.5f && recoveredDb > -0.5f, "ducking: return " + juce::String (duckedDb, 1)
-               + " dB while the vocal is loud (depth 12 dB), " + juce::String (recoveredDb, 2) + " dB 0.5 s after it stops");
-
-        // routing: Delay into Reverb feeds the reverb even with nothing sent to it; Reverb into Delay at full amount stays bounded
-        auto sendPeak = [] (int target, std::function<void (KaminariVocalProcessor&)> routing)
-        {
-            KaminariVocalProcessor p;
-            neutral (p);
-            for (auto* id : { kvid::rvOn, kvid::dlOn, kvid::wdOn }) setParam (p, id, 1.0f);
-            for (auto* id : { kvid::rvSend, kvid::wdSend })
-                setParam (p, id, p.apvts.getParameter (id)->getNormalisableRange().start);   // Off: nothing sent
-            setParam (p, kvid::dlSend, 0.0f);                                                 // only the delay is sent to
-            if (routing) routing (p);
-            prepare (p);
-            float peak = 0;
-            render (p, 2.0, vocal, [&] (int) { peak = std::max (peak, p.returnPeak[(size_t) target].load()); });
-            return peak;
-        };
-        // Delay feeds Reverb (fx_dl_feed 1 = Reverb), Reverb feeds Widener (fx_rv_feed 2 = Widener): a chain of three
-        const float revOff = sendPeak (KaminariVocalProcessor::Reverb, nullptr);
-        const float revOn = sendPeak (KaminariVocalProcessor::Reverb, [] (KaminariVocalProcessor& p) { setParam (p, "fx_dl_feed", 1.0f); setParam (p, "fx_dl_feed_amt", 100.0f); });
-        const float wideChain = sendPeak (KaminariVocalProcessor::Widener, [] (KaminariVocalProcessor& p)
-        {
-            setParam (p, "fx_dl_feed", 1.0f); setParam (p, "fx_dl_feed_amt", 100.0f);
-            setParam (p, "fx_rv_feed", 2.0f); setParam (p, "fx_rv_feed_amt", 100.0f);
-        });
-        // a loop (Reverb -> Delay -> Reverb) at 100 % with 100 % feedback: one feed is dropped and the output stays bounded
-        float loopPeak = 0;
-        bool finite = true, blocked = false;
-        {
-            KaminariVocalProcessor p;
-            neutral (p);
-            setParam (p, kvid::rvOn, 1.0f); setParam (p, kvid::rvSend, 6.0f); setParam (p, kvid::rvDecay, 20.0f);
-            setParam (p, kvid::dlOn, 1.0f); setParam (p, kvid::dlSend, 6.0f); setParam (p, kvid::dlFeedback, 100.0f);
-            setParam (p, "fx_rv_feed", 1.0f); setParam (p, "fx_rv_feed_amt", 100.0f);   // reverb -> delay
-            setParam (p, "fx_dl_feed", 1.0f); setParam (p, "fx_dl_feed_amt", 100.0f);   // delay -> reverb (closes a loop)
-            prepare (p);
-            const auto res = render (p, 10.0, vocal, [&] (int) { loopPeak = std::max (loopPeak, p.returnPeak[KaminariVocalProcessor::Delay].load()); });
-            for (int i = 0; i < res.out.getNumSamples(); ++i) finite = finite && std::isfinite (res.out.getSample (0, i));
-            blocked = p.feedBlocked[KaminariVocalProcessor::Delay].load() && ! p.feedBlocked[KaminariVocalProcessor::Reverb].load();
-        }
-        check (revOff < 1.0e-6f && revOn > 1.0e-3f && wideChain > 1.0e-3f && finite && blocked && loopPeak <= 1.0f,
-               "Send routing: Delay into Reverb gives a reverb return of " + juce::String (revOn, 4) + " with no reverb send ("
-               + juce::String (revOff, 6) + " without); Delay -> Reverb -> Widener reaches the widener (" + juce::String (wideChain, 4)
-               + "); a Reverb <-> Delay loop drops the closing feed and stays bounded for 10 s (peak " + juce::String (loopPeak, 3) + ")");
-
-        // ducking in the plug-in: a loud vocal ducks the reverb return by the depth
-        {
-            KaminariVocalProcessor p;
-            neutral (p);
-            setParam (p, kvid::rvOn, 1.0f); setParam (p, kvid::rvSend, 0.0f);
-            setParam (p, "rv_duck_on", 1.0f); setParam (p, "rv_duck_thresh", -40.0f); setParam (p, "rv_duck_depth", 15.0f);
-            prepare (p);
-            float gr = 0;
-            render (p, 1.0, sine (300.0, -6.0f), [&] (int) { gr = std::max (gr, p.duckGr[0].load()); });
-            check (gr > 14.0f && gr <= 15.01f, "Reverb ducking from the vocal: " + juce::String (gr, 1) + " dB reduction (depth 15 dB)");
-        }
-    }
-
     // ---- Compression side-chain detection bands ----------------------------------------------------------------------
     {
         auto compLevel = [] (std::function<void (KaminariVocalProcessor&)> sc)
@@ -1411,8 +725,7 @@ int main (int argc, char** argv)
             KaminariVocalProcessor p;
             neutral (p);
             setParam (p, "lv_on", 1.0f);
-            setParam (p, "lv_thresh", -30.0f); setParam (p, "lv_ratio", 8.0f); setParam (p, "lv_range", 40.0f);
-            setParam (p, "lv_auto_gain", 0.0f);
+            setParam (p, "lv_peak", 80.0f); setParam (p, "lv_gain", 0.0f);
             if (sc) sc (p);
             prepare (p);
             const auto r = render (p, 1.0, sine (100.0, -12.0f));
@@ -1437,10 +750,10 @@ int main (int argc, char** argv)
                + " dBFS; +12 dB bell at 100 Hz " + juce::String (boost, 1) + " dBFS (more reduction)");
     }
 
-    // ---- oversampling (Multiband, De-ess, Resonance) and Multiband bypass / mute -----------------------------------
+    // ---- oversampling (Multiband, Resonance) and Multiband bypass / mute -----------------------------------
     {
         struct Case { const char* on; const char* os; float factor; const char* name; };
-        for (auto c : { Case { "mb_on", "mb_os", 1.0f, "Multiband 2x" }, Case { "ds_on", "ds_os", 2.0f, "De-ess 4x" }, Case { "rs_on", "rs_os", 2.0f, "Resonance 4x" } })
+        for (auto c : { Case { "mb_on", "mb_os", 1.0f, "Multiband 2x" }, Case { "rs_on", "rs_os", 2.0f, "Resonance 4x" } })
         {
             KaminariVocalProcessor p;
             neutral (p);
@@ -1506,103 +819,35 @@ int main (int argc, char** argv)
         check (bell.first < -25.0f && bell.second < -25.0f, "EQ solo on a 1 kHz bell plays only the region around 1 kHz");
     }
 
-    // ---- flanger ---------------------------------------------------------------------------------------------------
-    {
-        // static comb (no sweep, no feedback), Mix 50 %: dry + copy delayed 1 ms cancel at 500 Hz and add at 1 kHz
-        KaminariVocalProcessor p;
-        neutral (p);
-        setParam (p, kvid::flOn, 1.0f);
-        setParam (p, kvid::flMix, 50.0f);
-        setParam (p, kvid::flDepth, 0.0f);
-        setParam (p, kvid::flDelay, 1.0f);
-        setParam (p, kvid::flFeedback, 0.0f);
-        setParam (p, kvid::flHiCut, 20000.0f);
-        prepare (p);
-        check (p.getLatencySamples() == kv::Tune::latencyFor (sr), "Flanger adds no latency");
-        auto noise = [] (int, long n) { kv::Random rnd ((uint32_t) n * 2654435761u + 3u); return 0.3f * rnd.next(); };
-        auto r = render (p, 0.5, sine (500.0, -12.0f));
-        const float notch = toneDb (r.out, 0, 500.0, 4800, 24000);
-        r = render (p, 0.5, sine (1000.0, -12.0f));
-        const float peak = toneDb (r.out, 0, 1000.0, 4800, 24000);
-        // the comb's peaks sit 3 dB up because the blend is level compensated (the notches remove as much)
-        check (peak - notch > 40.0f && std::abs (peak + 9.0f) < 0.5f, "Flanger in the chain, Mix 50 %: 500 Hz cancelled to "
-               + juce::String (notch, 1) + " dBFS, 1 kHz passes at " + juce::String (peak, 1) + " dBFS (input -12, level compensated)");
-        {
-            // with the default sweep and feedback the vocal keeps its loudness
-            KaminariVocalProcessor q;
-            neutral (q);
-            setParam (q, kvid::flOn, 1.0f);
-            prepare (q);
-            const auto rr = render (q, 4.0, vocal);
-            double ei = 0, eo = 0;
-            for (int i = (int) sr; i < (int) (4.0 * sr); ++i) { ei += (double) rr.in.getSample (0, i) * rr.in.getSample (0, i); eo += (double) rr.out.getSample (0, i) * rr.out.getSample (0, i); }
-            const double d = 10.0 * std::log10 (eo / ei);
-            check (std::abs (d) < 1.5, "Flanger at its default settings keeps the vocal's level (" + juce::String (d, 1) + " dB)");
-        }
-        setParam (p, kvid::flFeedback, 95.0f);
-        setParam (p, kvid::flDepth, 100.0f);
-        prepare (p);
-        r = render (p, 3.0, [] (int c, long n) { return (float) std::sin (2 * kv::pi * 300.0 * n / sr + c); });
-        bool bounded = true;
-        for (int i = 0; i < r.out.getNumSamples(); ++i) bounded = bounded && std::isfinite (r.out.getSample (0, i)) && std::abs (r.out.getSample (0, i)) < 4.0f;
-        check (bounded, "Flanger at 95 % feedback and full depth stays finite and bounded");
-        neutral (p);
-        prepare (p);
-        r = render (p, 0.5, noise);
-        check (maxDiff (r) == 0.0f, "Flanger off: the signal passes unchanged");
-    }
-
     // ---- editor ---------------------------------------------------------------------------------------------------
     {
         KaminariVocalProcessor p;
         prepare (p);
         std::unique_ptr<KaminariVocalEditor> ed (dynamic_cast<KaminariVocalEditor*> (p.createEditor()));
         check (ed != nullptr, "editor opens");
-        check (ed->strip (0).isVisible() && ! ed->panel (KaminariVocalEditor::TabSends).isVisible(), "Basic view shows the compact send strips");
+        check (ed->tile (0).isVisible() && ! ed->panel (KaminariVocalEditor::TabCompression).isVisible(), "Basic view shows the module cards");
+        auto* makeup = ed->tile (2).makeupSlider();
+        check (makeup != nullptr && makeup->isVisible() && makeup->getParam() == p.apvts.getParameter ("lv_gain")
+               && makeup->getRight() <= ed->tile (2).getWidth() && ed->tile (2).hammer.getRight() <= makeup->getX() + 2,
+               "Basic Compression card: a makeup Gain slider beside the hammer");
+        check (ed->tile (0).makeupSlider() == nullptr && ed->tile (3).makeupSlider() == nullptr, "only the Compression card has the Gain slider");
 
-        ed->strip (1).open.triggerClick();
+        ed->tile (2).open.triggerClick();
         juce::MessageManager::getInstance()->runDispatchLoopUntil (50);
-        check (ed->isAdvancedShown() && ed->panel (KaminariVocalEditor::TabSends).isVisible() && ed->delayPanel().isVisible() && ! ed->strip (1).isVisible(),
-               "a strip's Advanced button opens that send's Advanced panel");
-
-        ed->showAdvanced (true, 0);
-        setParam (p, kvid::rvMode, 14.0f);   // Nonlin
-        juce::MessageManager::getInstance()->runDispatchLoopUntil (50);
-        auto& rv = ed->reverbPanel();
-        check (! rv.decay.isVisible() && rv.attack.isVisible() && ! rv.modDepth.isVisible(), "Nonlin: Decay and modulation hidden, Attack shown");
-        setParam (p, kvid::rvMode, 0.0f);
-        juce::MessageManager::getInstance()->runDispatchLoopUntil (50);
-        check (rv.decay.isVisible() && ! rv.attack.isVisible() && rv.modDepth.isVisible(), "Concert Hall: Decay and modulation shown, Attack hidden");
-
-        auto& dl = ed->delayPanel();
-        setParam (p, kvid::dlMode, 0.0f);
-        setParam (p, kvid::dlT1Unit, 0.0f);
-        juce::MessageManager::getInstance()->runDispatchLoopUntil (50);
-        check (dl.time1.isVisible() && ! dl.unit2.isVisible() && ! dl.fbMix.isVisible() && dl.accent.isVisible(),
-               "delay Single mode: one echo time, no Dual-only controls");
-        setParam (p, kvid::dlMode, 2.0f);
-        juce::MessageManager::getInstance()->runDispatchLoopUntil (50);
-        check (dl.unit2.isVisible() && dl.balance.isVisible() && ! dl.accent.isVisible() && ! dl.offset.isVisible(),
-               "delay Ping-Pong mode: Ping and Pong times and Balance; no Accent or L/R Offset");
-
-        auto& wd = ed->widenerPanel();
-        setParam (p, kvid::wdType, 1.0f);
-        juce::MessageManager::getInstance()->runDispatchLoopUntil (50);
-        check (! wd.msDetune.isVisible() && wd.swWidth.isVisible() && wd.swMode.isVisible(), "widener SideWidener: only SideWidener controls");
-        setParam (p, kvid::wdType, 0.0f);
-        juce::MessageManager::getInstance()->runDispatchLoopUntil (50);
-        check (wd.msDetune.isVisible() && wd.msFocus.isVisible() && ! wd.swWidth.isVisible(), "widener MicroShift: only MicroShift controls");
+        check (ed->isAdvancedShown() && ed->panel (KaminariVocalEditor::TabCompression).isVisible() && ! ed->tile (2).isVisible(),
+               "a card's Advanced button opens that module's tab");
 
         p.presets.loadChainPreset ("Pop Lead");
         ed->chainPresets().onLoaded();
-        check (ed->chainPresets().displayText() == "Pop Lead" && rv.header.preset.displayText() == "Vocal Plate",
-               "header shows the chain preset; the reverb panel shows its module preset");
-        setParam (p, kvid::rvDecay, 5.0f);
-        check (rv.header.preset.displayText() == "Vocal Plate *" && ed->chainPresets().displayText() == "Pop Lead *",
+        check (ed->chainPresets().displayText() == "Pop Lead" && ed->compressionPanel().preset.displayText() == "Upfront Pop",
+               "header shows the chain preset; the compression page shows its module preset");
+        setParam (p, "lv_peak", 33.0f);
+        check (ed->compressionPanel().preset.displayText() == "Upfront Pop *" && ed->chainPresets().displayText() == "Pop Lead *",
                "editing a control marks the module and chain presets modified");
-
-        check (rv.header.level.slider.getTitle() == "Reverb Send" && wd.msFocus.slider.getTooltip().contains ("Crossover"),
+        check (ed->compressionPanel().compressionKnob().slider.getTitle() == "Compression" && ed->deEssPanel().frequencyKnob().slider.getTitle() == "De-Ess Frequency"
+               && ed->compressionPanel().gainKnob().slider.getTooltip().contains ("akeup"),
                "controls carry accessible names and tooltips");
+        check (KaminariVocalEditor::numTabs == 6, "six module tabs: Tune, EQ, Multiband, Compression, De-ess, Resonance");
 
         // every continuous control on every page responds to a mouse drag the way a user would make it:
         // up for knobs and value boxes, sideways for horizontal sliders, down for the Basic hammers
@@ -1652,17 +897,14 @@ int main (int argc, char** argv)
                 for (auto* child : c.getChildren())
                     visit (*child, where);
             };
-            const char* tabNamesT[] = { "Tune", "EQ", "Multiband", "Compression", "Flanger", "Distortion", "De-ess", "Resonance" };
-            for (int t = 0; t < KaminariVocalEditor::TabSends; ++t)
+            const char* tabNamesT[] = { "Tune", "EQ", "Multiband", "Compression", "De-ess", "Resonance" };
+            for (int t = 0; t < KaminariVocalEditor::numTabs; ++t)
             {
                 ed->showTab (true, t);
                 visit (ed->panel (t), tabNamesT[t]);
             }
-            for (int s2 = 0; s2 < KaminariVocalProcessor::numSends; ++s2)
-            {
-                ed->showAdvanced (true, s2);
-                visit (ed->panel (KaminariVocalEditor::TabSends), juce::String ("Send ") + sendName[s2]);
-            }
+            ed->showTab (false, 0);
+            visit (ed->tile (2), "Basic Compression card");
             for (auto& line : dead) std::printf ("  no response: %s\n", line.toRawUTF8());
             // EQ: clicking empty graph space creates a band whose type follows the frequency
             {
@@ -1776,18 +1018,18 @@ int main (int argc, char** argv)
             {
                 ed->showTab (true, KaminariVocalEditor::TabEq);
                 juce::MessageManager::getInstance()->runDispatchLoopUntil (20);
-                auto& tabB = ed->tabButton (KaminariVocalEditor::TabDistortion);
+                auto& tabB = ed->tabButton (KaminariVocalEditor::TabDeEss);
                 juce::Component& tab = tabB;
-                const float before = getParam (p, "dt_on");
+                const float before = getParam (p, "ds_on");
                 const juce::Point<float> bolt (14.0f, (float) tab.getHeight() * 0.5f);
                 tab.mouseDown (event (tab, bolt, bolt, false));
                 tab.mouseUp (event (tab, bolt, bolt, false));
-                const float after = getParam (p, "dt_on");
+                const float after = getParam (p, "ds_on");
                 tab.mouseDown (event (tab, bolt, bolt, false));
                 tab.mouseUp (event (tab, bolt, bolt, false));
                 const bool pageKept = ed->tabButton (KaminariVocalEditor::TabEq).getToggleState() && ! tabB.getToggleState();
-                check ((before > 0.5f) != (after > 0.5f) && std::abs (getParam (p, "dt_on") - before) < 0.01f && pageKept,
-                       "tab lightning icon: a click switches Distortion " + juce::String (after > 0.5f ? "on" : "off")
+                check ((before > 0.5f) != (after > 0.5f) && std::abs (getParam (p, "ds_on") - before) < 0.01f && pageKept,
+                       "tab lightning icon: a click switches De-ess " + juce::String (after > 0.5f ? "on" : "off")
                        + ", a second click back; the EQ page stays shown");
             }
             // EQ band panel: note and cents beside the frequency only while the keyboard is shown; slopes read dB/oct
@@ -1803,26 +1045,42 @@ int main (int argc, char** argv)
                 check (withPiano && withoutPiano && unit, "EQ band panel: note and cents shown only with the keyboard on; slope reads "
                        + p.apvts.getParameter ("eq1_slope")->getCurrentValueAsText());
             }
-            // Widener vectorscope: plots the vocal with the widener's return in real time
+            // displays on hidden pages do no work; the visible one updates
             {
-                setParam (p, kvid::wdOn, 1.0f);
-                ed->showAdvanced (true, 2);
-                juce::MessageManager::getInstance()->runDispatchLoopUntil (20);
-                auto& sc = ed->widenerPanel().scope;
-                sc.advance();
+                ed->showTab (true, KaminariVocalEditor::TabEq);
+                auto& deessView = ed->deEssPanel().historyDisplay();
+                const int before = deessView.updates();
                 render (p, 0.3, vocal);
-                sc.advance();
-                const int frames = sc.plottedFrames();
-                check (frames > 1000 && sc.getHeight() > 250, "Widener vectorscope: " + juce::String (frames) + " new frames plotted, "
-                       + juce::String (sc.getHeight()) + " px tall; correlation " + juce::String (sc.correlation(), 2));
+                juce::MessageManager::getInstance()->runDispatchLoopUntil (120);
+                const int hidden = deessView.updates() - before;
+                ed->showTab (true, KaminariVocalEditor::TabDeEss);
+                render (p, 0.3, vocal);
+                juce::MessageManager::getInstance()->runDispatchLoopUntil (120);
+                const int shown = deessView.updates() - before - hidden;
+                check (hidden == 0 && shown > 2, "the De-ess display skips its updates while its page is hidden (" + juce::String (hidden)
+                       + " in 120 ms) and updates once shown (" + juce::String (shown) + " in 120 ms)");
             }
-            setParam (p, "lv_style", 1.0f);   // Vocal
-            juce::MessageManager::getInstance()->runDispatchLoopUntil (20);
-            const bool ratioOff = ! ed->compressionPanel().ratioKnob().isEnabled() && ed->compressionPanel().ratioKnob().value.getText() == "Auto";
-            setParam (p, "lv_style", 0.0f);
-            juce::MessageManager::getInstance()->runDispatchLoopUntil (20);
-            check (ratioOff && ed->compressionPanel().ratioKnob().isEnabled(), "Compression Vocal style: the Ratio knob is dimmed, disabled and reads Auto");
-            check (dead.isEmpty() && tested > 60, "every knob, slider and value box responds to a drag (" + juce::String (tested) + " tested, "
+            // EQ graph: the curve follows a parameter change on the next frame (cached curves are rebuilt when a band changes)
+            {
+                ed->showTab (false, 0);
+                auto& curve = ed->eqSection().curve;
+                setParam (p, "eq1_used", 1.0f); setParam (p, "eq1_type", 0.0f); setParam (p, "eq1_freq", 1000.0f); setParam (p, "eq1_gain", 0.0f);
+                auto curveY = [&]
+                {
+                    auto img = curve.createComponentSnapshot (curve.getLocalBounds());
+                    const int x = juce::roundToInt (curve.xForFreq (1000.0)) - 16;   // beside the node, on the curve
+                    for (int y = 0; y < img.getHeight(); ++y)
+                        if (img.getPixelAt (x, y).getBrightness() > 0.85f) return y;
+                    return -1;
+                };
+                const int flat = curveY();
+                setParam (p, "eq1_gain", 12.0f);
+                const int boosted = curveY();
+                check (flat > 0 && boosted > 0 && boosted < flat - 20, "EQ graph redraws the curve right after a gain change (curve at y "
+                       + juce::String (flat) + ", then " + juce::String (boosted) + ")");
+                setParam (p, "eq1_used", 0.0f);
+            }
+            check (dead.isEmpty() && tested > 40, "every knob, slider and value box responds to a drag (" + juce::String (tested) + " tested, "
                    + juce::String (dead.size()) + " not responding)");
         }
 
@@ -1850,33 +1108,21 @@ int main (int argc, char** argv)
                 juce::MessageManager::getInstance()->runDispatchLoopUntil (40);
             }
             save ("basic.png");
-            const char* names[] = { "tune", "eq", "multiband", "compression", "flanger", "distortion", "deess", "resonance" };
-            for (int t = 0; t < KaminariVocalEditor::TabSends; ++t)
+            const char* names[] = { "tune", "eq", "multiband", "compression", "deess", "resonance" };
+            for (int t = 0; t < KaminariVocalEditor::numTabs; ++t)
             {
                 ed->showTab (true, t);
                 for (int k = 0; k < 4; ++k) { render (p, 0.1, vocal); juce::MessageManager::getInstance()->runDispatchLoopUntil (40); }
                 save (juce::String ("adv_") + names[t] + ".png");
             }
-            const char* sendNames[] = { "reverb", "delay", "widener" };
-            for (int s2 = 0; s2 < numSends; ++s2)
-            {
-                ed->showAdvanced (true, s2);
-                for (int k = 0; k < 4; ++k) { render (p, 0.1, vocal); juce::MessageManager::getInstance()->runDispatchLoopUntil (40); }
-                save (juce::String ("adv_") + sendNames[s2] + ".png");
-            }
-            // other modes of the send pages
-            auto shot = [&] (int send, const char* id, float v, const char* name)
-            {
-                setParam (p, id, v);
-                ed->showAdvanced (true, send);
-                for (int k = 0; k < 3; ++k) { render (p, 0.1, vocal); juce::MessageManager::getInstance()->runDispatchLoopUntil (40); }
-                save (name);
-            };
-            shot (0, kvid::rvMode, 14.0f, "adv_reverb_nonlin.png");
-            shot (0, kvid::rvMode, 7.0f, "adv_reverb_ambience.png");
-            shot (1, kvid::dlMode, 1.0f, "adv_delay_dual.png");
-            shot (1, kvid::dlMode, 2.0f, "adv_delay_pingpong.png");
-            shot (2, kvid::wdType, 1.0f, "adv_widener_side.png");
+            // Multiband with three bands, one of them working, styled like the EQ
+            setParam (p, "mb_on", 1.0f); setParam (p, "mb_count", 3.0f);
+            setParam (p, "mb1_lo", 120.0f); setParam (p, "mb1_hi", 450.0f); setParam (p, "mb1_thresh", -40.0f);
+            setParam (p, "mb2_lo", 450.0f); setParam (p, "mb2_hi", 2500.0f);
+            setParam (p, "mb3_lo", 4000.0f); setParam (p, "mb3_hi", 12000.0f); setParam (p, "mb3_gain", 3.0f);
+            ed->showTab (true, KaminariVocalEditor::TabMultiband);
+            for (int k = 0; k < 4; ++k) { render (p, 0.1, vocal); juce::MessageManager::getInstance()->runDispatchLoopUntil (40); }
+            save ("adv_multiband_bands.png");
             // hammer: nothing at rest; lightning and particles past the activation point, more as the hammer fills
             {
                 auto activity = [&] (float fill)
@@ -1932,14 +1178,9 @@ int main (int argc, char** argv)
                 o.setPosition (0); o.truncate();
                 juce::PNGImageFormat().writeImageToStream (sheet, o);
             }
-            // Flanger on (vectorscope moving) and De-ess working on bursts of hiss
+            // De-ess working on bursts of hiss
             {
-                setParam (p, kvid::wdOn, 1.0f);
-                ed->showAdvanced (true, 2);
-                for (int k = 0; k < 6; ++k) { render (p, 0.1, vocal); ed->widenerPanel().scope.advance(); }
-                save ("adv_widener_scope.png");
-                setParam (p, "fl_on", 0.0f);
-                setParam (p, "ds_on", 1.0f); setParam (p, "ds_thresh", -40.0f); setParam (p, "ds_range", 12.0f);
+                setParam (p, "ds_on", 1.0f); setParam (p, "ds_det_lo", 5000.0f); setParam (p, "ds_range", 12.0f);
                 ed->showTab (true, KaminariVocalEditor::TabDeEss);
                 juce::Random rnd (7);
                 auto sibilant = [&rnd] (int, long n)
@@ -1968,13 +1209,6 @@ int main (int argc, char** argv)
                 check (maxGr > 3.0f && shown > 0.5f * maxGr, "De-ess display shows the de-esser's own reduction on hiss bursts (up to "
                        + juce::String (shown, 1) + " dB; the de-esser reached " + juce::String (maxGr, 1) + " dB)");
             }
-            // Reverb return EQ and Delay ducking / routing views
-            setParam (p, "rv_eq1_used", 1.0f); setParam (p, "rv_eq1_type", (float) kv::LowCut); setParam (p, "rv_eq1_freq", 180.0f);
-            setParam (p, "rv_eq2_used", 1.0f); setParam (p, "rv_eq2_freq", 450.0f); setParam (p, "rv_eq2_gain", -4.0f);
-            setParam (p, "rv_eq3_used", 1.0f); setParam (p, "rv_eq3_type", (float) kv::HighCut); setParam (p, "rv_eq3_freq", 7000.0f);
-            ed->sendsView().returnFx (0).eq.select (1);
-            ed->sendsView().showView (1);
-            shot (0, kvid::rvMode, 0.0f, "adv_reverb_eq.png");
             // compression side-chain EQ view
             setParam (p, "lv_sc1_used", 1.0f); setParam (p, "lv_sc1_type", (float) kv::LowCut); setParam (p, "lv_sc1_freq", 150.0f);
             setParam (p, "lv_sc2_used", 1.0f); setParam (p, "lv_sc2_freq", 5500.0f); setParam (p, "lv_sc2_gain", 6.0f);
@@ -1984,10 +1218,6 @@ int main (int argc, char** argv)
             for (int k = 0; k < 4; ++k) { render (p, 0.1, vocal); juce::MessageManager::getInstance()->runDispatchLoopUntil (40); }
             save ("adv_compression_sc.png");
             ed->compressionPanel().showSideChain (false);
-            setParam (p, "dl_duck_on", 1.0f); setParam (p, "fx_dl_feed", 1.0f);
-            ed->sendsView().showView (2);
-            shot (1, kvid::dlMode, 0.0f, "adv_delay_duck.png");
-            ed->sendsView().showView (0);
         }
     }
 

@@ -8,35 +8,28 @@
 #include "dsp/Dynamics.h"
 #include "dsp/Resonance.h"
 #include "dsp/Tune.h"
-#include "dsp/Distortion.h"
 #include "dsp/Oversampled.h"
 #include "dsp/SpectrumAnalyser.h"
 #include "dsp/History.h"
-#include "sends/ReturnFx.h"
 
 // Kaminari Vocal processor.
 //
-// Signal path (DESIGN.md section 3 and 3.1):
-//   input -> In Gain -> [channel modules] -> pre-fader tap -> Out Gain -> post-fader tap -> dry out
-//   each send: tap * send level -> effect (100 % wet) -> return guard -> summed with the dry out
-//
-// The dry signal is never processed by a send: the output is the dry signal plus the three returns.
-// Channel modules, in order: Tune -> EQ -> Multiband -> Compression -> Flanger -> Distortion -> De-ess -> Resonance.
-// Layouts: mono -> mono, mono -> stereo, stereo -> stereo. A mono input is processed as dual mono, so the
-// sends' stereo returns stay stereo on a mono-in/stereo-out track.
+// Signal path (Alt edition, see docs/KaminariVocal/VERSIONS.md):
+//   input -> In Gain -> Tune -> EQ -> Multiband -> Compression -> De-ess -> Resonance -> Out Gain -> output
+// Layouts: mono -> mono, mono -> stereo, stereo -> stereo. A mono input is processed as dual mono.
 class KaminariVocalProcessor : public juce::AudioProcessor,
                                private juce::AsyncUpdater,
                                private juce::AudioProcessorParameter::Listener
 {
 public:
-    enum SendIndex { Reverb, Delay, Widener, numSends };
-    // Indices are not the processing order (Flanger and Distortion run between Compression and De-ess).
-    enum ModuleIndex { ModTune, ModEq, ModMultiband, ModCompression, ModDeEss, ModResonance, ModDistortion, ModFlanger, numModules };
+    // Processing and tab order.
+    enum ModuleIndex { ModTune, ModEq, ModMultiband, ModCompression, ModDeEss, ModResonance, numModules };
 
     // Saved with every session; raise when a later version must convert old sessions (see DESIGN.md 2.11).
     // 3: Distortion tab inserted before De-ess (saved Advanced tab indices from 4 on move up by one).
     // 4: Flanger moved from the sends into the chain; its tab sits before Distortion (indices from 4 on move up again).
-    static constexpr int stateVersion = 4;
+    // 5: Alt edition: six module tabs (0..5), no Flanger, Distortion or sends.
+    static constexpr int stateVersion = 5;
     // Algorithm version per module, saved with the session so a later, improved algorithm can keep old
     // sessions sounding the same. All modules are at version 1.
     static constexpr int engineVersion = 1;
@@ -53,10 +46,10 @@ public:
     juce::AudioProcessorEditor* createEditor() override;
     bool hasEditor() const override { return true; }
 
-    const juce::String getName() const override { return "Kaminari Vocal"; }
+    const juce::String getName() const override { return KV_PRODUCT_NAME; }
     bool acceptsMidi() const override { return false; }
     bool producesMidi() const override { return false; }
-    double getTailLengthSeconds() const override { return 30.0; }   // longest reverb decay plus delay feedback
+    double getTailLengthSeconds() const override { return 4.0; }   // longest compressor release
 
     int getNumPrograms() override { return 1; }
     int getCurrentProgram() override { return 0; }
@@ -79,31 +72,25 @@ public:
     SpectrumAnalyser analyserPre, analyserPost;
     std::atomic<int> analyserMode { 3 };   // 0 Pre, 1 Post, 2 Off, 3 Pre and Post together
     std::atomic<int> analyserResolution { SpectrumProcessor::High }, analyserSpeed { SpectrumProcessor::Fast };
-    // Reverb (0) and Delay (1) returns: EQ band being auditioned (-1 = none; not saved), ducking read-out,
-    // spectrum of the return before and after its EQ
-    std::atomic<int> returnEqSolo[2] { -1, -1 };
+    // Compression side chain: EQ band being auditioned (-1 = none; not saved)
     std::atomic<int> scEqSolo { -1 };
-    std::array<std::atomic<bool>, 3> feedBlocked {};   // a send's feed is dropped because it would close a loop
-    // analyzer display (bit 0 = pre, bit 1 = post as AnalyzerPair modes) of the side-chain and return EQ graphs
-    std::atomic<int> scAnalyserMode { 3 }, returnAnalyserMode[2] { 3, 3 };
+    // analyzer display (bit 0 = pre, bit 1 = post as AnalyzerPair modes) of the side-chain EQ graph
+    std::atomic<int> scAnalyserMode { 3 };
 
-    // The four EQs that share the main EQ's band layout and editor.
-    enum EqTarget { EqMain, EqSideChain, EqReverbReturn, EqDelayReturn, numEqTargets };
-    static juce::String eqPrefix (int t) { static const char* p[] = { "eq", "lv_sc", "rv_eq", "dl_eq" }; return p[juce::jlimit (0, 3, t)]; }
-    static juce::String eqOnId (int t)   { static const char* p[] = { "eq_on", "lv_on", "rv_on", "dl_on" }; return p[juce::jlimit (0, 3, t)]; }
-    std::atomic<int>& eqSoloFor (int t) { return t == EqSideChain ? scEqSolo : (t == EqReverbReturn ? returnEqSolo[0] : (t == EqDelayReturn ? returnEqSolo[1] : eqSolo)); }
-    std::atomic<int>& eqAnalyserModeFor (int t) { return t == EqSideChain ? scAnalyserMode : (t == EqReverbReturn ? returnAnalyserMode[0] : (t == EqDelayReturn ? returnAnalyserMode[1] : analyserMode)); }
+    // The EQs that share the main EQ's band layout and editor.
+    enum EqTarget { EqMain, EqSideChain, numEqTargets };
+    static juce::String eqPrefix (int t) { return t == EqSideChain ? "lv_sc" : "eq"; }
+    static juce::String eqOnId (int t)   { return t == EqSideChain ? "lv_on" : "eq_on"; }
+    std::atomic<int>& eqSoloFor (int t) { return t == EqSideChain ? scEqSolo : eqSolo; }
+    std::atomic<int>& eqAnalyserModeFor (int t) { return t == EqSideChain ? scAnalyserMode : analyserMode; }
     SpectrumAnalyser& eqAnalyserFor (int t, bool post)
     {
         if (t == EqSideChain) return post ? compScAnalyser : compInAnalyser;
-        if (t == EqReverbReturn || t == EqDelayReturn) return post ? retAnalyserPost[t - EqReverbReturn] : retAnalyserPre[t - EqReverbReturn];
         return post ? analyserPost : analyserPre;
     }
     void readEqBands (const juce::String& prefix, kv::EqBandSettings (&out)[kv::Equalizer::numBands]) const;
     // Band audition filter: around a bell / notch / band pass, below a low shelf or low cut, above a high shelf or high cut.
     static void setSoloFilter (kv::Biquad (&bp)[2], const kv::EqBandSettings& bs, double fs);
-    std::array<std::atomic<float>, 2> duckGr {};
-    SpectrumAnalyser retAnalyserPre[2], retAnalyserPost[2];
     std::atomic<int> eqSolo { -1 };         // band being auditioned (-1 = none); not saved
 
     // Level histories for the Compression and De-ess displays (about 2.7 ms per entry at 48 kHz).
@@ -117,14 +104,9 @@ public:
     int activeAB() const { return abSlot; }
     juce::UndoManager undoManager;
     std::atomic<float> uiScale { 1.0f };
-    std::array<std::atomic<float>, numSends> returnPeak {};
-
-    // Tests read the RMS of each return over the last processed block.
-    std::array<std::atomic<float>, numSends> returnRms {};
 
     // Gain reduction per module in dB (Multiband can be negative = boost), for the GUI meters.
     std::array<std::atomic<float>, numModules> moduleGr {};
-    std::atomic<float> compMakeup { 0.0f };
     std::array<std::atomic<float>, 6> mbBandChange {};   // per-band gain change in dB (Multiband display)
 
     kv::Tune tune;              // GUI reads its pitch read-outs
@@ -134,24 +116,16 @@ public:
     SpectrumAnalyser mbAnalyserPre, mbAnalyserPost, rsAnalyserPre, rsAnalyserPost;
     // Compression: the main signal entering the compressor and the signal its detector hears (after the side-chain bands)
     SpectrumAnalyser compInAnalyser, compScAnalyser;
-    StereoScopeRing widenerScope;   // the vocal with the widener's return added, for the widener's vectorscope
-    juce::AudioBuffer<float> widenerOut;
     kv::Equalizer eq;
-    kv::Distortion distortion;  // GUI reads its drive read-out
-    kv::Flanger flanger;        // GUI reads its LFO position
 
     // Session state read back from the last setStateInformation (tests and future migrations).
     int loadedStateVersion = stateVersion;
 
     // Non-parameter UI state saved with the session.
     std::atomic<bool> advancedView { false };
-    std::atomic<int> advancedSend { Reverb };
-    std::atomic<int> advancedTab { 0 };   // Advanced view tab: 0..7 modules (display order), 8 sends
+    std::atomic<int> advancedTab { 0 };   // Advanced view tab: 0..5 modules
 
-    // Delay times in samples from the current settings and host tempo (also used by the GUI read-out).
-    float delayTimeSamples (int echo, double bpm) const;
-
-    // Total reported latency: Tune's fixed delay plus any Compression / De-ess lookahead and Distortion oversampling.
+    // Total reported latency: Tune's fixed delay plus Multiband / Resonance oversampling while those are on.
     int computeLatency() const;
 
     // Settings for the GUI's EQ curve (same values the audio thread uses).
@@ -174,8 +148,6 @@ private:
     kv::CompressorSettings compSettings;
     kv::DeEsserSettings dsSettings;
     kv::ResonanceSettings rsSettings;
-    kv::DistortionSettings dtSettings;
-    bool distortionIdle = true, flangerIdle = true;
     double chunkPpq = 0.0, chunkBpm = 120.0;
     bool chunkPlaying = false;
     bool moduleOn[numModules] {};
@@ -183,17 +155,11 @@ private:
 
     kv::Oversampled<kv::Multiband> multiband;
     kv::Compressor compressor;
-    kv::Oversampled<kv::DeEsser> deesser;
-    int mbOs = 0, dsOs = 0, rsOs = 0;
+    kv::DeEsser deesser;
+    int mbOs = 0, rsOs = 0;
     std::array<juce::SmoothedValue<float>, numModules> moduleFade;   // 10 ms bypass crossfades (EQ, Multiband, Resonance)
-    juce::AudioBuffer<float> work, dryCopy, soloIn, scDetector, routeBuf;
-    std::array<juce::AudioBuffer<float>, 3> feedBuf;   // returns fed into each send this chunk
-    kv::Equalizer returnEq[2];
-    kv::EqBandSettings retEqSettings[2][kv::Equalizer::numBands];
-    kv::Biquad retSoloBp[2][2], scSoloBp[2];
-    juce::AudioBuffer<float> retSoloIn;
-    kv::Ducker ducker[2];
-    kv::DuckSettings readDuck (int r) const;
+    juce::AudioBuffer<float> work, dryCopy, soloIn, scDetector;
+    kv::Biquad scSoloBp[2];
     kv::Biquad soloBp[2];
     juce::ValueTree abState[2];
     int abSlot = 0;
@@ -202,35 +168,11 @@ private:
     Raw raw (const juce::String& id) const { return apvts.getRawParameterValue (id); }
     void publishTempo (double& bpm);
 
-    kv::ReverbSettings readReverb() const;
-    kv::DelaySettings readDelay (double bpm) const;
-    kv::WidenerSettings readWidener() const;
-    kv::FlangerSettings readFlanger (double bpm) const;
-    kv::FlangerSettings flSettings;
-    kv::ReverbSettings rvSettings;
-    kv::DelaySettings dlSettings;
-    kv::WidenerSettings wdSettings;
-    kv::DuckSettings duckSettings[2];
-    std::array<int, 3> feedTo {}, sendOrder {};
-    std::array<float, 3> feedAmt {};
     std::atomic<bool> paramsDirty { true };
     double settingsBpm = -1.0;
 
-    struct SendPtrs { Raw on, level, tap; };
-    std::array<SendPtrs, numSends> sendPtrs;
-
-    kv::ReverbSend reverb;
-    kv::DelaySend delay;
-    kv::WidenerSend widener;
-
     juce::SmoothedValue<float> inGainSmooth, outGainSmooth;
-    void resetSend (int s);
 
-    std::array<juce::SmoothedValue<float>, numSends> sendSmooth;   // send level (0 while the send is off)
-    std::array<juce::SmoothedValue<float>, numSends> returnFade;   // 1 = send on, 0 = off (10 ms fade)
-    std::array<bool, numSends> idle {};                            // effect reset and not processing
-
-    juce::AudioBuffer<float> preTap, sendIn, sendOut, returns;
     double sampleRateHz = 48000.0;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (KaminariVocalProcessor)

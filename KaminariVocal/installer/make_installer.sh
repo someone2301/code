@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# Builds Kaminari Vocal and packages it as dist/KaminariVocal-<version>.pkg (macOS only).
+# Builds the plug-in and packages it as dist/<Product>-<version>.pkg (macOS only). The product name and bundle ID
+# come from CMakeLists.txt (KV_PRODUCT_NAME, KV_BUNDLE_ID), e.g. "Kaminari Vocal Alt".
 #
 # The installer offers VST3 and AU (and AAX when built with WITH_AAX=1) and installs them for all users:
-#   /Library/Audio/Plug-Ins/VST3/Kaminari Vocal.vst3
-#   /Library/Audio/Plug-Ins/Components/Kaminari Vocal.component
-#   /Library/Application Support/Avid/Audio/Plug-Ins/Kaminari Vocal.aaxplugin
+#   /Library/Audio/Plug-Ins/VST3/<Product>.vst3
+#   /Library/Audio/Plug-Ins/Components/<Product>.component
+#   /Library/Application Support/Avid/Audio/Plug-Ins/<Product>.aaxplugin
 # Running a newer installer over an older one upgrades in place; sessions and user presets are kept.
 #
 # Optional environment variables:
@@ -26,7 +27,10 @@ OUT="$ROOT/dist"
 WORK="$ROOT/build-installer"
 VERSION="$(sed -n 's/^project(KaminariVocal VERSION \([0-9.]*\).*/\1/p' "$ROOT/CMakeLists.txt")"
 [ -n "$VERSION" ] || VERSION="0.1.0"
-ID_BASE="com.kaminariaudio.kaminarivocal"
+PRODUCT="$(sed -n 's/^set(KV_PRODUCT_NAME "\(.*\)")$/\1/p' "$ROOT/CMakeLists.txt")"
+ID_BASE="$(sed -n 's/^set(KV_BUNDLE_ID *\([^ )]*\))$/\1/p' "$ROOT/CMakeLists.txt")"
+[ -n "$PRODUCT" ] && [ -n "$ID_BASE" ] || { echo "KV_PRODUCT_NAME / KV_BUNDLE_ID not found in CMakeLists.txt"; exit 1; }
+FILEBASE="$(echo "$PRODUCT" | tr -d ' ')"
 AAX_FLAG=OFF
 [ "${WITH_AAX:-0}" = "1" ] && AAX_FLAG=ON
 
@@ -35,16 +39,16 @@ mkdir -p "$WORK" "$OUT"
 
 # ARCHS: CPU architectures to build, e.g. "x86_64;arm64" for a universal build (default: x86_64)
 ARCHS="${ARCHS:-x86_64}"
-echo "==> Building Kaminari Vocal $VERSION ($ARCHS, Release)"
+echo "==> Building $PRODUCT $VERSION ($ARCHS, Release)"
 cmake -S "$ROOT" -B "$WORK/build" -G "Unix Makefiles" -DCMAKE_BUILD_TYPE=Release -DKV_COPY_AFTER_BUILD=OFF -DKV_BUILD_AAX="$AAX_FLAG" \
       -DCMAKE_OSX_ARCHITECTURES="$ARCHS" -DCMAKE_OSX_DEPLOYMENT_TARGET=10.15
 cmake --build "$WORK/build" --config Release -j "$(sysctl -n hw.ncpu)"
 ART="$WORK/build/KaminariVocal_artefacts/Release"
 
 # name | bundle | install location | package id
-FORMATS=("VST3|$ART/VST3/Kaminari Vocal.vst3|/Library/Audio/Plug-Ins/VST3|$ID_BASE.vst3"
-         "AU|$ART/AU/Kaminari Vocal.component|/Library/Audio/Plug-Ins/Components|$ID_BASE.au")
-[ "$AAX_FLAG" = "ON" ] && FORMATS+=("AAX|$ART/AAX/Kaminari Vocal.aaxplugin|/Library/Application Support/Avid/Audio/Plug-Ins|$ID_BASE.aax")
+FORMATS=("VST3|$ART/VST3/$PRODUCT.vst3|/Library/Audio/Plug-Ins/VST3|$ID_BASE.vst3"
+         "AU|$ART/AU/$PRODUCT.component|/Library/Audio/Plug-Ins/Components|$ID_BASE.au")
+[ "$AAX_FLAG" = "ON" ] && FORMATS+=("AAX|$ART/AAX/$PRODUCT.aaxplugin|/Library/Application Support/Avid/Audio/Plug-Ins|$ID_BASE.aax")
 
 CHOICES=""
 OUTLINE=""
@@ -83,16 +87,16 @@ PLIST
     SCRIPTS=()
     [ "$NAME" = "AU" ] && SCRIPTS=(--scripts "$HERE/scripts-au")
     pkgbuild --root "$STAGE" --component-plist "$WORK/$NAME.plist" --identifier "$PKGID" --version "$VERSION" \
-             --install-location "$DEST" ${SCRIPTS[@]+"${SCRIPTS[@]}"} "$WORK/KaminariVocal-$NAME.pkg"
+             --install-location "$DEST" ${SCRIPTS[@]+"${SCRIPTS[@]}"} "$WORK/$FILEBASE-$NAME.pkg"
 
-    CHOICES+="    <choice id=\"$NAME\" title=\"Kaminari Vocal $NAME\" description=\"Installs Kaminari Vocal ($NAME) to $DEST\">\n        <pkg-ref id=\"$PKGID\"/>\n    </choice>\n    <pkg-ref id=\"$PKGID\" version=\"$VERSION\" onConclusion=\"none\">KaminariVocal-$NAME.pkg</pkg-ref>\n"
+    CHOICES+="    <choice id=\"$NAME\" title=\"$PRODUCT $NAME\" description=\"Installs $PRODUCT ($NAME) to $DEST\">\n        <pkg-ref id=\"$PKGID\"/>\n    </choice>\n    <pkg-ref id=\"$PKGID\" version=\"$VERSION\" onConclusion=\"none\">$FILEBASE-$NAME.pkg</pkg-ref>\n"
     OUTLINE+="        <line choice=\"$NAME\"/>\n"
 done
 
 echo "==> Building installer"
 awk -v choices="$CHOICES" -v outline="$OUTLINE" '{ gsub(/@CHOICES@/, choices); gsub(/@OUTLINE@/, outline); print }' \
-    "$HERE/distribution.xml.in" | sed "s/@VERSION@/$VERSION/g" > "$WORK/distribution.xml"
-PKG="$OUT/KaminariVocal-$VERSION.pkg"
+    "$HERE/distribution.xml.in" | sed -e "s/@VERSION@/$VERSION/g" -e "s/@PRODUCT@/$PRODUCT/g" > "$WORK/distribution.xml"
+PKG="$OUT/$FILEBASE-$VERSION.pkg"
 SIGN_ARGS=()
 [ -n "${INSTALLER_SIGN_IDENTITY:-}" ] && SIGN_ARGS=(--sign "$INSTALLER_SIGN_IDENTITY")
 productbuild --distribution "$WORK/distribution.xml" --package-path "$WORK" --resources "$HERE/resources" \

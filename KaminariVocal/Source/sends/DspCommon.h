@@ -6,7 +6,7 @@
 #include <cstdint>
 #include <vector>
 
-// Small building blocks shared by the send effects. Everything here is allocation-free after prepare().
+// Small building blocks shared by the DSP modules. Everything here is allocation-free after prepare().
 namespace kv
 {
     constexpr double pi = 3.14159265358979323846;

@@ -18,15 +18,9 @@ namespace
             { "tune", "Tune", { "tn_vib_", "tn_trem_" }, { "tn_speed", "tn_humanize", "tn_correct", "tn_detune" }, {}, {} },
             { "eq", "EQ", { "eq" }, {}, { "eq_on" }, {} },
             { "multiband", "Multiband", { "mb" }, {}, { "mb_on" }, { "_solo" } },
-            { "compression", "Compression", { "lv_" }, {}, { "lv_on", "lv_sc_listen", "lv_sc_source" }, {} },
-            { "flanger", "Flanger", { "fl_" }, {}, { "fl_on" }, {} },
-            { "distortion", "Distortion", { "dt_" }, {}, { "dt_on" }, {} },
-            { "deess", "De-ess", { "ds_" }, {}, { "ds_on", "ds_listen", "ds_audition_trigger", "ds_sc_source" }, {} },
+            { "compression", "Compression", { "lv_" }, {}, { "lv_on" }, {} },
+            { "deess", "De-ess", { "ds_" }, {}, { "ds_on" }, {} },
             { "resonance", "Resonance", { "rs_" }, {}, { "rs_on", "rs_bypass", "rs_sc", "rs_sc_listen", "rs_delta" }, { "_listen" } },
-            { "reverb", "Reverb", { "rv_" }, {}, { "rv_on", "rv_send", "rv_tap" }, {} },
-            { "delay", "Delay", { "dl_" }, {}, { "dl_on", "dl_send", "dl_tap" }, {} },
-            { "widener", "Widener", { "wd_" }, {}, { "wd_on", "wd_send", "wd_tap" }, {} },
-
         };
         return s;
     }
@@ -67,15 +61,15 @@ PresetManager::PresetManager (juce::AudioProcessorValueTreeState& state, const j
 {
     userRoot = juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory)
 #if JUCE_MAC
-                   .getChildFile ("Audio/Presets/Kaminari Audio/Kaminari Vocal");
+                   .getChildFile ("Audio/Presets/Kaminari Audio/" KV_PRODUCT_NAME);
 #else
-                   .getChildFile ("Kaminari Audio/Kaminari Vocal/Presets");
+                   .getChildFile ("Kaminari Audio/" KV_PRODUCT_NAME "/Presets");
 #endif
 
     const auto root = juce::JSON::parse (factoryJson);
     if (auto* mods = root.getProperty ("modules", {}).getDynamicObject())
     {
-        // keep the order of the design (Tune .. Resonance, then the sends), not the JSON's
+        // keep the order of the design (Tune .. Resonance), not the JSON's
         for (auto& s : scopes())
         {
             const auto m = mods->getProperty (s.key);

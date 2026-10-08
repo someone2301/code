@@ -247,7 +247,7 @@ namespace kvui
     inline float plainValue (juce::RangedAudioParameter& p) { return p.convertFrom0to1 (p.getValue()); }
     inline float plainValue (APVTS& s, const char* id) { return plainValue (*s.getParameter (id)); }
 
-    // Titled group box used on the send pages.
+    // Titled group box used on the Advanced pages.
     inline void drawTitledGroup (juce::Graphics& g, juce::Rectangle<int> r, const juce::String& title)
     {
         drawGroup (g, r, navy950.interpolatedWith (navy900, 0.5f));
@@ -282,7 +282,7 @@ namespace kvui
         return n;
     }
 
-    // A titled group of knobs (plus an optional extra control on the right) on the send pages.
+    // A titled group of knobs (plus an optional extra control on the right) on the Advanced pages.
     struct SendGroup
     {
         SendGroup (juce::String t, std::vector<juce::Component*> k, juce::Component* b = nullptr, int be = 0,

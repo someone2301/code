@@ -55,6 +55,7 @@ namespace kvui
     private:
         void timerCallback() override
         {
+            if (! visibleInWindow (*this)) return;
             const float t = src.load();
             level = t > level ? t : level * 0.85f;
             hold = std::max (hold * 0.999f, t);
@@ -69,8 +70,8 @@ namespace kvui
     {
     public:
         Rail (APVTS& s, const char* gainId, const juce::String& name, std::atomic<float>& l, std::atomic<float>& r, juce::LookAndFeel& lnf)
-            : title (name), ml (l), mr (r), knob (s, gainId, {}, name == "IN" ? "Input gain before the channel and the sends."
-                                                                              : "Output gain of the dry vocal. Post-fader sends follow it.")
+            : title (name), ml (l), mr (r), knob (s, gainId, {}, name == "IN" ? "Input gain before the channel modules."
+                                                                              : "Output gain after the channel modules.")
         {
             for (auto* c : std::initializer_list<juce::Component*> { &ml, &mr, &knob, &peak })
                 addAndMakeVisible (c);
@@ -110,6 +111,7 @@ namespace kvui
     private:
         void timerCallback() override
         {
+            if (! visibleInWindow (*this)) return;
             const float p = std::max (ml.peakDb(), mr.peakDb());
             peak.setText (p <= -99.0f ? juce::String (juce::CharPointer_UTF8 ("\xe2\x88\x92\xe2\x88\x9e")) : minusSign (p, 1), juce::dontSendNotification);
         }
@@ -363,6 +365,7 @@ namespace kvui
         }
         void timerCallback() override
         {
+            if (! visibleInWindow (*this)) return;
             int used = 0;
             for (int i = 0; i < 8; ++i) used += proc.apvts.getRawParameterValue ("eq" + juce::String (i + 1) + "_used")->load() > 0.5f ? 1 : 0;
             bandCount.setText (juce::String (used) + " of 8 bands", juce::dontSendNotification);
@@ -474,7 +477,7 @@ namespace kvui
         }
 
     private:
-        void timerCallback() override { update (proc.tune.detectedMidi.load(), proc.tune.correctionCents.load()); }
+        void timerCallback() override { if (visibleInWindow (*this)) update (proc.tune.detectedMidi.load(), proc.tune.correctionCents.load()); }
         KaminariVocalProcessor& proc;
         float detected = -1.0f, deviation = 0, correcting = 0;
         int target = 0;
@@ -499,6 +502,18 @@ namespace kvui
             open.getProperties().set ("kvStyle", "ghost");
             open.setButtonText (juce::String (juce::CharPointer_UTF8 ("Advanced \xe2\x80\xba")));
             open.setTooltip ("Open " + name + " in the Advanced view.");
+            if (module == KaminariVocalProcessor::ModCompression)
+            {
+                // makeup Gain beside the hammer, as on the compressor's front panel
+                makeup = std::make_unique<ParamSlider>();
+                makeup->setSliderStyle (juce::Slider::LinearVertical);
+                makeup->setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
+                makeupAtt = std::make_unique<APVTS::SliderAttachment> (p.apvts, "lv_gain", *makeup);
+                makeup->bind (p.apvts.getParameter ("lv_gain"), "Gain");
+                makeup->setHint ("Makeup gain after the compressor, like an LA-2A's Gain knob.");
+                makeup->onValueChange = [this] { repaint(); };
+                addAndMakeVisible (*makeup);
+            }
             if (module == KaminariVocalProcessor::ModTune)
             {
                 tuning = std::make_unique<TuneRangeView> (p);
@@ -540,6 +555,17 @@ namespace kvui
                 g.setFont (font (12.0f, 0));
                 g.drawText (getWidth() >= 170 ? noteText : noteText.upToFirstOccurrenceOf (" ", false, false), r.withTrimmedLeft (11), juce::Justification::centredLeft);
             }
+            if (makeup != nullptr)
+            {
+                const auto r = makeup->getBounds();
+                g.setColour (mist);
+                g.setFont (font (10.0f, 1, 0.1f));
+                g.drawText ("GAIN", r.getX() - 10, r.getY() - 15, r.getWidth() + 20, 12, juce::Justification::centred);
+                g.setColour (white);
+                g.setFont (font (11.0f, 1));
+                const float gdb = (float) makeup->getValue();
+                g.drawText ((gdb > 0.05f ? "+" : "") + minusSign (gdb, 1), r.getX() - 14, r.getBottom() + 3, r.getWidth() + 28, 12, juce::Justification::centred);
+            }
             auto info = infoArea;
             if (module == KaminariVocalProcessor::ModTune)
             {
@@ -565,28 +591,17 @@ namespace kvui
                 auto row = grArea;
                 g.setColour (mist);
                 g.setFont (font (12.0f, 0));
-                const bool sat = module == KaminariVocalProcessor::ModDistortion, lfo = module == KaminariVocalProcessor::ModFlanger;
-                g.drawText (sat ? "SAT" : (lfo ? "LFO" : "GR"), row.removeFromLeft (sat || lfo ? 30 : 24), juce::Justification::centredLeft);
+                g.drawText ("GR", row.removeFromLeft (24), juce::Justification::centredLeft);
                 auto val = row.removeFromRight (52);
                 g.setColour (white);
                 g.drawText (grText, val, juce::Justification::centredRight);
                 auto bar = row.reduced (4, 4).toFloat();
                 g.setColour (navy800);
                 g.fillRoundedRectangle (bar, 2.0f);
-                if (lfo)
-                {
-                    // sweep position: a dot moving along the bar
-                    const float x = bar.getX() + bar.getWidth() * juce::jlimit (0.0f, 1.0f, 0.5f + 0.5f * std::sin (kv::twoPi * gr));
-                    g.setColour (accent);
-                    g.fillEllipse (x - 4.0f, bar.getCentreY() - 4.0f, 8.0f, 8.0f);
-                }
-                else
-                {
-                    const float frac = juce::jlimit (0.0f, 1.0f, std::abs (gr) / (sat ? 24.0f : 12.0f));
-                    g.setColour (sat ? amber : (gr >= 0 ? accent : amber));
-                    const float fw = juce::jmax (frac > 0.001f ? 4.0f : 0.0f, bar.getWidth() * frac);
-                    g.fillRoundedRectangle (sat ? bar.removeFromLeft (fw) : bar.removeFromRight (fw), 2.0f);
-                }
+                const float frac = juce::jlimit (0.0f, 1.0f, std::abs (gr) / 12.0f);
+                g.setColour (gr >= 0 ? accent : amber);
+                const float fw = juce::jmax (frac > 0.001f ? 4.0f : 0.0f, bar.getWidth() * frac);
+                g.fillRoundedRectangle (bar.removeFromRight (fw), 2.0f);
                 g.setColour (mist);
                 g.drawFittedText (footer, footerArea, juce::Justification::centredLeft, 1, 0.8f);
             }
@@ -608,7 +623,14 @@ namespace kvui
             auto b = getLocalBounds().reduced (10, 8);
             power.setBounds (b.getX(), b.getY() + 2, 28, 28);
             b.removeFromTop (36);
-            const auto art = b.removeFromTop (juce::jmax (40, b.getHeight() - controlsHeight));
+            auto art = b.removeFromTop (juce::jmax (40, b.getHeight() - controlsHeight));
+            if (makeup != nullptr)
+            {
+                // the Gain slider takes a narrow column on the right; the hammer keeps the rest
+                auto col = art.removeFromRight (30);
+                makeup->setBounds (col.reduced (2, 18).withTrimmedBottom (2));
+                art.removeFromRight (2);
+            }
             hammer.setBounds (art.withSizeKeepingCentre (juce::jmin (art.getWidth(), 140), art.getHeight()));
             auto bottom = b.removeFromBottom (24);
             open.setBounds (bottom);
@@ -638,6 +660,7 @@ namespace kvui
     private:
         void timerCallback() override
         {
+            if (! visibleInWindow (*this)) return;
             auto& a = proc.apvts;
             auto v = [&] (const char* id) { return a.getRawParameterValue (id)->load(); };
             juce::String val = hammerParam.getCurrentValueAsText(), foot;
@@ -660,33 +683,11 @@ namespace kvui
                     break;
                 }
                 case KaminariVocalProcessor::ModCompression:
-                {
-                    const float t = v ("lv_thresh");
-                    val = juce::String (juce::roundToInt (-t / 50.0f * 100.0f)) + " % (" + minusSign (t, 0) + " dB)";
-                    foot = v ("lv_auto_gain") > 0.5f ? "Auto makeup +" + juce::String (proc.compMakeup.load(), 1) + " dB" : juce::String ("Auto makeup off");
+                    foot = "Optical" + dot() + "Gain " + proc.apvts.getParameter ("lv_gain")->getCurrentValueAsText();
                     break;
-                }
                 case KaminariVocalProcessor::ModDeEss:
-                {
-                    const float t = v ("ds_thresh");
-                    val = juce::String (juce::roundToInt (-t / 60.0f * 100.0f)) + " % (" + minusSign (t, 0) + " dB)";
-                    foot = "Above " + kvp::freqText (v ("ds_det_lo")) + dot() + (v ("ds_process") < 0.5f ? "split band" : "wide band");
+                    foot = "Above " + kvp::freqText (v ("ds_det_lo"));
                     break;
-                }
-                case KaminariVocalProcessor::ModDistortion:
-                {
-                    static const char* styles[] = { "Tape", "Tube", "Warm", "Fuzz", "Clip", "Lo-Fi" };
-                    foot = juce::String (styles[juce::jlimit (0, 5, juce::roundToInt (v ("dt_style")))]) + dot() + "mix "
-                         + juce::String (juce::roundToInt (v ("dt_mix"))) + " %";
-                    break;
-                }
-                case KaminariVocalProcessor::ModFlanger:
-                {
-                    const int sync = juce::roundToInt (v (kvid::flSync));
-                    foot = (sync == 0 ? proc.apvts.getParameter (kvid::flRate)->getCurrentValueAsText() : kvp::flangerSyncNames()[sync])
-                         + dot() + "fb " + juce::String (juce::roundToInt (v (kvid::flFeedback))) + " %";
-                    break;
-                }
                 case KaminariVocalProcessor::ModResonance:
                 {
                     static const char* q[] = { "Normal", "High", "Ultra" };
@@ -696,15 +697,10 @@ namespace kvui
                 default: break;
             }
             gr = proc.moduleGr[(size_t) module].load();
-            const auto g = module == KaminariVocalProcessor::ModFlanger
-                               ? (proc.apvts.getRawParameterValue (kvid::flOn)->load() > 0.5f ? juce::String ("sweeping") : juce::String ("off"))
-                           : module == KaminariVocalProcessor::ModDistortion
-                               ? juce::String (gr, 1) + " dB"
-                               : (gr > 0.05f ? juce::String (juce::CharPointer_UTF8 ("\xe2\x88\x92")) : (gr < -0.05f ? "+" : ""))
-                                     + juce::String (std::abs (gr), 1) + " dB";
+            const auto g = (gr > 0.05f ? juce::String (juce::CharPointer_UTF8 ("\xe2\x88\x92")) : (gr < -0.05f ? "+" : ""))
+                         + juce::String (std::abs (gr), 1) + " dB";
             if (val != valueText || foot != footer || g != grText) { valueText = val; footer = foot; grText = g; repaint(); }
             else if (module == KaminariVocalProcessor::ModTune) repaint (getWidth() - 80, 10, 80, 30);
-            else if (module == KaminariVocalProcessor::ModFlanger) repaint (grArea);
         }
 
         KaminariVocalProcessor& proc;
@@ -716,128 +712,11 @@ namespace kvui
         juce::OwnedArray<juce::ComboBox> tuneBoxes;
         juce::OwnedArray<APVTS::ComboBoxAttachment> tuneAtts;
         std::unique_ptr<TuneRangeView> tuning;
+        std::unique_ptr<ParamSlider> makeup;
+        std::unique_ptr<APVTS::SliderAttachment> makeupAtt;
 
     public:
         TuneRangeView* tuningView() { return tuning.get(); }
-    };
-
-    //==================================================================================================================
-    // Send card for the Basic view's send row.
-    class SendCard : public juce::Component, private juce::Timer
-    {
-    public:
-        SendCard (KaminariVocalProcessor& p, int send, const char* onId, const char* levelId, const char* modeId, const char* tapId,
-                  const juce::String& name, std::function<juce::String (int)> modeTextFn, juce::LookAndFeel& lnf)
-            : power (p.apvts, onId, "ON", "OFF", "Switches the " + name.toLowerCase() + " send and its return on or off."),
-              level (p.apvts, levelId, {}, "Level sent to the " + name.toLowerCase() + ". The return is 100 % wet; the dry vocal is unchanged."),
-              proc (p), title (name), sendIndex (send),
-              modeParam (*p.apvts.getParameter (modeId)), tapParam (*p.apvts.getParameter (tapId)), modeText (std::move (modeTextFn))
-        {
-            setTitle (name + " send");
-            level.setLNF (&lnf);
-            level.label.setVisible (false);
-            level.value.setVisible (false);
-            open.setButtonText (juce::String (juce::CharPointer_UTF8 ("ADV \xe2\x80\xba")));
-            open.setTooltip ("Open the " + name.toLowerCase() + " send's Advanced controls.");
-            for (auto* c : std::initializer_list<juce::Component*> { &power, &level, &open })
-                addAndMakeVisible (c);
-            startTimerHz (20);
-        }
-        ~SendCard() override { stopTimer(); level.setLNF (nullptr); }
-
-        void paint (juce::Graphics& g) override
-        {
-            using namespace kvtheme;
-            auto b = getLocalBounds().toFloat().reduced (0.5f);
-            g.setColour (navy900);
-            g.fillRoundedRectangle (b, 6.0f);
-            g.setColour (navy600);
-            g.drawRoundedRectangle (b, 6.0f, 1.0f);
-            g.setColour (white);
-            g.setFont (font (compact ? 14.5f : 16.0f, 3, 0.1f));
-            g.drawText (title.toUpperCase(), titleArea, juce::Justification::centredLeft);
-            auto t = textArea;
-            if (compact)
-            {
-                // one line: level, then mode and tap point; meter underneath
-                auto line = t.removeFromTop (16);
-                g.setFont (font (13.0f, 1));
-                const int lw = (int) juce::GlyphArrangement::getStringWidth (font (13.0f, 1), levelText) + 6;
-                g.drawText (levelText, line.removeFromLeft (lw), juce::Justification::centredLeft);
-                g.setColour (mist);
-                g.setFont (font (11.0f, 0));
-                g.drawText (detail, line, juce::Justification::centredLeft, true);
-                t.removeFromTop (3);
-            }
-            else
-            {
-                g.setFont (font (14.0f, 1));
-                g.drawText (levelText, t.removeFromTop (18), juce::Justification::centredLeft);
-                g.setColour (mist);
-                g.setFont (font (11.5f, 0));
-                g.drawText (detail, t.removeFromTop (16), juce::Justification::centredLeft, true);
-            }
-            auto bar = t.removeFromTop (compact ? 8 : 10).reduced (0, compact ? 1 : 2).toFloat();
-            g.setColour (navy950);
-            g.fillRoundedRectangle (bar, 2.0f);
-            g.setColour (navy600);
-            g.drawRoundedRectangle (bar, 2.0f, 1.0f);
-            const float db = juce::Decibels::gainToDecibels (meter, -60.0f);
-            g.setColour (accent);
-            g.fillRoundedRectangle (bar.withWidth (bar.getWidth() * juce::jlimit (0.0f, 1.0f, (db + 60.0f) / 60.0f)), 2.0f);
-        }
-
-        void resized() override
-        {
-            auto b = getLocalBounds().reduced (10, 6);
-            compact = getWidth() < 260;
-            if (compact)
-            {
-                // narrow card: knob on the left; title, ON and ADV on top; level, detail and meter below
-                level.setBounds (b.removeFromLeft (46).withSizeKeepingCentre (44, 44));
-                b.removeFromLeft (6);
-                auto top = b.removeFromTop (22);
-                open.setBounds (top.removeFromRight (40).withSizeKeepingCentre (40, 20));
-                top.removeFromRight (4);
-                power.setBounds (top.removeFromRight (38).withSizeKeepingCentre (38, 20));
-                titleArea = top;
-                textArea = b.withTrimmedTop (2).withHeight (b.getHeight());
-                return;
-            }
-            titleArea = { 12, 6, 90, 22 };
-            auto left = b.removeFromLeft (84);
-            power.setBounds (left.withTrimmedTop (28).withHeight (24).withWidth (52));
-            level.setBounds (b.removeFromLeft (52).withSizeKeepingCentre (48, 48));
-            b.removeFromLeft (8);
-            open.setBounds (b.removeFromRight (54).withSizeKeepingCentre (54, 26));
-            b.removeFromRight (8);
-            textArea = b.withSizeKeepingCentre (b.getWidth(), 46);
-        }
-
-        ToggleBox power;
-        Knob level;
-        juce::TextButton open;
-
-    private:
-        void timerCallback() override
-        {
-            const auto lv = proc.apvts.getParameter (sendIndex == 0 ? kvid::rvSend : sendIndex == 1 ? kvid::dlSend : kvid::wdSend)->getCurrentValueAsText();
-            const auto d = modeText (juce::roundToInt (modeParam.convertFrom0to1 (modeParam.getValue()))) + dot()
-                         + (tapParam.getValue() > 0.5f ? "pre-fader" : "post-fader");
-            const float m = proc.returnPeak[(size_t) sendIndex].load();
-            meter = m > meter ? m : meter * 0.8f;
-            levelText = lv; detail = d;
-            repaint();
-        }
-
-        KaminariVocalProcessor& proc;
-        juce::String title, levelText, detail;
-        int sendIndex;
-        juce::RangedAudioParameter& modeParam;
-        juce::RangedAudioParameter& tapParam;
-        std::function<juce::String (int)> modeText;
-        juce::Rectangle<int> textArea, titleArea;
-        float meter = 0;
-        bool compact = false;
+        ParamSlider* makeupSlider() { return makeup.get(); }
     };
 }

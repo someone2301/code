@@ -116,43 +116,6 @@ namespace kvui
         std::unique_ptr<APVTS::ButtonAttachment> att;
     };
 
-    // Horizontal return meter (peak, -60 .. 0 dBFS) with a caption.
-    class ReturnMeter : public juce::Component, private juce::Timer
-    {
-    public:
-        explicit ReturnMeter (std::atomic<float>& source) : src (source)
-        {
-            setTitle ("Return level");
-            startTimerHz (30);
-        }
-        ~ReturnMeter() override { stopTimer(); }
-
-        void paint (juce::Graphics& g) override
-        {
-            auto b = getLocalBounds().toFloat();
-            g.setColour (colours::navy950);
-            g.fillRoundedRectangle (b, 3.0f);
-            g.setColour (colours::navy600);
-            g.drawRoundedRectangle (b.reduced (0.5f), 3.0f, 1.0f);
-            const float db = juce::Decibels::gainToDecibels (level, -60.0f);
-            const float frac = juce::jlimit (0.0f, 1.0f, (db + 60.0f) / 60.0f);
-            auto bar = b.reduced (2.0f);
-            g.setColour (db > -1.0f ? colours::amber : colours::bolt);
-            g.fillRoundedRectangle (bar.withWidth (bar.getWidth() * frac), 2.0f);
-        }
-
-    private:
-        void timerCallback() override
-        {
-            const float target = src.load();
-            const float next = target > level ? target : level * 0.85f;
-            if (std::abs (next - level) > 1.0e-5f) { level = next; repaint(); }
-        }
-
-        std::atomic<float>& src;
-        float level = 0.0f;
-    };
-
     // Current plain value of a parameter. Reads the parameter object, not the APVTS atomic: attachment callbacks
     // run before APVTS has updated its atomic.
     inline int choiceIndex (APVTS& state, const char* id)

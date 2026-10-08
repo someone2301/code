@@ -1,6 +1,6 @@
 {
   "format": 1,
-  "notes": "Factory presets. Values are plain parameter values: numbers in the parameter's unit, true/false for switches, choice names as text. A module preset sets only its module's sound parameters; anything it does not list returns to its default. Module presets never change the module's On switch, a send's On/level/tap, or Tune's Key, Scale, Range and note map. A chain preset picks one module preset per module, then sets the listed overrides (On switches, Basic hammers, send levels). IDs of modules that are not built yet are skipped when loading.",
+  "notes": "Factory presets. Values are plain parameter values: numbers in the parameter's unit, true/false for switches, choice names as text. A module preset sets only its module's sound parameters; anything it does not list returns to its default. Module presets never change the module's On switch, or Tune's Key, Scale, Range and note map. A chain preset picks one module preset per module, then sets the listed overrides (On switches, Basic hammers). IDs of modules that are not built yet are skipped when loading.",
 
   "modules": {
     "tune": {
@@ -12,283 +12,88 @@
         { "name": "Hard Tune", "description": "Instant pitch snapping, the classic hard-tuned effect.", "values": { "tn_speed": 0, "tn_humanize": 0 } },
         { "name": "Melodic Rap", "description": "Very fast with a little humanize on held notes.", "values": { "tn_speed": 8, "tn_humanize": 8 } },
         { "name": "Slow Glide", "description": "Audible, smooth glides between notes.", "values": { "tn_speed": 160, "tn_humanize": 50 } },
-        { "name": "Natural Vibrato", "description": "Gentle correction with a late, singer-like vibrato on held notes.", "values": {
-            "tn_speed": 40, "tn_humanize": 30, "tn_vib_on": true, "tn_vib_depth": 25, "tn_vib_rate": 5.5, "tn_vib_delay": 300, "tn_vib_rise": 400, "tn_vib_variation": 30 } },
-        { "name": "Wide Vibrato", "description": "Deep, early vibrato for ballads and soul.", "values": {
-            "tn_speed": 30, "tn_humanize": 25, "tn_vib_on": true, "tn_vib_depth": 60, "tn_vib_rate": 5.0, "tn_vib_delay": 200, "tn_vib_rise": 300, "tn_vib_variation": 25 } },
-        { "name": "Hard Tune Vibrato", "description": "Instant snapping with a steady electronic vibrato.", "values": {
-            "tn_speed": 0, "tn_humanize": 0, "tn_vib_on": true, "tn_vib_depth": 40, "tn_vib_rate": 6.0, "tn_vib_delay": 150, "tn_vib_rise": 200, "tn_vib_variation": 10 } },
-        { "name": "A432 Reference", "description": "Natural correction to a 432 Hz tuning reference (Detune -31.8 cents).", "values": {
-            "tn_speed": 40, "tn_humanize": 30, "tn_detune": -31.8 } },
-        { "name": "Vibrato Only", "description": "No pitch correction, just an added vibrato.", "values": {
-            "tn_correct": false, "tn_vib_on": true, "tn_vib_depth": 30, "tn_vib_rate": 5.5, "tn_vib_delay": 250, "tn_vib_rise": 300, "tn_vib_variation": 20 } },
-        { "name": "Tremolo 1/8", "description": "Natural tuning with an eighth-note tremolo locked to the song.", "values": {
-            "tn_speed": 40, "tn_humanize": 30, "tn_trem_on": true, "tn_trem_depth": 50, "tn_trem_sync": "1/8", "tn_trem_shape": "Sine" } },
-        { "name": "Auto-Pan 1/4", "description": "Quarter-note movement between left and right.", "values": {
-            "tn_speed": 40, "tn_humanize": 30, "tn_trem_on": true, "tn_trem_depth": 70, "tn_trem_sync": "1/4", "tn_trem_shape": "Triangle", "tn_trem_stereo": 180 } }
+        { "name": "Natural Vibrato", "description": "Gentle correction with a late, singer-like vibrato on held notes.", "values": { "tn_speed": 40, "tn_humanize": 30, "tn_vib_on": true, "tn_vib_depth": 25, "tn_vib_rate": 5.5, "tn_vib_delay": 300, "tn_vib_rise": 400, "tn_vib_variation": 30 } },
+        { "name": "Wide Vibrato", "description": "Deep, early vibrato for ballads and soul.", "values": { "tn_speed": 30, "tn_humanize": 25, "tn_vib_on": true, "tn_vib_depth": 60, "tn_vib_rate": 5.0, "tn_vib_delay": 200, "tn_vib_rise": 300, "tn_vib_variation": 25 } },
+        { "name": "Hard Tune Vibrato", "description": "Instant snapping with a steady electronic vibrato.", "values": { "tn_speed": 0, "tn_humanize": 0, "tn_vib_on": true, "tn_vib_depth": 40, "tn_vib_rate": 6.0, "tn_vib_delay": 150, "tn_vib_rise": 200, "tn_vib_variation": 10 } },
+        { "name": "A432 Reference", "description": "Natural correction to a 432 Hz tuning reference (Detune -31.8 cents).", "values": { "tn_speed": 40, "tn_humanize": 30, "tn_detune": -31.8 } },
+        { "name": "Vibrato Only", "description": "No pitch correction, just an added vibrato.", "values": { "tn_correct": false, "tn_vib_on": true, "tn_vib_depth": 30, "tn_vib_rate": 5.5, "tn_vib_delay": 250, "tn_vib_rise": 300, "tn_vib_variation": 20 } },
+        { "name": "Tremolo 1/8", "description": "Natural tuning with an eighth-note tremolo locked to the song.", "values": { "tn_speed": 40, "tn_humanize": 30, "tn_trem_on": true, "tn_trem_depth": 50, "tn_trem_sync": "1/8", "tn_trem_shape": "Sine" } },
+        { "name": "Auto-Pan 1/4", "description": "Quarter-note movement between left and right.", "values": { "tn_speed": 40, "tn_humanize": 30, "tn_trem_on": true, "tn_trem_depth": 70, "tn_trem_sync": "1/4", "tn_trem_shape": "Triangle", "tn_trem_stereo": 180 } }
       ]
     },
-
     "eq": {
       "title": "EQ",
       "presets": [
-        { "name": "Flat", "description": "No bands.", "values": {} },
-        { "name": "Vocal Clean-up", "description": "Low cut plus a small dip in the low mids.", "values": {
-            "eq1_used": true, "eq1_type": "Low Cut", "eq1_freq": 80, "eq1_slope": "12 dB/oct",
-            "eq2_used": true, "eq2_type": "Bell", "eq2_freq": 300, "eq2_gain": -2.5, "eq2_q": 1.2 } },
-        { "name": "Presence", "description": "Low cut and a broad lift around 3 kHz.", "values": {
-            "eq1_used": true, "eq1_type": "Low Cut", "eq1_freq": 90, "eq1_slope": "12 dB/oct",
-            "eq2_used": true, "eq2_type": "Bell", "eq2_freq": 3000, "eq2_gain": 2.0, "eq2_q": 0.9 } },
-        { "name": "Air", "description": "High shelf for breath and sheen.", "values": {
-            "eq1_used": true, "eq1_type": "Low Cut", "eq1_freq": 80, "eq1_slope": "12 dB/oct",
-            "eq2_used": true, "eq2_type": "High Shelf", "eq2_freq": 10000, "eq2_gain": 3.0, "eq2_q": 0.71 } },
-        { "name": "De-mud", "description": "Cuts boxiness and boom in the low mids.", "values": {
-            "eq1_used": true, "eq1_type": "Low Cut", "eq1_freq": 100, "eq1_slope": "18 dB/oct",
-            "eq2_used": true, "eq2_type": "Bell", "eq2_freq": 250, "eq2_gain": -3.0, "eq2_q": 1.4,
-            "eq3_used": true, "eq3_type": "Bell", "eq3_freq": 500, "eq3_gain": -1.5, "eq3_q": 1.6 } },
-        { "name": "Warmth", "description": "Gentle low shelf lift and slightly softer top.", "values": {
-            "eq1_used": true, "eq1_type": "Low Cut", "eq1_freq": 60, "eq1_slope": "12 dB/oct",
-            "eq2_used": true, "eq2_type": "Low Shelf", "eq2_freq": 180, "eq2_gain": 2.0, "eq2_q": 0.71,
-            "eq3_used": true, "eq3_type": "High Shelf", "eq3_freq": 12000, "eq3_gain": -1.0, "eq3_q": 0.71 } },
-        { "name": "Bright Pop", "description": "Clean-up, presence and air together.", "values": {
-            "eq1_used": true, "eq1_type": "Low Cut", "eq1_freq": 90, "eq1_slope": "18 dB/oct",
-            "eq2_used": true, "eq2_type": "Bell", "eq2_freq": 300, "eq2_gain": -2.0, "eq2_q": 1.3,
-            "eq3_used": true, "eq3_type": "Bell", "eq3_freq": 3200, "eq3_gain": 2.0, "eq3_q": 0.8,
-            "eq4_used": true, "eq4_type": "High Shelf", "eq4_freq": 10000, "eq4_gain": 3.0, "eq4_q": 0.71 } },
-        { "name": "Podcast Voice", "description": "Clear speech: low cut, de-mud, presence and a little air.", "values": {
-            "eq1_used": true, "eq1_type": "Low Cut", "eq1_freq": 90, "eq1_slope": "24 dB/oct",
-            "eq2_used": true, "eq2_type": "Bell", "eq2_freq": 220, "eq2_gain": -2.0, "eq2_q": 1.2,
-            "eq3_used": true, "eq3_type": "Bell", "eq3_freq": 3500, "eq3_gain": 2.5, "eq3_q": 1.0,
-            "eq4_used": true, "eq4_type": "High Shelf", "eq4_freq": 10000, "eq4_gain": 1.5, "eq4_q": 0.71 } },
-        { "name": "Telephone", "description": "Narrow band-limited effect voice.", "values": {
-            "eq1_used": true, "eq1_type": "Low Cut", "eq1_freq": 400, "eq1_slope": "24 dB/oct",
-            "eq2_used": true, "eq2_type": "High Cut", "eq2_freq": 3500, "eq2_slope": "24 dB/oct",
-            "eq3_used": true, "eq3_type": "Bell", "eq3_freq": 1500, "eq3_gain": 4.0, "eq3_q": 1.0 } }
+        { "name": "Flat", "description": "No bands.", "values": {  } },
+        { "name": "Vocal Clean-up", "description": "Low cut plus a small dip in the low mids.", "values": { "eq1_used": true, "eq1_type": "Low Cut", "eq1_freq": 80, "eq1_slope": "12 dB/oct", "eq2_used": true, "eq2_type": "Bell", "eq2_freq": 300, "eq2_gain": -2.5, "eq2_q": 1.2 } },
+        { "name": "Presence", "description": "Low cut and a broad lift around 3 kHz.", "values": { "eq1_used": true, "eq1_type": "Low Cut", "eq1_freq": 90, "eq1_slope": "12 dB/oct", "eq2_used": true, "eq2_type": "Bell", "eq2_freq": 3000, "eq2_gain": 2.0, "eq2_q": 0.9 } },
+        { "name": "Air", "description": "High shelf for breath and sheen.", "values": { "eq1_used": true, "eq1_type": "Low Cut", "eq1_freq": 80, "eq1_slope": "12 dB/oct", "eq2_used": true, "eq2_type": "High Shelf", "eq2_freq": 10000, "eq2_gain": 3.0, "eq2_q": 0.71 } },
+        { "name": "De-mud", "description": "Cuts boxiness and boom in the low mids.", "values": { "eq1_used": true, "eq1_type": "Low Cut", "eq1_freq": 100, "eq1_slope": "18 dB/oct", "eq2_used": true, "eq2_type": "Bell", "eq2_freq": 250, "eq2_gain": -3.0, "eq2_q": 1.4, "eq3_used": true, "eq3_type": "Bell", "eq3_freq": 500, "eq3_gain": -1.5, "eq3_q": 1.6 } },
+        { "name": "Warmth", "description": "Gentle low shelf lift and slightly softer top.", "values": { "eq1_used": true, "eq1_type": "Low Cut", "eq1_freq": 60, "eq1_slope": "12 dB/oct", "eq2_used": true, "eq2_type": "Low Shelf", "eq2_freq": 180, "eq2_gain": 2.0, "eq2_q": 0.71, "eq3_used": true, "eq3_type": "High Shelf", "eq3_freq": 12000, "eq3_gain": -1.0, "eq3_q": 0.71 } },
+        { "name": "Bright Pop", "description": "Clean-up, presence and air together.", "values": { "eq1_used": true, "eq1_type": "Low Cut", "eq1_freq": 90, "eq1_slope": "18 dB/oct", "eq2_used": true, "eq2_type": "Bell", "eq2_freq": 300, "eq2_gain": -2.0, "eq2_q": 1.3, "eq3_used": true, "eq3_type": "Bell", "eq3_freq": 3200, "eq3_gain": 2.0, "eq3_q": 0.8, "eq4_used": true, "eq4_type": "High Shelf", "eq4_freq": 10000, "eq4_gain": 3.0, "eq4_q": 0.71 } },
+        { "name": "Podcast Voice", "description": "Clear speech: low cut, de-mud, presence and a little air.", "values": { "eq1_used": true, "eq1_type": "Low Cut", "eq1_freq": 90, "eq1_slope": "24 dB/oct", "eq2_used": true, "eq2_type": "Bell", "eq2_freq": 220, "eq2_gain": -2.0, "eq2_q": 1.2, "eq3_used": true, "eq3_type": "Bell", "eq3_freq": 3500, "eq3_gain": 2.5, "eq3_q": 1.0, "eq4_used": true, "eq4_type": "High Shelf", "eq4_freq": 10000, "eq4_gain": 1.5, "eq4_q": 0.71 } },
+        { "name": "Telephone", "description": "Narrow band-limited effect voice.", "values": { "eq1_used": true, "eq1_type": "Low Cut", "eq1_freq": 400, "eq1_slope": "24 dB/oct", "eq2_used": true, "eq2_type": "High Cut", "eq2_freq": 3500, "eq2_slope": "24 dB/oct", "eq3_used": true, "eq3_type": "Bell", "eq3_freq": 1500, "eq3_gain": 4.0, "eq3_q": 1.0 } }
       ]
     },
-
     "multiband": {
       "title": "Multiband",
       "presets": [
-        { "name": "Low-Mid Control", "description": "The default: one band, 100-500 Hz.", "values": {
-            "mb_count": 1, "mb1_lo": 100, "mb1_hi": 500, "mb1_thresh": -24, "mb1_ratio": 2, "mb1_range": -6 } },
-        { "name": "Proximity Tamer", "description": "Controls bass build-up from singing close to the mic.", "values": {
-            "mb_count": 1, "mb1_lo": 80, "mb1_hi": 250, "mb1_thresh": -28, "mb1_ratio": 3, "mb1_range": -8, "mb1_attack": 15, "mb1_release": 200 } },
-        { "name": "Box Remover", "description": "Dynamic cut of boxy 300-700 Hz only when it builds up.", "values": {
-            "mb_count": 1, "mb1_lo": 300, "mb1_hi": 700, "mb1_thresh": -26, "mb1_ratio": 2.5, "mb1_range": -5 } },
-        { "name": "Harshness Control", "description": "Tames 2.5-6 kHz on loud, edgy notes.", "values": {
-            "mb_count": 1, "mb1_lo": 2500, "mb1_hi": 6000, "mb1_thresh": -30, "mb1_ratio": 3, "mb1_range": -6, "mb1_attack": 3, "mb1_release": 80 } },
-        { "name": "Even Vocal 3-Band", "description": "Low-mid, harshness and top-end control together.", "values": {
-            "mb_count": 3,
-            "mb1_lo": 100, "mb1_hi": 400, "mb1_thresh": -26, "mb1_ratio": 2, "mb1_range": -5,
-            "mb2_lo": 2500, "mb2_hi": 5500, "mb2_thresh": -30, "mb2_ratio": 2.5, "mb2_range": -5,
-            "mb3_lo": 8000, "mb3_hi": 16000, "mb3_thresh": -34, "mb3_ratio": 2, "mb3_range": -4 } },
-        { "name": "Upward Air", "description": "Brings up quiet breath and detail above 8 kHz.", "values": {
-            "mb_count": 1, "mb1_mode": "Compress", "mb1_lo": 8000, "mb1_hi": 16000, "mb1_thresh": -40, "mb1_ratio": 2, "mb1_range": 4 } }
+        { "name": "Low-Mid Control", "description": "The default: one band, 100-500 Hz.", "values": { "mb_count": 1, "mb1_lo": 100, "mb1_hi": 500, "mb1_thresh": -24, "mb1_ratio": 2, "mb1_range": -6 } },
+        { "name": "Proximity Tamer", "description": "Controls bass build-up from singing close to the mic.", "values": { "mb_count": 1, "mb1_lo": 80, "mb1_hi": 250, "mb1_thresh": -28, "mb1_ratio": 3, "mb1_range": -8, "mb1_attack": 15, "mb1_release": 200 } },
+        { "name": "Box Remover", "description": "Dynamic cut of boxy 300-700 Hz only when it builds up.", "values": { "mb_count": 1, "mb1_lo": 300, "mb1_hi": 700, "mb1_thresh": -26, "mb1_ratio": 2.5, "mb1_range": -5 } },
+        { "name": "Harshness Control", "description": "Tames 2.5-6 kHz on loud, edgy notes.", "values": { "mb_count": 1, "mb1_lo": 2500, "mb1_hi": 6000, "mb1_thresh": -30, "mb1_ratio": 3, "mb1_range": -6, "mb1_attack": 3, "mb1_release": 80 } },
+        { "name": "Even Vocal 3-Band", "description": "Low-mid, harshness and top-end control together.", "values": { "mb_count": 3, "mb1_lo": 100, "mb1_hi": 400, "mb1_thresh": -26, "mb1_ratio": 2, "mb1_range": -5, "mb2_lo": 2500, "mb2_hi": 5500, "mb2_thresh": -30, "mb2_ratio": 2.5, "mb2_range": -5, "mb3_lo": 8000, "mb3_hi": 16000, "mb3_thresh": -34, "mb3_ratio": 2, "mb3_range": -4 } },
+        { "name": "Upward Air", "description": "Brings up quiet breath and detail above 8 kHz.", "values": { "mb_count": 1, "mb1_mode": "Compress", "mb1_lo": 8000, "mb1_hi": 16000, "mb1_thresh": -40, "mb1_ratio": 2, "mb1_range": 4 } }
       ]
     },
-
     "compression": {
       "title": "Compression",
       "presets": [
-        { "name": "Clean Vocal", "description": "Transparent leveling, the default.", "values": {
-            "lv_style": "Clean", "lv_thresh": -14, "lv_ratio": 3, "lv_attack": 8, "lv_release": 150, "lv_auto_release": true, "lv_knee": 8 } },
-        { "name": "Smooth Leveler", "description": "Slow, soft, opto-like riding of the level.", "values": {
-            "lv_style": "Opto", "lv_thresh": -18, "lv_ratio": 2.5, "lv_attack": 20, "lv_release": 300, "lv_auto_release": true, "lv_knee": 16 } },
-        { "name": "Upfront Pop", "description": "Holds a pop lead firmly in front of the mix.", "values": {
-            "lv_style": "Vocal", "lv_thresh": -20, "lv_ratio": 4, "lv_attack": 3, "lv_release": 120, "lv_auto_release": true, "lv_knee": 6 } },
-        { "name": "Rap Punch", "description": "Fast, punchy control that keeps consonants clear.", "values": {
-            "lv_style": "Punch", "lv_thresh": -16, "lv_ratio": 6, "lv_attack": 10, "lv_release": 80, "lv_auto_release": false, "lv_knee": 4 } },
-        { "name": "Parallel Crush", "description": "Heavy compression blended with the dry vocal.", "values": {
-            "lv_style": "Classic", "lv_thresh": -30, "lv_ratio": 10, "lv_attack": 2, "lv_release": 100, "lv_auto_release": true, "lv_knee": 2, "lv_mix": 45 } },
-        { "name": "Gentle Glue", "description": "Light, wide-knee compression.", "values": {
-            "lv_style": "Clean", "lv_thresh": -20, "lv_ratio": 1.5, "lv_attack": 15, "lv_release": 250, "lv_auto_release": true, "lv_knee": 12 } },
-        { "name": "Broadcast", "description": "Dense, consistent level for speech; uses lookahead.", "values": {
-            "lv_style": "Clean", "lv_thresh": -22, "lv_ratio": 4, "lv_attack": 1, "lv_release": 200, "lv_auto_release": true, "lv_knee": 6, "lv_lookahead": 2 } }
+        { "name": "Clean Vocal", "description": "Transparent leveling, the default.", "values": { "lv_peak": 40, "lv_gain": 2 } },
+        { "name": "Smooth Leveler", "description": "Slow, soft riding of the level.", "values": { "lv_peak": 50, "lv_gain": 4 } },
+        { "name": "Upfront Pop", "description": "Holds a pop lead firmly in front of the mix.", "values": { "lv_peak": 62, "lv_gain": 7 } },
+        { "name": "Rap Punch", "description": "Firm control that keeps the delivery even.", "values": { "lv_peak": 58, "lv_gain": 6 } },
+        { "name": "Heavy Leveling", "description": "Strong, dense optical squeeze.", "values": { "lv_peak": 78, "lv_gain": 12 } },
+        { "name": "Gentle Glue", "description": "Barely touching, just evens the loudest words.", "values": { "lv_peak": 30, "lv_gain": 0.5 } },
+        { "name": "Broadcast", "description": "Dense, consistent level for speech.", "values": { "lv_peak": 66, "lv_gain": 9 } }
       ]
     },
-
-    "distortion": {
-      "title": "Distortion",
-      "presets": [
-        { "name": "Warm Tape", "description": "Soft tape saturation that thickens without sounding distorted.", "values": { "dt_style": "Tape", "dt_drive": 8 } },
-        { "name": "Tube Edge", "description": "Asymmetric tube grit with a little extra bite.", "values": { "dt_style": "Tube", "dt_drive": 12, "dt_bias": 20, "dt_tone": 10, "dt_lowcut": 120 } },
-        { "name": "Gentle Warmth", "description": "Mild saturation blended in.", "values": { "dt_style": "Warm", "dt_drive": 6, "dt_mix": 60 } },
-        { "name": "Parallel Grit", "description": "Hard clipping mixed underneath the clean vocal.", "values": { "dt_style": "Clip", "dt_drive": 18, "dt_mix": 30, "dt_lowcut": 150 } },
-        { "name": "Fuzz Lead", "description": "Heavy fuzz for aggressive hooks.", "values": { "dt_style": "Fuzz", "dt_drive": 20, "dt_tone": -20, "dt_lowcut": 200, "dt_mix": 70 } },
-        { "name": "Lo-Fi Crunch", "description": "Crushed, aliased and dark.", "values": { "dt_style": "Lo-Fi", "dt_drive": 10, "dt_crush": 55, "dt_tone": -30, "dt_lowcut": 250 } },
-        { "name": "Megaphone", "description": "Thin, clipped and bright.", "values": { "dt_style": "Clip", "dt_drive": 24, "dt_lowcut": 600, "dt_tone": 40 } }
-      ]
-    },
-
     "deess": {
       "title": "De-ess",
       "presets": [
-        { "name": "Standard", "description": "The default for most voices.", "values": { "ds_thresh": -28, "ds_range": 8, "ds_det_lo": 3500 } },
-        { "name": "Gentle", "description": "Light touch for already smooth recordings.", "values": { "ds_thresh": -24, "ds_range": 5, "ds_det_lo": 4000 } },
-        { "name": "Bright Singer", "description": "Strong reduction for very sibilant voices.", "values": { "ds_thresh": -34, "ds_range": 10, "ds_det_lo": 5000 } },
-        { "name": "Higher Voice", "description": "Detection range shifted up for high voices.", "values": { "ds_thresh": -30, "ds_range": 8, "ds_det_lo": 6000 } },
-        { "name": "Lower Voice", "description": "Detection range shifted down for low voices.", "values": { "ds_thresh": -30, "ds_range": 8, "ds_det_lo": 3500 } },
-        { "name": "Wideband Soft", "description": "Turns the whole vocal down slightly on esses.", "values": { "ds_thresh": -26, "ds_range": 5, "ds_process": "Wideband" } },
-        { "name": "Harsh S Fix", "description": "Deep, focused reduction for piercing esses.", "values": { "ds_thresh": -38, "ds_range": 12, "ds_det_lo": 5500, "ds_lookahead": 2 } }
+        { "name": "Standard", "description": "The default for most voices.", "values": { "ds_det_lo": 5000, "ds_range": 6 } },
+        { "name": "Gentle", "description": "Light touch for already smooth recordings.", "values": { "ds_det_lo": 6000, "ds_range": 4 } },
+        { "name": "Bright Singer", "description": "Strong reduction for very sibilant voices.", "values": { "ds_det_lo": 5000, "ds_range": 10 } },
+        { "name": "Higher Voice", "description": "Detection shifted up for high voices.", "values": { "ds_det_lo": 7000, "ds_range": 7 } },
+        { "name": "Lower Voice", "description": "Detection shifted down for low voices.", "values": { "ds_det_lo": 4000, "ds_range": 7 } },
+        { "name": "Harsh S Fix", "description": "Deep, focused reduction for piercing esses.", "values": { "ds_det_lo": 5500, "ds_range": 12 } }
       ]
     },
-
     "resonance": {
       "title": "Resonance",
       "presets": [
         { "name": "Gentle Smooth", "description": "Light, general smoothing (low latency).", "values": { "rs_mode": "Soft", "rs_depth": 3, "rs_detail": 50 } },
-        { "name": "Vocal Harshness", "description": "Targets ringing in the upper mids.", "values": {
-            "rs_mode": "Soft", "rs_depth": 5, "rs_detail": 60,
-            "rs_b1_used": true, "rs_b1_shape": "Bell", "rs_b1_freq": 3000, "rs_b1_depth": 6, "rs_b1_q": 0.8 } },
-        { "name": "Boxy Room", "description": "Reduces room and box resonances around 400 Hz.", "values": {
-            "rs_mode": "Soft", "rs_depth": 5, "rs_detail": 55,
-            "rs_b1_used": true, "rs_b1_shape": "Bell", "rs_b1_freq": 400, "rs_b1_depth": 6, "rs_b1_q": 1.0 } },
+        { "name": "Vocal Harshness", "description": "Targets ringing in the upper mids.", "values": { "rs_mode": "Soft", "rs_depth": 5, "rs_detail": 60, "rs_b1_used": true, "rs_b1_shape": "Bell", "rs_b1_freq": 3000, "rs_b1_depth": 6, "rs_b1_q": 0.8 } },
+        { "name": "Boxy Room", "description": "Reduces room and box resonances around 400 Hz.", "values": { "rs_mode": "Soft", "rs_depth": 5, "rs_detail": 55, "rs_b1_used": true, "rs_b1_shape": "Bell", "rs_b1_freq": 400, "rs_b1_depth": 6, "rs_b1_q": 1.0 } },
         { "name": "Mic Ringing", "description": "Hard mode with high detail for narrow, steady rings.", "values": { "rs_mode": "Hard", "rs_depth": 6, "rs_detail": 85 } },
         { "name": "Airy Polish", "description": "Smooths the top end, more above 2 kHz.", "values": { "rs_mode": "Soft", "rs_depth": 3, "rs_detail": 45, "rs_detail_tilt_hi": 30 } },
         { "name": "Transparent", "description": "Subtle smoothing, blended at 70 %.", "values": { "rs_mode": "Soft", "rs_depth": 2, "rs_detail": 50, "rs_mix": 70 } }
-      ]
-    },
-
-    "reverb": {
-      "title": "Reverb",
-      "presets": [
-        { "name": "Vocal Plate", "description": "Classic bright plate for lead vocals.", "values": {
-            "rv_mode": "Plate", "rv_decay": 1.8, "rv_size": 55, "rv_predelay": 30, "rv_hicut": 9000, "rv_locut": 200, "rv_mod_depth": 35 } },
-        { "name": "Short Room", "description": "Small, natural room to place the voice in a space.", "values": {
-            "rv_mode": "Room", "rv_decay": 0.9, "rv_size": 40, "rv_predelay": 8, "rv_hicut": 7000, "rv_locut": 180 } },
-        { "name": "Big Ballad Hall", "description": "Large, lush hall with a long pre-delay.", "values": {
-            "rv_mode": "Concert Hall", "rv_decay": 3.2, "rv_size": 75, "rv_predelay": 45, "rv_hicut": 7500, "rv_locut": 220, "rv_density": 80 } },
-        { "name": "Air Ambience", "description": "Felt more than heard: subtle space and air.", "values": {
-            "rv_mode": "Ambience", "rv_decay": 0.8, "rv_size": 35, "rv_predelay": 5, "rv_hicut": 12000, "rv_locut": 250, "rv_attack": 40 } },
-        { "name": "Smooth Plate", "description": "Clear, polished plate.", "values": {
-            "rv_mode": "Smooth Plate", "rv_decay": 2.2, "rv_size": 60, "rv_predelay": 25, "rv_hicut": 10000, "rv_locut": 180 } },
-        { "name": "Vintage Hall", "description": "Gritty, warm vintage-digital hall.", "values": {
-            "rv_mode": "Dirty Hall", "rv_decay": 2.4, "rv_size": 60, "rv_predelay": 20, "rv_hicut": 6000, "rv_locut": 200 } },
-        { "name": "Gated Vocal", "description": "Short gated burst.", "values": {
-            "rv_mode": "Nonlin", "rv_size": 30, "rv_predelay": 0, "rv_hicut": 9000, "rv_locut": 200, "rv_attack": 0 } },
-        { "name": "Reverse Swell", "description": "Rising, reverse-style envelope.", "values": {
-            "rv_mode": "Nonlin", "rv_size": 55, "rv_predelay": 0, "rv_hicut": 8000, "rv_locut": 200, "rv_attack": 100 } },
-        { "name": "Animated Wash", "description": "Long, moving chaotic hall that still sits in a mix.", "values": {
-            "rv_mode": "Chaotic Hall", "rv_decay": 5.0, "rv_size": 70, "rv_predelay": 35, "rv_hicut": 6500, "rv_locut": 250, "rv_mod_depth": 55 } },
-        { "name": "Cathedral Pad", "description": "Huge, open space with a very long decay.", "values": {
-            "rv_mode": "Cathedral", "rv_decay": 8.0, "rv_size": 80, "rv_predelay": 40, "rv_hicut": 5500, "rv_locut": 250 } },
-        { "name": "Palace Room", "description": "Realistic small-to-medium room character.", "values": {
-            "rv_mode": "Palace", "rv_decay": 1.2, "rv_size": 30, "rv_predelay": 12, "rv_hicut": 8000, "rv_locut": 180 } }
-      ]
-    },
-
-    "delay": {
-      "title": "Delay",
-      "presets": [
-        { "name": "Slapback", "description": "Single 110 ms tape slap, no repeats.", "values": {
-            "dl_mode": "Single", "dl_style": "Studio Tape", "dl_t1_unit": "Time", "dl_t1_ms": 110, "dl_feedback": 0, "dl_width": 20, "dl_hicut": 5000, "dl_locut": 200 } },
-        { "name": "1/8 Throw", "description": "Tempo-synced eighth-note echoes.", "values": {
-            "dl_mode": "Single", "dl_style": "Studio Tape", "dl_t1_unit": "Note", "dl_t1_note": "1/8", "dl_feedback": 35, "dl_width": 50, "dl_hicut": 6000, "dl_locut": 200 } },
-        { "name": "1/4 Dotted", "description": "Dotted quarter echoes that fill gaps between phrases.", "values": {
-            "dl_mode": "Single", "dl_style": "Clean Digital", "dl_t1_unit": "Dot", "dl_t1_note": "1/4", "dl_feedback": 30, "dl_width": 55, "dl_hicut": 6500, "dl_locut": 250 } },
-        { "name": "Ping-Pong 1/8", "description": "Eighth notes bouncing left and right.", "values": {
-            "dl_mode": "Ping-Pong", "dl_style": "Clean Digital", "dl_t1_unit": "Note", "dl_t1_note": "1/8", "dl_t2_unit": "Note", "dl_t2_note": "1/8",
-            "dl_feedback": 35, "dl_width": 75, "dl_hicut": 6000, "dl_locut": 250 } },
-        { "name": "Wide Doubler", "description": "Two short, different echo times for width.", "values": {
-            "dl_mode": "Dual", "dl_style": "Clean Digital", "dl_t1_unit": "Time", "dl_t1_ms": 23, "dl_t2_unit": "Time", "dl_t2_ms": 37,
-            "dl_feedback": 0, "dl_width": 90, "dl_hicut": 9000, "dl_locut": 250 } },
-        { "name": "Worn Tape Echo", "description": "Wobbly, dark tape repeats.", "values": {
-            "dl_mode": "Single", "dl_style": "Worn Tape", "dl_t1_unit": "Note", "dl_t1_note": "1/4", "dl_feedback": 45, "dl_saturation": 40,
-            "dl_wobble": 20, "dl_wobble_rate": 0.8, "dl_wobble_shape": "Random Walk", "dl_width": 40 } },
-        { "name": "Lo-Fi Radio Echo", "description": "Narrow, crunchy eighth-note echoes.", "values": {
-            "dl_mode": "Single", "dl_style": "Lo-Fi Radio", "dl_t1_unit": "Note", "dl_t1_note": "1/8", "dl_feedback": 30, "dl_saturation": 50, "dl_width": 30 } },
-        { "name": "Ambient Diffuse", "description": "Smeared, reverb-like quarter-note echoes.", "values": {
-            "dl_mode": "Single", "dl_style": "Diffused", "dl_t1_unit": "Note", "dl_t1_note": "1/4", "dl_feedback": 50,
-            "dl_diffusion": 60, "dl_diff_size": 70, "dl_diff_loop": "Loop", "dl_width": 80, "dl_hicut": 5000 } },
-        { "name": "Swing 1/8", "description": "Eighth-note echoes with a swing feel.", "values": {
-            "dl_mode": "Single", "dl_style": "Analog Bucket", "dl_t1_unit": "Note", "dl_t1_note": "1/8", "dl_feedback": 40, "dl_groove": 60, "dl_accent": 30, "dl_width": 50 } }
-      ]
-    },
-
-    "widener": {
-      "title": "Widener",
-      "presets": [
-        { "name": "MicroShift Classic", "description": "Style I at its own amounts.", "values": {
-            "wd_type": "MicroShift", "wd_ms_style": "I", "wd_ms_detune": 100, "wd_ms_delay": 100, "wd_ms_focus": 20 } },
-        { "name": "Subtle Doubler", "description": "Light Style II thickening that keeps the low end tight.", "values": {
-            "wd_type": "MicroShift", "wd_ms_style": "II", "wd_ms_detune": 60, "wd_ms_delay": 80, "wd_ms_focus": 150 } },
-        { "name": "Huge Width", "description": "Style III, more detune and delay.", "values": {
-            "wd_type": "MicroShift", "wd_ms_style": "III", "wd_ms_detune": 140, "wd_ms_delay": 150, "wd_ms_focus": 200 } },
-        { "name": "Vocal Air", "description": "Widens only the presence and air above 2 kHz.", "values": {
-            "wd_type": "MicroShift", "wd_ms_style": "I", "wd_ms_detune": 100, "wd_ms_delay": 100, "wd_ms_focus": 2000 } },
-        { "name": "Side Subtle", "description": "SideWidener Mode 1, midrange-focused, mono safe.", "values": {
-            "wd_type": "SideWidener", "wd_sw_mode": "Mode 1", "wd_sw_width": 40, "wd_sw_tone": 20, "wd_sw_output": 0 } },
-        { "name": "Side Wide", "description": "SideWidener Mode 2, full range.", "values": {
-            "wd_type": "SideWidener", "wd_sw_mode": "Mode 2", "wd_sw_width": 60, "wd_sw_tone": 70, "wd_sw_output": 0 } },
-        { "name": "Side Room", "description": "SideWidener Mode 3: widest, with a room-like smear.", "values": {
-            "wd_type": "SideWidener", "wd_sw_mode": "Mode 3", "wd_sw_width": 70, "wd_sw_tone": 60, "wd_sw_output": -2 } }
-      ]
-    },
-
-    "flanger": {
-      "title": "Flanger",
-      "presets": [
-        { "name": "Classic Sweep", "description": "Slow, wide flange.", "values": { "fl_rate": 0.3, "fl_depth": 60, "fl_delay": 1.5, "fl_feedback": 40, "fl_stereo": 90, "fl_shape": "Triangle" } },
-        { "name": "Jet", "description": "Slow, resonant jet-plane sweep.", "values": { "fl_rate": 0.12, "fl_depth": 80, "fl_delay": 0.8, "fl_feedback": 85, "fl_stereo": 90, "fl_shape": "Triangle" } },
-        { "name": "Subtle Motion", "description": "Barely-there movement on the vocal.", "values": { "fl_mix": 30, "fl_rate": 0.2, "fl_depth": 35, "fl_delay": 2.5, "fl_feedback": 15, "fl_stereo": 120, "fl_shape": "Sine" } },
-        { "name": "Negative Hollow", "description": "Negative feedback for a hollow, nasal sweep.", "values": { "fl_rate": 0.4, "fl_depth": 60, "fl_delay": 1.2, "fl_feedback": -70, "fl_shape": "Triangle" } },
-        { "name": "Synced 1 Bar", "description": "One sweep per bar, locked to the song.", "values": { "fl_sync": "1 bar", "fl_depth": 70, "fl_delay": 1.0, "fl_feedback": 60, "fl_shape": "Triangle" } },
-        { "name": "Chorus Flange", "description": "Longer delay, no feedback: closer to a chorus.", "values": { "fl_rate": 0.9, "fl_depth": 25, "fl_delay": 7.0, "fl_feedback": 0, "fl_stereo": 180, "fl_shape": "Sine" } }
       ]
     }
   },
 
   "chains": [
-    { "name": "Default", "description": "Neutral starting point. Sends off.",
-      "modules": { "tune": "Natural", "eq": "Vocal Clean-up", "multiband": "Low-Mid Control", "compression": "Clean Vocal", "deess": "Standard", "resonance": "Gentle Smooth", "reverb": "Vocal Plate", "delay": "1/8 Throw", "widener": "MicroShift Classic" },
-      "values": { "tn_on": true, "eq_on": true, "mb_on": false, "lv_on": true, "ds_on": true, "rs_on": false, "rv_on": false, "dl_on": false, "wd_on": false } },
-    { "name": "Pop Lead", "description": "Bright, tight, upfront lead with plate and eighth-note throws.",
-      "modules": { "tune": "Tight Pop", "eq": "Bright Pop", "multiband": "Low-Mid Control", "compression": "Upfront Pop", "deess": "Bright Singer", "resonance": "Vocal Harshness", "reverb": "Vocal Plate", "delay": "1/8 Throw", "widener": "Vocal Air" },
-      "values": { "tn_on": true, "eq_on": true, "mb_on": true, "lv_on": true, "ds_on": true, "rs_on": true,
-                  "rv_on": true, "rv_send": -14, "dl_on": true, "dl_send": -20, "wd_on": true, "wd_send": -16 } },
-    { "name": "R&B Smooth", "description": "Warm, smooth leveling with a lush hall.",
-      "modules": { "tune": "Natural", "eq": "Warmth", "multiband": "Proximity Tamer", "compression": "Smooth Leveler", "deess": "Standard", "resonance": "Gentle Smooth", "reverb": "Big Ballad Hall", "delay": "1/4 Dotted", "widener": "Subtle Doubler" },
-      "values": { "tn_on": true, "eq_on": true, "mb_on": true, "lv_on": true, "ds_on": true, "rs_on": true,
-                  "rv_on": true, "rv_send": -15, "dl_on": true, "dl_send": -22, "wd_on": false } },
-    { "name": "Rap Vocal", "description": "Punchy and dry with a short room.",
-      "modules": { "tune": "Melodic Rap", "eq": "Presence", "multiband": "Proximity Tamer", "compression": "Rap Punch", "deess": "Standard", "resonance": "Gentle Smooth", "reverb": "Short Room", "delay": "Slapback", "widener": "Subtle Doubler" },
-      "values": { "tn_on": false, "eq_on": true, "mb_on": true, "lv_on": true, "ds_on": true, "rs_on": false,
-                  "rv_on": true, "rv_send": -22, "dl_on": true, "dl_send": -24, "wd_on": false } },
-    { "name": "Melodic Rap", "description": "Fast tuning, punchy compression, ping-pong throws.",
-      "modules": { "tune": "Melodic Rap", "eq": "Bright Pop", "multiband": "Low-Mid Control", "compression": "Rap Punch", "deess": "Standard", "resonance": "Vocal Harshness", "reverb": "Smooth Plate", "delay": "Ping-Pong 1/8", "widener": "Vocal Air" },
-      "values": { "tn_on": true, "eq_on": true, "mb_on": true, "lv_on": true, "ds_on": true, "rs_on": true,
-                  "rv_on": true, "rv_send": -18, "dl_on": true, "dl_send": -20, "wd_on": true, "wd_send": -18 } },
-    { "name": "Hard Tune", "description": "Instant pitch snapping with a wide plate.",
-      "modules": { "tune": "Hard Tune", "eq": "Bright Pop", "multiband": "Low-Mid Control", "compression": "Upfront Pop", "deess": "Standard", "resonance": "Gentle Smooth", "reverb": "Smooth Plate", "delay": "1/4 Dotted", "widener": "MicroShift Classic" },
-      "values": { "tn_on": true, "eq_on": true, "mb_on": false, "lv_on": true, "ds_on": true, "rs_on": false,
-                  "rv_on": true, "rv_send": -16, "dl_on": true, "dl_send": -22, "wd_on": true, "wd_send": -18 } },
-    { "name": "Rock Grit", "description": "Mid-forward with tape echo and a vintage hall.",
-      "modules": { "tune": "Subtle Polish", "eq": "Presence", "multiband": "Harshness Control", "compression": "Parallel Crush", "deess": "Gentle", "resonance": "Vocal Harshness", "reverb": "Vintage Hall", "delay": "Worn Tape Echo", "widener": "Huge Width", "distortion": "Tube Edge" },
-      "values": { "tn_on": true, "eq_on": true, "mb_on": true, "lv_on": true, "dt_on": true, "ds_on": true, "rs_on": true,
-                  "rv_on": true, "rv_send": -18, "dl_on": true, "dl_send": -20, "wd_on": false } },
-    { "name": "Ballad Air", "description": "Open and breathy with a long hall.",
-      "modules": { "tune": "Natural", "eq": "Air", "multiband": "Upward Air", "compression": "Smooth Leveler", "deess": "Bright Singer", "resonance": "Airy Polish", "reverb": "Big Ballad Hall", "delay": "1/4 Dotted", "widener": "Side Subtle" },
-      "values": { "tn_on": true, "eq_on": true, "mb_on": true, "lv_on": true, "ds_on": true, "rs_on": true,
-                  "rv_on": true, "rv_send": -12, "dl_on": true, "dl_send": -24, "wd_on": true, "wd_send": -14 } },
-    { "name": "Podcast Voice", "description": "Clear, even speech. No tuning or sends.",
-      "modules": { "tune": "Natural", "eq": "Podcast Voice", "multiband": "Proximity Tamer", "compression": "Broadcast", "deess": "Standard", "resonance": "Boxy Room", "reverb": "Air Ambience", "delay": "Slapback", "widener": "Side Subtle" },
-      "values": { "tn_on": false, "eq_on": true, "mb_on": true, "lv_on": true, "ds_on": true, "rs_on": true, "rv_on": false, "dl_on": false, "wd_on": false } },
-    { "name": "Backing Vocals Wide", "description": "Tucked-back, wide stacks.",
-      "modules": { "tune": "Tight Pop", "eq": "Vocal Clean-up", "multiband": "Even Vocal 3-Band", "compression": "Gentle Glue", "deess": "Harsh S Fix", "resonance": "Transparent", "reverb": "Smooth Plate", "delay": "Wide Doubler", "widener": "Huge Width" },
-      "values": { "tn_on": true, "eq_on": true, "mb_on": true, "lv_on": true, "ds_on": true, "rs_on": true,
-                  "rv_on": true, "rv_send": -14, "dl_on": true, "dl_send": -18, "wd_on": true, "wd_send": -10 } },
-    { "name": "Lo-Fi Phone", "description": "Telephone tone with crunchy echoes.",
-      "modules": { "tune": "Natural", "eq": "Telephone", "multiband": "Low-Mid Control", "compression": "Parallel Crush", "deess": "Gentle", "resonance": "Gentle Smooth", "reverb": "Short Room", "delay": "Lo-Fi Radio Echo", "widener": "Side Subtle", "distortion": "Lo-Fi Crunch" },
-      "values": { "tn_on": false, "eq_on": true, "mb_on": false, "lv_on": true, "dt_on": true, "ds_on": true, "rs_on": false,
-                  "rv_on": true, "rv_send": -20, "dl_on": true, "dl_send": -16, "wd_on": false } },
-    { "name": "Flanged Hook", "description": "Pop lead with a slow flange sweep and tape warmth.",
-      "modules": { "tune": "Tight Pop", "eq": "Bright Pop", "multiband": "Low-Mid Control", "compression": "Upfront Pop", "deess": "Bright Singer", "resonance": "Vocal Harshness", "reverb": "Vocal Plate", "delay": "1/8 Throw", "widener": "Vocal Air", "distortion": "Warm Tape", "flanger": "Classic Sweep" },
-      "values": { "tn_on": true, "eq_on": true, "mb_on": true, "lv_on": true, "dt_on": true, "ds_on": true, "rs_on": true,
-                  "rv_on": true, "rv_send": -16, "dl_on": true, "dl_send": -22, "wd_on": false, "fl_on": true } },
-    { "name": "Soul Vibrato", "description": "Warm lead with a natural added vibrato and a lush hall.",
-      "modules": { "tune": "Natural Vibrato", "eq": "Warmth", "multiband": "Proximity Tamer", "compression": "Smooth Leveler", "deess": "Standard", "resonance": "Gentle Smooth", "reverb": "Big Ballad Hall", "delay": "1/4 Dotted", "widener": "Subtle Doubler", "distortion": "Gentle Warmth" },
-      "values": { "tn_on": true, "eq_on": true, "mb_on": true, "lv_on": true, "dt_on": true, "ds_on": true, "rs_on": true,
-                  "rv_on": true, "rv_send": -14, "dl_on": true, "dl_send": -24, "wd_on": false } }
+    { "name": "Default", "description": "Neutral starting point.", "modules": { "tune": "Natural", "eq": "Vocal Clean-up", "multiband": "Low-Mid Control", "compression": "Clean Vocal", "deess": "Standard", "resonance": "Gentle Smooth" }, "values": { "tn_on": true, "eq_on": true, "mb_on": false, "lv_on": true, "ds_on": true, "rs_on": false } },
+    { "name": "Pop Lead", "description": "Bright, tight, upfront lead.", "modules": { "tune": "Tight Pop", "eq": "Bright Pop", "multiband": "Low-Mid Control", "compression": "Upfront Pop", "deess": "Bright Singer", "resonance": "Vocal Harshness" }, "values": { "tn_on": true, "eq_on": true, "mb_on": true, "lv_on": true, "ds_on": true, "rs_on": true } },
+    { "name": "R&B Smooth", "description": "Warm, smooth leveling.", "modules": { "tune": "Natural", "eq": "Warmth", "multiband": "Proximity Tamer", "compression": "Smooth Leveler", "deess": "Standard", "resonance": "Gentle Smooth" }, "values": { "tn_on": true, "eq_on": true, "mb_on": true, "lv_on": true, "ds_on": true, "rs_on": true } },
+    { "name": "Rap Vocal", "description": "Punchy and present.", "modules": { "tune": "Melodic Rap", "eq": "Presence", "multiband": "Proximity Tamer", "compression": "Rap Punch", "deess": "Standard", "resonance": "Gentle Smooth" }, "values": { "tn_on": false, "eq_on": true, "mb_on": true, "lv_on": true, "ds_on": true, "rs_on": false } },
+    { "name": "Melodic Rap", "description": "Fast tuning and firm leveling.", "modules": { "tune": "Melodic Rap", "eq": "Bright Pop", "multiband": "Low-Mid Control", "compression": "Rap Punch", "deess": "Standard", "resonance": "Vocal Harshness" }, "values": { "tn_on": true, "eq_on": true, "mb_on": true, "lv_on": true, "ds_on": true, "rs_on": true } },
+    { "name": "Hard Tune", "description": "Instant pitch snapping.", "modules": { "tune": "Hard Tune", "eq": "Bright Pop", "multiband": "Low-Mid Control", "compression": "Upfront Pop", "deess": "Standard", "resonance": "Gentle Smooth" }, "values": { "tn_on": true, "eq_on": true, "mb_on": false, "lv_on": true, "ds_on": true, "rs_on": false } },
+    { "name": "Rock Grit", "description": "Mid-forward and heavily leveled.", "modules": { "tune": "Subtle Polish", "eq": "Presence", "multiband": "Harshness Control", "compression": "Heavy Leveling", "deess": "Gentle", "resonance": "Vocal Harshness" }, "values": { "tn_on": true, "eq_on": true, "mb_on": true, "lv_on": true, "ds_on": true, "rs_on": true } },
+    { "name": "Ballad Air", "description": "Open and breathy.", "modules": { "tune": "Natural", "eq": "Air", "multiband": "Upward Air", "compression": "Smooth Leveler", "deess": "Bright Singer", "resonance": "Airy Polish" }, "values": { "tn_on": true, "eq_on": true, "mb_on": true, "lv_on": true, "ds_on": true, "rs_on": true } },
+    { "name": "Podcast Voice", "description": "Clear, even speech. No tuning.", "modules": { "tune": "Natural", "eq": "Podcast Voice", "multiband": "Proximity Tamer", "compression": "Broadcast", "deess": "Standard", "resonance": "Boxy Room" }, "values": { "tn_on": false, "eq_on": true, "mb_on": true, "lv_on": true, "ds_on": true, "rs_on": true } },
+    { "name": "Backing Vocals Wide", "description": "Tucked-back stacks.", "modules": { "tune": "Tight Pop", "eq": "Vocal Clean-up", "multiband": "Even Vocal 3-Band", "compression": "Gentle Glue", "deess": "Harsh S Fix", "resonance": "Transparent" }, "values": { "tn_on": true, "eq_on": true, "mb_on": true, "lv_on": true, "ds_on": true, "rs_on": true } },
+    { "name": "Lo-Fi Phone", "description": "Telephone tone.", "modules": { "tune": "Natural", "eq": "Telephone", "multiband": "Low-Mid Control", "compression": "Heavy Leveling", "deess": "Gentle", "resonance": "Gentle Smooth" }, "values": { "tn_on": false, "eq_on": true, "mb_on": false, "lv_on": true, "ds_on": true, "rs_on": false } },
+    { "name": "Soul Vibrato", "description": "Warm lead with a natural added vibrato.", "modules": { "tune": "Natural Vibrato", "eq": "Warmth", "multiband": "Proximity Tamer", "compression": "Smooth Leveler", "deess": "Standard", "resonance": "Gentle Smooth" }, "values": { "tn_on": true, "eq_on": true, "mb_on": true, "lv_on": true, "ds_on": true, "rs_on": true } }
   ]
 }

@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <installer-gui-script minSpecVersion="2">
-    <title>Kaminari Vocal @VERSION@</title>
+    <title>@PRODUCT@ @VERSION@</title>
     <welcome file="welcome.html" mime-type="text/html"/>
     <conclusion file="conclusion.html" mime-type="text/html"/>
     <options customize="allow" require-scripts="false" hostArchitectures="x86_64,arm64"/>
