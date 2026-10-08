@@ -80,6 +80,8 @@ class Config:
     vocal_python: str = ""
     vocal_model_dir: str = "/var/lib/videotomp3/models/audio-separator"
     vocal_model: str = "mel_band_roformer_karaoke_aufr33_viperx_sdr_10.1956.ckpt"
+    vocal_overlap: str = "2"
+    vocal_timeout_sec: int = 3600
     enabled: dict = field(default_factory=dict)
 
     @classmethod
@@ -94,6 +96,8 @@ class Config:
             vocal_python=e("VTM_VOCAL_PYTHON", ""),
             vocal_model_dir=e("VTM_VOCAL_MODEL_DIR", "/var/lib/videotomp3/models/audio-separator"),
             vocal_model=e("VTM_VOCAL_MODEL", "mel_band_roformer_karaoke_aufr33_viperx_sdr_10.1956.ckpt"),
+            vocal_overlap=e("VTM_VOCAL_OVERLAP", "2"),
+            vocal_timeout_sec=int(e("VTM_VOCAL_TIMEOUT_MIN", "60")) * 60,
             # Optional splits are off until the owner verifies them on their server.
             enabled={"drums": e("VTM_ENABLE_DRUM_SPLIT", "0") == "1",
                      "vocals": e("VTM_ENABLE_VOCAL_SPLIT", "0") == "1",
@@ -284,9 +288,9 @@ def run_pipeline(source: Path, work: Path, title: str, options: set[str], rate: 
         raise StepFailed(f"Stem splitting did not produce: {', '.join(missing)}")
 
     # 2. Optional detailed splits, only the selected ones
-    def optional(key, cmd, out_dir, cwd=None):
+    def optional(key, cmd, out_dir, timeout=None):
         try:
-            timed(key, lambda: run_tool(cmd, STEP_LABELS[key], cfg.timeout_sec, progress(key), work, cwd=cwd))
+            timed(key, lambda: run_tool(cmd, STEP_LABELS[key], timeout or cfg.timeout_sec, progress(key), work))
             for tool_name, zip_name in OPTIONS[key][1]:
                 p = out_dir / f"{tool_name}.wav"
                 if not p.exists():
@@ -307,7 +311,8 @@ def run_pipeline(source: Path, work: Path, title: str, options: set[str], rate: 
         d = work / "vocalparts"
         optional("vocals", [cfg.vocal_python, "-I", str(WEB_DIR / "vocal_split.py"),
                             "--model-dir", cfg.vocal_model_dir, "--model", cfg.vocal_model,
-                            str(src44), str(produced["vocals"]), str(d)], d)
+                            "--overlap", cfg.vocal_overlap,
+                            str(src44), str(produced["vocals"]), str(d)], d, cfg.vocal_timeout_sec)
     if "guitar_piano" in options:
         o = work / "stems6"
         optional("guitar_piano", [py, "-m", "demucs", "-n", "htdemucs_6s", "-o", str(o), "--filename",

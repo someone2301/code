@@ -281,7 +281,18 @@ sudo /opt/videotomp3/.venv-vocals/bin/audio-separator --download_model_only \
 sudo chown -R videotomp3:videotomp3 /opt/videotomp3 /var/lib/videotomp3
 ```
 
-Runtime and memory: measurement in progress; run `tools/stem_benchmark.py` on your server for real figures.
+Measured in the build sandbox (4-core Xeon 2.8 GHz, no GPU), 60 s of audio:
+
+| `VTM_VOCAL_OVERLAP` | Time | Lead SDR on test mix |
+|---|---|---|
+| 4 (model default) | 510 s (8.5x real time) | 29.0 dB |
+| **2 (default here)** | 265 s (4.4x real time) | 29.0 dB |
+| 1 | 158 s (2.6x real time), 2.6 GB peak memory | 28.4 dB |
+
+So a 4-minute song needs roughly 18 minutes for this step alone at overlap 2
+on that CPU, on top of Demucs. A full 4-minute run at overlap 4 was stopped
+after 30 minutes without finishing. Its timeout is `VTM_VOCAL_TIMEOUT_MIN`
+(default 60). Run `tools/stem_benchmark.py` for your server's real figures.
 
 ### Advanced option: guitar and piano (experimental)
 

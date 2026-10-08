@@ -26,6 +26,8 @@ def main() -> None:
     ap.add_argument("output_dir", type=Path)
     ap.add_argument("--model-dir", required=True)
     ap.add_argument("--model", required=True)
+    ap.add_argument("--overlap", type=int, default=2,
+                    help="chunk overlap; the model default is 4, 2 measured twice as fast at equal quality")
     a = ap.parse_args()
 
     import numpy as np
@@ -39,7 +41,9 @@ def main() -> None:
                         sample_rate=sr, output_single_stem="Vocals",
                         # No peak normalisation: background = vocals - lead needs true gain.
                         normalization_threshold=1.0, amplification_threshold=0.0,
-                        log_level=logging.ERROR)
+                        log_level=logging.ERROR,
+                        mdxc_params={"segment_size": 256, "override_model_segment_size": False,
+                                     "batch_size": None, "overlap": a.overlap, "pitch_shift": 0})
         sep.load_model(model_filename=a.model)
         files = sep.separate(str(a.mix))
         if len(files) != 1:
