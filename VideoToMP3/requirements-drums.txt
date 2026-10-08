@@ -1,0 +1,4 @@
+# Optional: drum-kit splitting with LarsNet (see README). Needs requirements-stems.txt.
+pyyaml
+soundfile
+tqdm

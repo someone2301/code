@@ -46,6 +46,12 @@
         </select>
       </div>
     </div>
+    {% if drums_enabled %}
+    <label class="check hidden" id="drums-row">
+      <input type="checkbox" id="drums">
+      Also split the drum kit into kick, snare, toms, hi-hat and cymbals (slower)
+    </label>
+    {% endif %}
     <p class="note">Stems are WAV files in a ZIP. <span id="size"></span>
       Splitting takes several minutes per song and runs one song at a time.</p>
   </div>
@@ -72,7 +78,8 @@ const mode = $("mode");
 function selectedMode() { return mode ? mode.value : "mp3"; }
 function updateSize() {
   if (!$("size")) return;
-  const count = {stems2: 2, stems4: 4, stems6: 6}[selectedMode()] || 4;
+  const drumsOn = $("drums") && !$("drums-row").classList.contains("hidden") && $("drums").checked;
+  const count = ({stems2: 2, stems4: 4, stems6: 6}[selectedMode()] || 4) + (drumsOn ? 5 : 0);
   const bytes = $("depth").value === "16" ? 2 : $("depth").value === "24" ? 3 : 4;
   const perStemMB = 240 * Number($("rate").value) * 2 * bytes / 1e6;  // 4-minute stereo song
   $("size").textContent = "A 4-minute song is about " + Math.round(perStemMB) + " MB per stem, " +
@@ -83,10 +90,12 @@ if (mode) {
     const stems = selectedMode() !== "mp3";
     $("mp3-opts").classList.toggle("hidden", stems);
     $("stem-opts").classList.toggle("hidden", !stems);
+    if ($("drums-row")) $("drums-row").classList.toggle("hidden", !["stems4", "stems6"].includes(selectedMode()));
     updateSize();
   });
   $("rate").addEventListener("change", updateSize);
   $("depth").addEventListener("change", updateSize);
+  if ($("drums")) $("drums").addEventListener("change", updateSize);
   updateSize();
 }
 
@@ -106,7 +115,8 @@ form.addEventListener("submit", async e => {
       body: JSON.stringify({url: $("url").value, quality: $("quality").value,
                             mode: selectedMode(),
                             rate: $("rate") ? $("rate").value : "44100",
-                            depth: $("depth") ? $("depth").value : "24"})
+                            depth: $("depth") ? $("depth").value : "24",
+                            drums: !!($("drums") && !$("drums-row").classList.contains("hidden") && $("drums").checked)})
     });
     if (r.status === 401) { location.reload(); return; }
     const data = await r.json();
@@ -135,6 +145,7 @@ async function poll(id) {
       downloading: "Downloading... " + (j.progress || 0) + "%",
       converting: "Converting audio...",
       separating: "Splitting stems... " + (j.progress || 0) + "%",
+      drums: "Splitting drum kit... " + (j.progress || 0) + "%",
       packaging: "Packaging ZIP...",
     }[j.status] || j.status;
     show(text + elapsed);

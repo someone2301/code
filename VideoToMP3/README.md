@@ -167,7 +167,7 @@ Stems are always WAV, delivered as a ZIP. Visitors choose:
 Demucs separates at 44.1 kHz internally and writes 32-bit float; the app then
 converts each stem to the chosen format with ffmpeg (SoX resampler when
 available). Rates above 44.1 kHz are upsampled, so they add no detail; 48 kHz
-is useful for video projects. Drums are not split into kick/snare/hats.
+is useful for video projects. Drums can optionally be split further (next section).
 
 ```sh
 # 1. CPU-only PyTorch (about 1 GB; the default build adds ~4 GB of GPU libraries)
@@ -198,6 +198,55 @@ How it behaves:
 - `VTM_STEMS6=0` hides the 6-stem option.
 - WAV ZIPs are large: a 4-minute song at 24-bit/44.1 kHz is about 64 MB per stem
   (about 254 MB for 4 stems). At 32-bit float/96 kHz it is about 184 MB per stem.
+
+## Drum-kit splitting (optional)
+
+Adds a checkbox for the 4- and 6-stem options that also splits the drum stem
+into **kick, snare, toms, hi-hat and cymbals** using
+[LarsNet](https://github.com/polimi-ispl/larsnet). The full `drums.wav` stays
+in the ZIP next to `drums-kick.wav`, `drums-snare.wav`, and so on.
+
+**License:** LarsNet's pretrained weights are CC BY-NC 4.0, non-commercial use
+only. LarsNet's code is not copied into this repository; it is downloaded
+during install.
+
+Requires stem splitting (previous section) to be installed first.
+
+```sh
+# 1. LarsNet code, pinned to a tested version
+sudo apt install -y unzip
+sudo git clone https://github.com/polimi-ispl/larsnet.git /opt/larsnet
+sudo git -C /opt/larsnet checkout 17d631fd18e77ee2f1d23ee7b3fc0fb46ae629e2
+sudo /opt/videotomp3/.venv/bin/pip install -r /opt/videotomp3/requirements-drums.txt
+
+# 2. Pretrained weights (562 MB, hosted on Google Drive by the authors)
+sudo /opt/videotomp3/.venv/bin/pip install gdown
+sudo /opt/videotomp3/.venv/bin/gdown 1U8-5924B1ii1cjv9p0MTPzayb00P4qoL -O /tmp/larsnet_models.zip
+#    (If gdown fails, download the zip in a browser from the link in LarsNet's
+#     README and copy it to the server as /tmp/larsnet_models.zip.)
+sudo unzip -q /tmp/larsnet_models.zip -d /tmp/larsnet_models
+KICK=$(find /tmp/larsnet_models -name pretrained_kick_unet.pth)
+sudo cp -r "$(dirname "$(dirname "$KICK")")"/. /opt/larsnet/pretrained_larsnet_models/
+ls /opt/larsnet/pretrained_larsnet_models/*/    # expect 5 folders, one .pth each
+
+# 3. One-time conversion so the site loads the weights in PyTorch's safe mode
+sudo /opt/videotomp3/.venv/bin/python -I /opt/videotomp3/web/drum_split.py \
+    --larsnet-dir /opt/larsnet --prepare-weights
+
+# 4. Restart; the log should say "Drum splitting: on (/opt/larsnet)"
+sudo systemctl restart videotomp3
+journalctl -u videotomp3 -n 20
+```
+
+How it behaves:
+
+- Runs after Demucs, in the same one-at-a-time queue.
+- About 1 minute extra for a 4-minute song on a 4-core CPU; peak memory about 3 GB.
+- Adds 5 WAV files to the ZIP (about 320 MB more for 4 minutes at 24-bit/44.1 kHz).
+- LarsNet was trained on synthesized drum kits, so results on real recordings
+  vary; expect some bleed between hi-hat and cymbals, and between snare and toms.
+- `VTM_DRUM_BATCH` (default 4) sets how many 12-second chunks are processed at
+  once. Lower it if memory is tight. `VTM_DRUMS=0` hides the option.
 
 ## Cleanup cron job (backup)
 

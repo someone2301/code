@@ -62,6 +62,33 @@ STEM_DEPTHS = {"16": "pcm_s16le", "24": "pcm_s24le", "32f": "pcm_f32le"}
 DEFAULT_RATE, DEFAULT_DEPTH = "44100", "24"
 STEMS6_ENABLED = os.environ.get("VTM_STEMS6", "1") == "1"
 
+# Drum-kit splitting (LarsNet): kick, snare, toms, hi-hat, cymbals.
+LARSNET_DIR = Path(os.environ.get("VTM_LARSNET_DIR", "/opt/larsnet"))
+DRUM_BATCH = os.environ.get("VTM_DRUM_BATCH", "4")
+DRUM_SPLIT_SCRIPT = Path(__file__).resolve().parent / "drum_split.py"
+
+
+def _larsnet_ready() -> tuple[bool, str]:
+    if os.environ.get("VTM_DRUMS", "1") != "1":
+        return False, "off (VTM_DRUMS=0)"
+    if not STEMS_ENABLED:
+        return False, "off (needs stem splitting)"
+    config = LARSNET_DIR / "config.yaml"
+    if not config.is_file():
+        return False, f"off (LarsNet not found in {LARSNET_DIR})"
+    try:
+        import yaml
+        paths = yaml.safe_load(config.read_text())["inference_models"].values()
+    except Exception as exc:  # noqa: BLE001
+        return False, f"off (cannot read {config}: {exc})"
+    missing = [p for p in paths if not (LARSNET_DIR / p).is_file()]
+    if missing:
+        return False, f"off (missing weights: {LARSNET_DIR / missing[0]})"
+    return True, f"on ({LARSNET_DIR})"
+
+
+DRUMS_ENABLED, DRUMS_STATUS = _larsnet_ready()
+
 app = Flask(__name__)
 app.secret_key = os.environ.get("VTM_SECRET_KEY") or secrets.token_hex(32)
 app.config.update(SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE="Lax",
@@ -180,21 +207,12 @@ def convert_stem(src: Path, dst: Path, rate: str, depth: str) -> None:
                    check=True, capture_output=True, timeout=600)
 
 
-def run_demucs(job_id: str, job_dir: Path, source: Path, mode: str) -> Path:
-    """Run Demucs in a child process so its memory is freed when it exits."""
-    model, two_stems = STEM_MODES[mode]
-    out_dir = job_dir / "stems"
-    # 32-bit float output keeps full precision until the final conversion.
-    cmd = [sys.executable, "-m", "demucs", "-n", model, "-o", str(out_dir),
-           "--filename", "{stem}.{ext}", "-j", "1", "--float32"]
-    if STEM_DEVICE:
-        cmd += ["-d", STEM_DEVICE]
-    if two_stems:
-        cmd += ["--two-stems", two_stems]
-    cmd.append(str(source))
+def run_tool(job_id: str, job_dir: Path, cmd: list[str], what: str,
+             passes_expected: int = 1) -> None:
+    """Run a separation tool in a low-priority child process, tracking its progress bar.
 
-    # Fine-tuned models ("_ft") are a bag of 4 models, so the progress bar runs 4 times.
-    passes_expected = 4 if model.endswith("_ft") else 1
+    A child process frees all of the model's memory when it exits.
+    """
     passes, last_pct, tail = 0, 0, deque(maxlen=15)
     proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
                             preexec_fn=(lambda: os.nice(10)) if os.name == "posix" else None)
@@ -224,14 +242,46 @@ def run_demucs(job_id: str, job_dir: Path, source: Path, mode: str) -> Path:
         timer.cancel()
     if code != 0:
         if code < 0:
-            raise RuntimeError("Stem splitting took too long and was stopped.")
+            raise RuntimeError(f"{what} took too long and was stopped.")
         detail = next((l for l in reversed(tail) if "Error" in l), tail[-1] if tail else "")
-        raise RuntimeError(f"Stem splitting failed. {detail}"[:300])
+        raise RuntimeError(f"{what} failed. {detail}"[:300])
+
+
+def run_demucs(job_id: str, job_dir: Path, source: Path, mode: str) -> Path:
+    model, two_stems = STEM_MODES[mode]
+    out_dir = job_dir / "stems"
+    # 32-bit float output keeps full precision until the final conversion.
+    cmd = [sys.executable, "-m", "demucs", "-n", model, "-o", str(out_dir),
+           "--filename", "{stem}.{ext}", "-j", "1", "--float32"]
+    if STEM_DEVICE:
+        cmd += ["-d", STEM_DEVICE]
+    if two_stems:
+        cmd += ["--two-stems", two_stems]
+    cmd.append(str(source))
+    # Fine-tuned models ("_ft") are a bag of 4 models, so the progress bar runs 4 times.
+    run_tool(job_id, job_dir, cmd, "Stem splitting", 4 if model.endswith("_ft") else 1)
     model_dir = out_dir / model
     return model_dir if model_dir.is_dir() else out_dir
 
 
-def run_stem_job(job_id: str, url: str, mode: str, rate: str, depth: str) -> None:
+def split_drums(job_id: str, job_dir: Path, stem_dir: Path) -> None:
+    """Replace nothing; add drums-kick.wav, drums-snare.wav, ... next to drums.wav."""
+    drums = stem_dir / "drums.wav"
+    if not drums.exists():
+        return
+    parts_dir = job_dir / "drumparts"
+    cmd = [sys.executable, "-I", str(DRUM_SPLIT_SCRIPT), "--larsnet-dir", str(LARSNET_DIR),
+           "--batch", DRUM_BATCH, str(drums), str(parts_dir)]
+    if STEM_DEVICE:
+        cmd += ["--device", STEM_DEVICE]
+    run_tool(job_id, job_dir, cmd, "Drum splitting")
+    for part in parts_dir.glob("*.wav"):
+        part.rename(stem_dir / f"drums-{part.stem}.wav")
+    shutil.rmtree(parts_dir, ignore_errors=True)
+
+
+def run_stem_job(job_id: str, url: str, mode: str, rate: str, depth: str,
+                 drums: bool) -> None:
     with jobs_lock:
         if job_id in stem_queue:
             stem_queue.remove(job_id)
@@ -257,6 +307,9 @@ def run_stem_job(job_id: str, url: str, mode: str, rate: str, depth: str) -> Non
         jobs[job_id].update(status="separating", progress=0)
         stem_dir = run_demucs(job_id, job_dir, source, mode)
         source.unlink(missing_ok=True)
+        if drums:
+            jobs[job_id].update(status="drums", progress=0)
+            split_drums(job_id, job_dir, stem_dir)
 
         jobs[job_id].update(status="packaging", progress=99)
         stems = sorted(p for p in stem_dir.iterdir() if p.suffix == ".wav")
@@ -304,7 +357,7 @@ def index():
         return render_template("login.html", error=None)
     return render_template("index.html", max_min=MAX_DURATION_MIN, ttl_min=FILE_TTL_SEC // 60,
                            stems_enabled=STEMS_ENABLED, stem_max_min=STEM_MAX_DURATION_MIN,
-                           stems6_enabled=STEMS6_ENABLED)
+                           stems6_enabled=STEMS6_ENABLED, drums_enabled=DRUMS_ENABLED)
 
 
 @app.post("/login")
@@ -333,6 +386,7 @@ def convert():
     mode = str(data.get("mode", "mp3"))
     rate = str(data.get("rate", DEFAULT_RATE))
     depth = str(data.get("depth", DEFAULT_DEPTH))
+    drums = data.get("drums") is True
     if mode != "mp3" and (mode not in STEM_MODES or not STEMS_ENABLED):
         return jsonify(error="Stem splitting is not available."), 400
     if not url.startswith(("http://", "https://")) or len(url) > 2000:
@@ -343,6 +397,8 @@ def convert():
         quality = "192"
     if mode == "stems6" and not STEMS6_ENABLED:
         return jsonify(error="6-stem splitting is turned off."), 400
+    if drums and (not DRUMS_ENABLED or mode not in ("stems4", "stems6")):
+        return jsonify(error="Drum splitting is not available for this option."), 400
     if rate not in STEM_RATES:
         rate = DEFAULT_RATE
     if depth not in STEM_DEPTHS:
@@ -365,7 +421,7 @@ def convert():
     with jobs_lock:
         jobs[job_id] = {"status": "queued", "progress": 0}
         stem_queue.append(job_id)
-    stem_executor.submit(run_stem_job, job_id, url, mode, rate, depth)
+    stem_executor.submit(run_stem_job, job_id, url, mode, rate, depth, drums)
     return jsonify(id=job_id)
 
 
@@ -410,6 +466,7 @@ HAS_SOXR = _has_soxr()
 if not ACCESS_CODE:
     print("WARNING: VTM_ACCESS_CODE is not set. Anyone who finds the site can use it.")
 print(f"Stem splitting: {'on (' + STEM_MODEL + ')' if STEMS_ENABLED else 'off (demucs not installed)'}")
+print(f"Drum splitting: {DRUMS_STATUS}")
 threading.Thread(target=cleanup_loop, daemon=True).start()
 
 if __name__ == "__main__":
