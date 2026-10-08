@@ -50,8 +50,17 @@ STEM_MAX_DURATION_MIN = int(os.environ.get("VTM_STEM_MAX_DURATION_MIN", "10"))
 STEM_JOBS_PER_HOUR = int(os.environ.get("VTM_STEM_JOBS_PER_HOUR", "5"))
 STEM_TIMEOUT_SEC = int(os.environ.get("VTM_STEM_TIMEOUT_MIN", "30")) * 60
 STEM_QUEUE_MAX = int(os.environ.get("VTM_STEM_QUEUE_MAX", "5"))
-STEM_MODES = {"stems2": "vocals", "stems4": None}  # value: --two-stems argument
-STEM_FORMATS = {"mp3", "wav"}
+# mode -> (Demucs model, --two-stems value)
+STEM_MODES = {
+    "stems2": (STEM_MODEL, "vocals"),
+    "stems4": (STEM_MODEL, None),
+    "stems6": ("htdemucs_6s", None),  # adds guitar + piano; piano is weak
+}
+# Stems are always WAV. Demucs works at 44.1 kHz; other rates are resampled.
+STEM_RATES = {"44100", "48000", "88200", "96000"}
+STEM_DEPTHS = {"16": "pcm_s16le", "24": "pcm_s24le", "32f": "pcm_f32le"}
+DEFAULT_RATE, DEFAULT_DEPTH = "44100", "24"
+STEMS6_ENABLED = os.environ.get("VTM_STEMS6", "1") == "1"
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("VTM_SECRET_KEY") or secrets.token_hex(32)
@@ -149,21 +158,43 @@ def run_job(job_id: str, url: str, quality: str) -> None:
         jobs[job_id]["finished_at"] = time.time()
 
 
-def run_demucs(job_id: str, job_dir: Path, source: Path, mode: str, fmt: str) -> Path:
+def _has_soxr() -> bool:
+    try:
+        return subprocess.run(
+            ["ffmpeg", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i",
+             "anullsrc=r=44100", "-t", "0.05", "-af", "aresample=48000:resampler=soxr",
+             "-f", "null", "-"], capture_output=True, timeout=30).returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
+def convert_stem(src: Path, dst: Path, rate: str, depth: str) -> None:
+    """Convert a 32-bit float Demucs stem to the requested sample rate and bit depth."""
+    filt = f"aresample={rate}"
+    if HAS_SOXR:
+        filt += ":resampler=soxr:precision=28"
+    if depth == "16":
+        filt += ":osf=s16:dither_method=triangular"
+    subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-i", str(src),
+                    "-af", filt, "-c:a", STEM_DEPTHS[depth], "-ar", rate, str(dst)],
+                   check=True, capture_output=True, timeout=600)
+
+
+def run_demucs(job_id: str, job_dir: Path, source: Path, mode: str) -> Path:
     """Run Demucs in a child process so its memory is freed when it exits."""
+    model, two_stems = STEM_MODES[mode]
     out_dir = job_dir / "stems"
-    cmd = [sys.executable, "-m", "demucs", "-n", STEM_MODEL, "-o", str(out_dir),
-           "--filename", "{stem}.{ext}", "-j", "1"]
+    # 32-bit float output keeps full precision until the final conversion.
+    cmd = [sys.executable, "-m", "demucs", "-n", model, "-o", str(out_dir),
+           "--filename", "{stem}.{ext}", "-j", "1", "--float32"]
     if STEM_DEVICE:
         cmd += ["-d", STEM_DEVICE]
-    if STEM_MODES[mode]:
-        cmd += ["--two-stems", STEM_MODES[mode]]
-    if fmt == "mp3":
-        cmd += ["--mp3", "--mp3-bitrate", "320"]
+    if two_stems:
+        cmd += ["--two-stems", two_stems]
     cmd.append(str(source))
 
     # Fine-tuned models ("_ft") are a bag of 4 models, so the progress bar runs 4 times.
-    passes_expected = 4 if STEM_MODEL.endswith("_ft") else 1
+    passes_expected = 4 if model.endswith("_ft") else 1
     passes, last_pct, tail = 0, 0, deque(maxlen=15)
     proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
                             preexec_fn=(lambda: os.nice(10)) if os.name == "posix" else None)
@@ -196,11 +227,11 @@ def run_demucs(job_id: str, job_dir: Path, source: Path, mode: str, fmt: str) ->
             raise RuntimeError("Stem splitting took too long and was stopped.")
         detail = next((l for l in reversed(tail) if "Error" in l), tail[-1] if tail else "")
         raise RuntimeError(f"Stem splitting failed. {detail}"[:300])
-    model_dir = out_dir / STEM_MODEL
+    model_dir = out_dir / model
     return model_dir if model_dir.is_dir() else out_dir
 
 
-def run_stem_job(job_id: str, url: str, mode: str, fmt: str) -> None:
+def run_stem_job(job_id: str, url: str, mode: str, rate: str, depth: str) -> None:
     with jobs_lock:
         if job_id in stem_queue:
             stem_queue.remove(job_id)
@@ -224,19 +255,29 @@ def run_stem_job(job_id: str, url: str, mode: str, fmt: str) -> None:
             raise RuntimeError(f"Skipped: video may be longer than {STEM_MAX_DURATION_MIN} minutes")
 
         jobs[job_id].update(status="separating", progress=0)
-        stem_dir = run_demucs(job_id, job_dir, source, mode, fmt)
+        stem_dir = run_demucs(job_id, job_dir, source, mode)
+        source.unlink(missing_ok=True)
 
         jobs[job_id].update(status="packaging", progress=99)
-        title = yt_dlp.utils.sanitize_filename(info.get("title") or "track")[:120]
-        zip_path = job_dir / f"{title} - stems.zip"
-        stems = sorted(p for p in stem_dir.iterdir() if p.suffix in (".mp3", ".wav"))
+        stems = sorted(p for p in stem_dir.iterdir() if p.suffix == ".wav")
         if not stems:
             raise RuntimeError("Stem splitting produced no files.")
-        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_STORED) as zf:
+        title = yt_dlp.utils.sanitize_filename(info.get("title") or "track")[:120]
+        depth_label = "32-bit float" if depth == "32f" else f"{depth}-bit"
+        spec = f"{depth_label} {int(rate) / 1000:g}kHz"
+        zip_path = job_dir / f"{title} - stems ({spec}).zip"
+        final_dir = job_dir / "final"
+        final_dir.mkdir(exist_ok=True)
+        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_STORED, allowZip64=True) as zf:
             for p in stems:
-                zf.write(p, arcname=f"{title} - {p.stem}{p.suffix}")
-        source.unlink(missing_ok=True)
+                out = final_dir / p.name
+                convert_stem(p, out, rate, depth)
+                p.unlink()  # free disk space as we go
+                zf.write(out, arcname=f"{title} - {p.stem}.wav")
+                out.unlink()
+                os.utime(job_dir)
         shutil.rmtree(job_dir / "stems", ignore_errors=True)
+        shutil.rmtree(final_dir, ignore_errors=True)
         jobs[job_id].update(status="done", progress=100, file=str(zip_path), name=zip_path.name,
                             stems=[p.stem for p in stems])
     except Exception as exc:  # noqa: BLE001
@@ -262,7 +303,8 @@ def index():
     if not authorized():
         return render_template("login.html", error=None)
     return render_template("index.html", max_min=MAX_DURATION_MIN, ttl_min=FILE_TTL_SEC // 60,
-                           stems_enabled=STEMS_ENABLED, stem_max_min=STEM_MAX_DURATION_MIN)
+                           stems_enabled=STEMS_ENABLED, stem_max_min=STEM_MAX_DURATION_MIN,
+                           stems6_enabled=STEMS6_ENABLED)
 
 
 @app.post("/login")
@@ -289,7 +331,8 @@ def convert():
     url = str(data.get("url", "")).strip()
     quality = str(data.get("quality", "192"))
     mode = str(data.get("mode", "mp3"))
-    fmt = str(data.get("format", "mp3"))
+    rate = str(data.get("rate", DEFAULT_RATE))
+    depth = str(data.get("depth", DEFAULT_DEPTH))
     if mode != "mp3" and (mode not in STEM_MODES or not STEMS_ENABLED):
         return jsonify(error="Stem splitting is not available."), 400
     if not url.startswith(("http://", "https://")) or len(url) > 2000:
@@ -298,8 +341,12 @@ def convert():
         return jsonify(error="That link is not allowed."), 400
     if quality not in ALLOWED_QUALITIES:
         quality = "192"
-    if fmt not in STEM_FORMATS:
-        fmt = "mp3"
+    if mode == "stems6" and not STEMS6_ENABLED:
+        return jsonify(error="6-stem splitting is turned off."), 400
+    if rate not in STEM_RATES:
+        rate = DEFAULT_RATE
+    if depth not in STEM_DEPTHS:
+        depth = DEFAULT_DEPTH
 
     job_id = uuid.uuid4().hex
     if mode == "mp3":
@@ -318,7 +365,7 @@ def convert():
     with jobs_lock:
         jobs[job_id] = {"status": "queued", "progress": 0}
         stem_queue.append(job_id)
-    stem_executor.submit(run_stem_job, job_id, url, mode, fmt)
+    stem_executor.submit(run_stem_job, job_id, url, mode, rate, depth)
     return jsonify(id=job_id)
 
 
@@ -359,6 +406,7 @@ def security_headers(resp):
 WORK_DIR.mkdir(parents=True, exist_ok=True)
 if not ensure_ffmpeg():
     sys.exit("ffmpeg not available. Run: pip install -r requirements.txt")
+HAS_SOXR = _has_soxr()
 if not ACCESS_CODE:
     print("WARNING: VTM_ACCESS_CODE is not set. Anyone who finds the site can use it.")
 print(f"Stem splitting: {'on (' + STEM_MODEL + ')' if STEMS_ENABLED else 'off (demucs not installed)'}")

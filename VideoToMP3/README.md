@@ -150,9 +150,24 @@ in front of the hostname so only emails you approve can reach the site.
 
 ## Stem splitting (optional)
 
-Adds two options to the site: **vocals + instrumental** and **vocals, drums,
-bass, other**. Uses [Demucs](https://github.com/adefossez/demucs) on your own
-server. Visitors get a ZIP of MP3 320 kbps or WAV stems.
+Adds stem options to the site, using [Demucs](https://github.com/adefossez/demucs)
+on your own server:
+
+| Option | Stems | Model |
+|--------|-------|-------|
+| 2 stems | vocals, no_vocals (instrumental) | `htdemucs` |
+| 4 stems | vocals, drums, bass, other | `htdemucs` |
+| 6 stems (experimental) | vocals, drums, bass, guitar, piano, other | `htdemucs_6s` |
+
+Stems are always WAV, delivered as a ZIP. Visitors choose:
+
+- **Bit depth:** 16-bit (dithered), **24-bit (default)**, or 32-bit float
+- **Sample rate:** **44.1 kHz (default)**, 48, 88.2 or 96 kHz
+
+Demucs separates at 44.1 kHz internally and writes 32-bit float; the app then
+converts each stem to the chosen format with ffmpeg (SoX resampler when
+available). Rates above 44.1 kHz are upsampled, so they add no detail; 48 kHz
+is useful for video projects. Drums are not split into kick/snare/hats.
 
 ```sh
 # 1. CPU-only PyTorch (about 1 GB; the default build adds ~4 GB of GPU libraries)
@@ -162,10 +177,10 @@ sudo /opt/videotomp3/.venv/bin/pip install torch torchaudio \
 sudo /opt/videotomp3/.venv/bin/pip install -r /opt/videotomp3/requirements-stems.txt
 sudo chown -R videotomp3:videotomp3 /opt/videotomp3
 
-# 3. Download the model once (about 80 MB) into the service's model folder
+# 3. Download the models once into the service's model folder
 sudo mkdir -p /var/lib/videotomp3/models && sudo chown -R videotomp3:videotomp3 /var/lib/videotomp3
 sudo -u videotomp3 env TORCH_HOME=/var/lib/videotomp3/models/torch HF_HOME=/var/lib/videotomp3/models/hf \
-    /opt/videotomp3/.venv/bin/python -c "from demucs.pretrained import get_model; get_model('htdemucs')"
+    /opt/videotomp3/.venv/bin/python -c "from demucs.pretrained import get_model; get_model('htdemucs'); get_model('htdemucs_6s')"
 
 # 4. Restart; the log should say "Stem splitting: on (htdemucs)"
 sudo systemctl restart videotomp3
@@ -179,7 +194,10 @@ How it behaves:
 - Songs longer than `VTM_STEM_MAX_DURATION_MIN` (default 10) are refused.
 - Each visitor can split `VTM_STEM_JOBS_PER_HOUR` songs per hour (default 5).
 - Demucs runs at low priority (`nice 10`) so the site stays responsive.
-- `VTM_STEM_MODEL=htdemucs_ft` gives slightly better quality but is about 4x slower.
+- `VTM_STEM_MODEL=htdemucs_ft` gives slightly better 2/4-stem quality but is about 4x slower.
+- `VTM_STEMS6=0` hides the 6-stem option.
+- WAV ZIPs are large: a 4-minute song at 24-bit/44.1 kHz is about 64 MB per stem
+  (about 254 MB for 4 stems). At 32-bit float/96 kHz it is about 184 MB per stem.
 
 ## Cleanup cron job (backup)
 

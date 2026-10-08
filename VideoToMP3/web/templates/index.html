@@ -11,6 +11,9 @@
     <option value="mp3" selected>MP3 (max {{ max_min }} min)</option>
     <option value="stems2">Stems: vocals + instrumental (max {{ stem_max_min }} min)</option>
     <option value="stems4">Stems: vocals, drums, bass, other (max {{ stem_max_min }} min)</option>
+    {% if stems6_enabled %}
+    <option value="stems6">Stems: 6 (adds guitar + piano, experimental)</option>
+    {% endif %}
   </select>
   {% endif %}
   <div id="mp3-opts">
@@ -24,13 +27,27 @@
   </div>
   {% if stems_enabled %}
   <div id="stem-opts" class="hidden">
-    <label for="format">Stem format</label>
-    <select id="format">
-      <option value="mp3" selected>MP3 320 kbps (smaller)</option>
-      <option value="wav">WAV (lossless, about 40 MB per stem)</option>
-    </select>
-    <p class="note">Stem splitting takes several minutes per song and runs one song at a time.
-      Your download is a ZIP of the stems.</p>
+    <div class="row">
+      <div>
+        <label for="rate">Sample rate</label>
+        <select id="rate">
+          <option value="44100" selected>44.1 kHz</option>
+          <option value="48000">48 kHz</option>
+          <option value="88200">88.2 kHz</option>
+          <option value="96000">96 kHz</option>
+        </select>
+      </div>
+      <div>
+        <label for="depth">Bit depth</label>
+        <select id="depth">
+          <option value="16">16-bit</option>
+          <option value="24" selected>24-bit</option>
+          <option value="32f">32-bit float</option>
+        </select>
+      </div>
+    </div>
+    <p class="note">Stems are WAV files in a ZIP. <span id="size"></span>
+      Splitting takes several minutes per song and runs one song at a time.</p>
   </div>
   {% endif %}
   <button id="go" type="submit">Convert</button>
@@ -53,11 +70,25 @@ const form = $("form"), go = $("go"), box = $("progress"), fill = $("fill"), msg
 
 const mode = $("mode");
 function selectedMode() { return mode ? mode.value : "mp3"; }
-if (mode) mode.addEventListener("change", () => {
-  const stems = selectedMode() !== "mp3";
-  $("mp3-opts").classList.toggle("hidden", stems);
-  $("stem-opts").classList.toggle("hidden", !stems);
-});
+function updateSize() {
+  if (!$("size")) return;
+  const count = {stems2: 2, stems4: 4, stems6: 6}[selectedMode()] || 4;
+  const bytes = $("depth").value === "16" ? 2 : $("depth").value === "24" ? 3 : 4;
+  const perStemMB = 240 * Number($("rate").value) * 2 * bytes / 1e6;  // 4-minute stereo song
+  $("size").textContent = "A 4-minute song is about " + Math.round(perStemMB) + " MB per stem, " +
+    Math.round(perStemMB * count) + " MB total.";
+}
+if (mode) {
+  mode.addEventListener("change", () => {
+    const stems = selectedMode() !== "mp3";
+    $("mp3-opts").classList.toggle("hidden", stems);
+    $("stem-opts").classList.toggle("hidden", !stems);
+    updateSize();
+  });
+  $("rate").addEventListener("change", updateSize);
+  $("depth").addEventListener("change", updateSize);
+  updateSize();
+}
 
 function fmtTime(sec) { const m = Math.floor(sec / 60), s = sec % 60; return m ? m + "m " + s + "s" : s + "s"; }
 let started = 0;
@@ -73,7 +104,9 @@ form.addEventListener("submit", async e => {
     const r = await fetch("/api/convert", {
       method: "POST", headers: {"Content-Type": "application/json"},
       body: JSON.stringify({url: $("url").value, quality: $("quality").value,
-                            mode: selectedMode(), format: $("format") ? $("format").value : "mp3"})
+                            mode: selectedMode(),
+                            rate: $("rate") ? $("rate").value : "44100",
+                            depth: $("depth") ? $("depth").value : "24"})
     });
     if (r.status === 401) { location.reload(); return; }
     const data = await r.json();
