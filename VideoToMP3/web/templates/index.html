@@ -167,7 +167,9 @@ form.addEventListener("submit", async e => {
                             options: selectedOptions()})
     });
     if (r.status === 401) { location.reload(); return; }
-    const data = await r.json();
+    let data;
+    try { data = await r.json(); }
+    catch { throw new Error(r.status >= 500 ? "The server did not respond (error " + r.status + "). It may be restarting; try again in a minute." : "Unexpected reply from the server (" + r.status + ")."); }
     if (!r.ok) throw new Error(data.error || "Request failed");
     poll(data.id);
   } catch (err) { fail(err.message); }
@@ -193,7 +195,8 @@ function renderSteps(steps) {
 async function poll(id) {
   try {
     const r = await fetch("/api/status/" + id);
-    if (!r.ok) throw new Error("Job not found");
+    if (r.status >= 500) { setTimeout(() => poll(id), 3000); return; }  // server briefly unreachable: keep waiting
+    if (!r.ok) throw new Error("Job not found (the server may have restarted). Please convert again.");
     const j = await r.json();
     if (j.steps) renderSteps(j.steps);
     if (j.status === "error") return fail(j.error || "Conversion failed");
