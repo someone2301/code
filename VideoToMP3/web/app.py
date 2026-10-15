@@ -152,7 +152,8 @@ def run_job(job_id: str, url: str, quality: str) -> None:
         jobs[job_id]["finished_at"] = time.time()
 
 
-def run_stem_job(job_id: str, url: str, options: set[str], rate: str, depth: str) -> None:
+def run_stem_job(job_id: str, url: str, options: set[str], rate: str, depth: str,
+                 wav_only: bool = False) -> None:
     job = jobs[job_id]
     with jobs_lock:
         if job_id in stem_queue:
@@ -176,7 +177,7 @@ def run_stem_job(job_id: str, url: str, options: set[str], rate: str, depth: str
         "postprocessors": [{"key": "FFmpegExtractAudio", "preferredcodec": "wav"}],
         "quiet": True, "no_warnings": True, "noprogress": True, "retries": 5,
         "progress_hooks": [download_hook],
-        "match_filter": duration_filter(STEM_MAX_DURATION_MIN),
+        "match_filter": duration_filter(MAX_DURATION_MIN if wav_only else STEM_MAX_DURATION_MIN),
     }
     job["status"] = "running"
     try:
@@ -188,11 +189,18 @@ def run_stem_job(job_id: str, url: str, options: set[str], rate: str, depth: str
             raise RuntimeError(f"Skipped: video may be longer than {STEM_MAX_DURATION_MIN} minutes")
         report("download", "done", 100, "")
         title = yt_dlp.utils.sanitize_filename(info.get("title") or "track")[:120]
+        if wav_only:
+            out, analysis = stems.make_wav(source, job_dir, title, rate, depth, report)
+            source.unlink(missing_ok=True)
+            job.update(status="done", file=str(out), name=out.name, files=[out.name], warnings={},
+                       analysis=analysis)
+            return
         result = stems.run_pipeline(source, job_dir, title, options, rate, depth, STEM_CFG, report)
         source.unlink(missing_ok=True)
         job.update(status="done", file=str(result.zip_path), name=result.zip_path.name,
-                   files=[f"{title} - {n}.wav" for n in result.files],
-                   warnings={stems.OPTIONS[k][0]: msg for k, msg in result.failures.items()})
+                   files=[f"{result.title} - {n}.wav" for n in result.files],
+                   warnings={stems.OPTIONS[k][0]: msg for k, msg in result.failures.items()},
+                   analysis=result.analysis)
         app.logger.info("job %s done: %s", job_id,
                         {k: (round(v.seconds), round(v.peak_mem_mb)) for k, v in result.stats.items()})
     except Exception as exc:  # noqa: BLE001
@@ -255,9 +263,9 @@ def convert():
     rate = str(data.get("rate", DEFAULT_RATE))
     depth = str(data.get("depth", DEFAULT_DEPTH))
     requested = data.get("options") or []
-    if mode not in ("mp3", "basic", "advanced"):
+    if mode not in ("mp3", "wav", "basic", "advanced"):
         return jsonify(error="Unknown output option."), 400
-    if mode != "mp3" and not STEMS_ENABLED:
+    if mode in ("basic", "advanced") and not STEMS_ENABLED:
         return jsonify(error="Stem splitting is not available."), 400
     if not url.startswith(("http://", "https://")) or len(url) > 2000:
         return jsonify(error="Enter a valid http(s) link."), 400
@@ -287,12 +295,23 @@ def convert():
         executor.submit(run_job, job_id, url, quality)
         return jsonify(id=job_id)
 
+    steps_for = lambda keys: {k: {"label": {"download": "Downloading audio", **stems.STEP_LABELS}[k],
+                                  "state": "pending", "progress": 0, "detail": ""} for k in keys}
+    if mode == "wav":
+        if rate_limited((client_ip(), "mp3"), JOBS_PER_HOUR):
+            return jsonify(error="Too many requests. Try again later."), 429
+        with jobs_lock:
+            jobs[job_id] = {"status": "queued", "mode": mode,
+                            "steps": steps_for(["download", "prepare", "analyze", "package"])}
+        executor.submit(run_stem_job, job_id, url, set(), rate, depth, True)
+        return jsonify(id=job_id)
+
     with jobs_lock:
         if len(stem_queue) >= STEM_QUEUE_MAX:
             return jsonify(error="The stem splitter is busy. Try again in a few minutes."), 503
     if rate_limited((client_ip(), "stems"), STEM_JOBS_PER_HOUR):
         return jsonify(error=f"Stem splitting is limited to {STEM_JOBS_PER_HOUR} songs per hour."), 429
-    steps = ["download", "prepare", "stems"] + [k for k in stems.OPTIONS if k in options] + ["package"]
+    steps = ["download", "prepare", "analyze", "stems"] + [k for k in stems.OPTIONS if k in options] + ["package"]
     labels = {"download": "Downloading audio", **stems.STEP_LABELS}
     with jobs_lock:
         jobs[job_id] = {"status": "queued", "mode": mode,
@@ -310,7 +329,7 @@ def status(job_id):
     job = jobs.get(job_id)
     if not job:
         abort(404)
-    result = {k: job.get(k) for k in ("status", "progress", "error", "name", "files", "warnings")}
+    result = {k: job.get(k) for k in ("status", "progress", "error", "name", "files", "warnings", "analysis")}
     if "steps" in job:
         result["steps"] = [{"key": k, **v} for k, v in job["steps"].items()]
     with jobs_lock:
@@ -326,7 +345,7 @@ def download(job_id):
     job = jobs.get(job_id)
     if not job or job.get("status") != "done":
         abort(404)
-    mimetype = "application/zip" if job["name"].endswith(".zip") else "audio/mpeg"
+    mimetype = {".zip": "application/zip", ".wav": "audio/wav"}.get(Path(job["name"]).suffix, "audio/mpeg")
     return send_file(job["file"], as_attachment=True, download_name=job["name"],
                      mimetype=mimetype)
 

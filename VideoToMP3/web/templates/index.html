@@ -5,16 +5,17 @@
 <form id="form">
   <label for="url">Video link</label>
   <input id="url" type="url" placeholder="https://www.youtube.com/watch?v=..." required>
-  {% if stems_enabled %}
   <label for="mode">Output</label>
   <select id="mode">
     <option value="mp3" selected>MP3 (max {{ max_min }} min)</option>
+    <option value="wav">WAV, full song (max {{ max_min }} min)</option>
+    {% if stems_enabled %}
     <option value="basic">Stems: Basic (4 stems, max {{ stem_max_min }} min)</option>
-    {% if options %}
+    {% endif %}
+    {% if stems_enabled and options %}
     <option value="advanced">Stems: Advanced (4 + detailed, max {{ stem_max_min }} min)</option>
     {% endif %}
   </select>
-  {% endif %}
   <div id="mp3-opts">
   <label for="quality">Quality</label>
   <select id="quality">
@@ -24,8 +25,11 @@
     <option value="320">320 kbps (best)</option>
   </select>
   </div>
-  {% if stems_enabled %}
   <div id="stem-opts" class="hidden">
+    <div id="wav-info" class="info hidden">
+      <strong>WAV:</strong> the full song as one WAV file at the sample rate and bit depth you pick.
+    </div>
+    {% if stems_enabled %}
     <div id="basic-info" class="info">
       <strong>Basic:</strong> vocals, drums, bass, other. Faster and simpler, with fewer artifacts.
       Guitar, keys, synths and everything else stay together in "other".
@@ -56,6 +60,7 @@
       {% endif %}
       <p class="note">No synth stem: no model tested here separates synths reliably, so synths stay in "other".</p>
     </fieldset>
+    {% endif %}
     <div class="row">
       <div>
         <label for="rate">Sample rate</label>
@@ -76,12 +81,14 @@
       </div>
     </div>
     <div class="files">
-      <div class="files-head">Your ZIP will contain <span id="file-count"></span>:</div>
+      <div class="files-head"><span id="files-intro">Your ZIP will contain</span> <span id="file-count"></span>:</div>
       <ul id="file-list"></ul>
-      <p class="note"><span id="size"></span> Runs one song at a time; expect several minutes per song.</p>
+      <p class="note"><span id="size"></span> <span id="slow-note">Runs one song at a time; expect several minutes per song.</span></p>
+      <p class="note">BPM and key are detected automatically and added to the file names, e.g.
+        "Song (128 BPM, A minor)". They are estimates: tempo can come out half or double, and a key
+        can show as its relative major/minor.</p>
     </div>
   </div>
-  {% endif %}
   <button id="go" type="submit">Convert</button>
 </form>
 
@@ -110,23 +117,25 @@ function selectedOptions() {
   return [...document.querySelectorAll('input[name="opt"]:checked')].map(i => i.value);
 }
 function plannedFiles() {
+  if (selectedMode() === "wav") return [null];
   const opts = selectedOptions();
-  let names = [...PLAN.basic];
+  let names = ["full mix", ...PLAN.basic];
   for (const o of PLAN.options) if (opts.includes(o.key)) names = names.concat(o.files);
   return names;
 }
 function updatePlan() {
   if (!mode) return;
-  const m = selectedMode(), stemsOn = m !== "mp3";
-  $("mp3-opts").classList.toggle("hidden", stemsOn);
-  $("stem-opts").classList.toggle("hidden", !stemsOn);
-  $("basic-info").classList.toggle("hidden", m !== "basic");
-  $("advanced-info").classList.toggle("hidden", m !== "advanced");
-  $("adv-opts").classList.toggle("hidden", m !== "advanced");
-  const names = plannedFiles(), list = $("file-list");
-  list.replaceChildren(...names.map(n => { const li = document.createElement("li"); li.textContent = "<song title> - " + n + ".wav"; return li; }),
-    Object.assign(document.createElement("li"), {textContent: "<song title> - README.txt (file list, notes, credits)"}));
-  $("file-count").textContent = names.length + " WAV files";
+  const m = selectedMode(), wavOn = m !== "mp3", wavOnly = m === "wav";
+  const show = (id, on) => { if ($(id)) $(id).classList.toggle("hidden", !on); };
+  show("mp3-opts", !wavOn); show("stem-opts", wavOn); show("wav-info", wavOnly);
+  show("basic-info", m === "basic"); show("advanced-info", m === "advanced"); show("adv-opts", m === "advanced");
+  show("slow-note", !wavOnly);
+  const names = plannedFiles(), list = $("file-list"), song = "<song title> (<BPM>, <key>)";
+  const items = names.map(n => song + (n ? " - " + n : "") + ".wav");
+  if (!wavOnly) items.push(song + " - README.txt (file list, notes, credits)");
+  list.replaceChildren(...items.map(t => Object.assign(document.createElement("li"), {textContent: t})));
+  $("files-intro").textContent = wavOnly ? "You will get" : "Your ZIP will contain";
+  $("file-count").textContent = wavOnly ? "1 WAV file" : names.length + " WAV files";
   const bytes = $("depth").value === "16" ? 2 : $("depth").value === "24" ? 3 : 4;
   const perStemMB = 240 * Number($("rate").value) * 2 * bytes / 1e6;  // 4-minute stereo song
   $("size").textContent = "A 4-minute song is about " + Math.round(perStemMB) + " MB per file, " +
@@ -197,7 +206,8 @@ async function poll(id) {
           warnings.map(([k, v]) => k + " (" + v + ")").join("; ") + ". All other files are complete.";
         $("warn").classList.remove("hidden");
       }
-      dl.textContent = j.name.endsWith(".zip") ? "Download stems (ZIP, " + j.files.length + " WAV files)" : "Download MP3";
+      dl.textContent = j.name.endsWith(".zip") ? "Download stems (ZIP, " + j.files.length + " WAV files)"
+        : j.name.endsWith(".wav") ? "Download WAV" : "Download MP3";
       dl.href = "/api/file/" + id; dl.classList.remove("hidden");
       return reset();
     }

@@ -39,7 +39,7 @@ OPTIONS = {
         ("guitar", "experimental - guitar"), ("piano", "experimental - piano")]),
 }
 STEP_LABELS = {
-    "prepare": "Preparing audio", "stems": "Splitting 4 main stems", "drums": "Splitting drum kit",
+    "prepare": "Preparing audio", "analyze": "Detecting BPM and key", "stems": "Splitting 4 main stems", "drums": "Splitting drum kit",
     "vocals": "Splitting lead / background vocals", "guitar_piano": "Extracting guitar and piano",
     "package": "Converting and packaging",
 }
@@ -63,7 +63,7 @@ CREDITS = {
 
 def planned_files(options: set[str]) -> list[str]:
     """ZIP file names (without title prefix or .wav) for a selection, in ZIP order."""
-    names = list(BASIC_STEMS)
+    names = ["full mix"] + list(BASIC_STEMS)
     for key in OPTIONS:
         if key in options:
             names += [zip_name for _, zip_name in OPTIONS[key][1]]
@@ -244,6 +244,8 @@ class Result:
     failures: dict[str, str]
     stats: dict[str, StepStats]
     frames_adjusted: dict[str, int]
+    analysis: dict = field(default_factory=dict)
+    title: str = ""  # song title with BPM/key, as used in the file names
 
 
 Report = Callable[[str, str, int, str], None]  # (step, state, progress, detail)
@@ -269,6 +271,7 @@ def run_pipeline(source: Path, work: Path, title: str, options: set[str], rate: 
 
     src44 = work / "source44.wav"
     timed("prepare", lambda: prepare_source(source, src44))
+    analysis, title = analyze_title(src44, title, report, stats)
 
     # 1. The four basic stems (required)
     out = work / "stems"
@@ -282,6 +285,7 @@ def run_pipeline(source: Path, work: Path, title: str, options: set[str], rate: 
         raise
     stem_dir = out / cfg.demucs_model
     produced = {name: stem_dir / f"{name}.wav" for name in BASIC_STEMS}
+    produced["full mix"] = src44  # the original 2-track, same format as the stems
     missing = [n for n, p in produced.items() if not p.exists()]
     if missing:
         report("stems", "failed", 0, f"missing {missing}")
@@ -337,14 +341,46 @@ def run_pipeline(source: Path, work: Path, title: str, options: set[str], rate: 
             dst.unlink()
             os.utime(work)
             report("package", "running", int(100 * (i + 1) / len(names)), "")
-        zf.writestr(f"{title} - README.txt", _readme(title, names, options, failures, rate, depth))
+        zf.writestr(f"{title} - README.txt", _readme(title, names, options, failures, rate, depth, analysis))
     verify_zip(zip_path, rate, depth)
     for d in ("stems", "stems6", "drumparts", "vocalparts", "final"):
         shutil.rmtree(work / d, ignore_errors=True)
     src44.unlink(missing_ok=True)
     stats["package"] = StepStats(time.time() - t)
     report("package", "done", 100, "")
-    return Result(zip_path, names, failures, stats, adjusted)
+    return Result(zip_path, names, failures, stats, adjusted, analysis, title)
+
+
+def analyze_title(src44: Path, title: str, report: Report, stats: dict) -> tuple[dict, str]:
+    """Detect BPM and key and add them to the title. Never fatal: on failure the title is unchanged."""
+    report("analyze", "running", 0, "")
+    t = time.time()
+    try:
+        import analyze
+        info = analyze.detect(src44)
+        tag = analyze.tag(info)
+    except Exception as exc:  # noqa: BLE001  (librosa missing or analysis error)
+        report("analyze", "failed", 0, str(exc)[:200])
+        return {}, title
+    stats["analyze"] = StepStats(time.time() - t)
+    report("analyze", "done", 100, tag)
+    return info, (f"{title} ({tag})" if tag else title)
+
+
+def make_wav(source: Path, work: Path, title: str, rate: str, depth: str, report: Report) -> tuple[Path, dict]:
+    """Full song as one WAV at the chosen rate/depth, with BPM and key in the name."""
+    src44 = work / "source44.wav"
+    report("prepare", "running", 0, "")
+    prepare_source(source, src44)
+    report("prepare", "done", 100, "")
+    analysis, title = analyze_title(src44, title, report, {})
+    report("package", "running", 0, "")
+    out = work / f"{title}.wav"
+    convert_stem(src44, out, rate, depth)
+    check_wav(out, rate, depth)
+    src44.unlink(missing_ok=True)
+    report("package", "done", 100, "")
+    return out, analysis
 
 
 def _spec(rate: str, depth: str) -> str:
@@ -377,10 +413,14 @@ def verify_zip(zip_path: Path, rate: str, depth: str) -> list[dict]:
     return rows
 
 
-def _readme(title, names, options, failures, rate, depth) -> str:
-    lines = [f"{title}", f"Format: WAV, {_spec(rate, depth)}, stereo. All files are the same length",
+def _readme(title, names, options, failures, rate, depth, analysis=None) -> str:
+    lines = [f"{title}"]
+    if analysis and (analysis.get("bpm") or analysis.get("key")):
+        lines.append("BPM and key in the file names are automatic estimates; tempo can be off by "
+                     "half/double and a key can show as its relative major/minor.")
+    lines += [f"Format: WAV, {_spec(rate, depth)}, stereo. All files are the same length",
              "and start at the same time, so they line up when dropped into a DAW at 0:00.", "",
-             "Files:"] + [f"  {title} - {n}.wav" for n in names]
+             "Files ('full mix' is the original 2-track):"] + [f"  {title} - {n}.wav" for n in names]
     if failures:
         lines += ["", "Optional splits that failed (the files above are still complete):"]
         lines += [f"  {OPTIONS[k][0]}: {msg}" for k, msg in failures.items()]

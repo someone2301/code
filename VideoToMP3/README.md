@@ -148,6 +148,19 @@ Then open `https://mp3.yourdomain.com`.
 Recommended: add **Cloudflare Access** (Zero Trust > Access > Applications)
 in front of the hostname so only emails you approve can reach the site.
 
+## WAV output, BPM and key
+
+- **WAV mode** gives the full song as one WAV at the chosen sample rate and
+  bit depth (same choices as stems).
+- Every stem ZIP also includes `full mix.wav`, the original 2-track, in the
+  same format as the stems and aligned with them.
+- WAV and stem file names include the detected tempo and key, e.g.
+  `Song (128 BPM, F# major) - vocals.wav`. Detection uses librosa (ISC
+  license). It is an estimate: on test songs with known values, tempo was
+  exact on 6 of 6 and key on 4 of 6; the two misses were minor keys reported
+  as their relative major (D minor as F major). If detection fails, files
+  keep the plain title.
+
 ## Stem splitting
 
 Two modes, both using [Demucs](https://github.com/adefossez/demucs) on your server:
