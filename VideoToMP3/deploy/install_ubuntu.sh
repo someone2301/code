@@ -2,11 +2,22 @@
 # Install or update VideoToMP3 (MP3 + Basic 4-stem splitting) on Ubuntu.
 #
 # Usage, from a checkout of this repository on the server:
-#     sudo bash VideoToMP3/deploy/install_ubuntu.sh
+#     sudo bash VideoToMP3/deploy/install_ubuntu.sh               # MP3, WAV, Basic stems
+#     sudo bash VideoToMP3/deploy/install_ubuntu.sh --with-drums  # + kick/snare/toms/hi-hat/cymbals
 #
 # Safe to run again: it updates the code and packages and keeps your settings.
-# Advanced stem options are not installed; see README for those.
 set -euo pipefail
+
+WITH_DRUMS=0
+for arg in "$@"; do
+    case "$arg" in
+        --with-drums) WITH_DRUMS=1 ;;
+        *) echo "Unknown option: $arg" >&2; exit 1 ;;
+    esac
+done
+LARSNET_DIR=/opt/larsnet
+LARSNET_COMMIT=17d631fd18e77ee2f1d23ee7b3fc0fb46ae629e2
+LARSNET_WEIGHTS_ID=1U8-5924B1ii1cjv9p0MTPzayb00P4qoL
 
 APP_DIR=/opt/videotomp3
 DATA_DIR=/var/lib/videotomp3
@@ -72,6 +83,48 @@ chown -R "$SVC_USER:$SVC_USER" "$APP_DIR" "$DATA_DIR"
 step "Downloading the Demucs model (about 80 MB)"
 sudo -u "$SVC_USER" env TORCH_HOME="$DATA_DIR/models/torch" HF_HOME="$DATA_DIR/models/hf" \
     "$APP_DIR/.venv/bin/python" -c "from demucs.pretrained import get_model; get_model('htdemucs')"
+
+if [ "$WITH_DRUMS" = 1 ]; then
+    step "Installing drum-kit splitting (LarsNet; weights are CC BY-NC 4.0, non-commercial)"
+    if [ ! -d "$LARSNET_DIR/.git" ]; then
+        git clone -q https://github.com/polimi-ispl/larsnet.git "$LARSNET_DIR"
+    fi
+    git -C "$LARSNET_DIR" fetch -q origin
+    git -C "$LARSNET_DIR" checkout -q "$LARSNET_COMMIT"
+    "$PIP" install -q -r "$APP_DIR/requirements-drums.txt" gdown
+    if ! ls "$LARSNET_DIR"/pretrained_larsnet_models/*/*.pth >/dev/null 2>&1 \
+        || [ "$(ls "$LARSNET_DIR"/pretrained_larsnet_models/*/*.pth | wc -l)" -lt 5 ]; then
+        tmp=$(mktemp -d)
+        if [ -s /tmp/larsnet_models.zip ]; then
+            echo "Using /tmp/larsnet_models.zip"
+            cp /tmp/larsnet_models.zip "$tmp/larsnet_models.zip"
+        else
+            echo "Downloading LarsNet weights (562 MB from Google Drive)..."
+        fi
+        if [ ! -s "$tmp/larsnet_models.zip" ] && \
+           ! "$APP_DIR/.venv/bin/gdown" -q "$LARSNET_WEIGHTS_ID" -O "$tmp/larsnet_models.zip"; then
+            rm -rf "$tmp"
+            die "Google Drive download failed. Download the zip in a browser from
+  https://drive.google.com/uc?id=$LARSNET_WEIGHTS_ID&export=download
+copy it to the server as /tmp/larsnet_models.zip, then run:
+  sudo bash $SRC_DIR/deploy/install_ubuntu.sh --with-drums"
+        fi
+        unzip -q "$tmp/larsnet_models.zip" -d "$tmp/unz"
+        kick=$(find "$tmp/unz" -name pretrained_kick_unet.pth | head -1)
+        [ -n "$kick" ] || die "weights zip did not contain pretrained_kick_unet.pth"
+        mkdir -p "$LARSNET_DIR/pretrained_larsnet_models"
+        cp -r "$(dirname "$(dirname "$kick")")"/. "$LARSNET_DIR/pretrained_larsnet_models/"
+        rm -rf "$tmp"
+    fi
+    # One-time conversion so the site loads the weights in PyTorch's safe mode
+    "$APP_DIR/.venv/bin/python" -I "$APP_DIR/web/drum_split.py" --larsnet-dir "$LARSNET_DIR" --prepare-weights
+    if grep -q '^VTM_ENABLE_DRUM_SPLIT=' "$ENV_FILE"; then
+        sed -i 's/^VTM_ENABLE_DRUM_SPLIT=.*/VTM_ENABLE_DRUM_SPLIT=1/' "$ENV_FILE"
+    else
+        echo 'VTM_ENABLE_DRUM_SPLIT=1' >> "$ENV_FILE"
+    fi
+    grep -q '^VTM_LARSNET_DIR=' "$ENV_FILE" || echo "VTM_LARSNET_DIR=$LARSNET_DIR" >> "$ENV_FILE"
+fi
 
 step "Installing the service and cleanup job"
 cp "$APP_DIR/deploy/videotomp3.service" /etc/systemd/system/videotomp3.service
