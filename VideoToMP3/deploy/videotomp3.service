@@ -8,6 +8,8 @@ User=videotomp3
 Group=videotomp3
 WorkingDirectory=/opt/videotomp3
 EnvironmentFile=/etc/videotomp3.env
+# Write startup messages to the journal immediately
+Environment=PYTHONUNBUFFERED=1
 # Where Demucs stores its downloaded models
 Environment=TORCH_HOME=/var/lib/videotomp3/models/torch
 Environment=HF_HOME=/var/lib/videotomp3/models/hf

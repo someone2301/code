@@ -132,6 +132,7 @@ cp "$APP_DIR/deploy/videotomp3-cleanup.cron" /etc/cron.d/videotomp3-cleanup
 chmod 644 /etc/cron.d/videotomp3-cleanup
 systemctl daemon-reload
 systemctl enable videotomp3 >/dev/null
+started_at=$(date '+%Y-%m-%d %H:%M:%S')
 systemctl restart videotomp3
 
 step "Checking that the site responds"
@@ -140,7 +141,9 @@ for _ in $(seq 1 30); do
     sleep 2
 done
 [ "${ok:-}" = 1 ] || { journalctl -u videotomp3 -n 30 --no-pager; die "site did not start"; }
-journalctl -u videotomp3 -n 20 --no-pager | grep -E "Stem splitting|Advanced option|WARNING" || true
+sleep 2
+echo "Startup log from this run:"
+journalctl -u videotomp3 --since "$started_at" --no-pager -o cat | grep -E "Stem splitting|Advanced option|WARNING" || true
 
 echo
 echo "Done. The site is running on http://127.0.0.1:8000 (this server only)."
