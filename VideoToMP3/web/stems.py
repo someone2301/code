@@ -341,7 +341,6 @@ def run_pipeline(source: Path, work: Path, title: str, options: set[str], rate: 
             dst.unlink()
             os.utime(work)
             report("package", "running", int(100 * (i + 1) / len(names)), "")
-        zf.writestr(f"{title} - README.txt", _readme(title, names, options, failures, rate, depth, analysis))
     verify_zip(zip_path, rate, depth)
     for d in ("stems", "stems6", "drumparts", "vocalparts", "final"):
         shutil.rmtree(work / d, ignore_errors=True)

@@ -101,7 +101,8 @@
 </div>
 
 <footer>
-  <span>Only convert content you own or have permission to use. Files are deleted after {{ ttl_min }} minutes.</span>
+  <span>Only convert content you own or have permission to use. Files are deleted after {{ ttl_min }} minutes.
+    {% if "drums" in options %}<br>Drum parts: LarsNet (Mezza et al., Politecnico di Milano), weights CC BY-NC 4.0.{% endif %}</span>
   <form method="post" action="/logout"><button class="link" type="submit">Log out</button></form>
 </footer>
 
@@ -132,7 +133,6 @@ function updatePlan() {
   show("slow-note", !wavOnly);
   const names = plannedFiles(), list = $("file-list"), song = "<song title> (<BPM>, <key>)";
   const items = names.map(n => song + (n ? " - " + n : "") + ".wav");
-  if (!wavOnly) items.push(song + " - README.txt (file list, notes, credits)");
   list.replaceChildren(...items.map(t => Object.assign(document.createElement("li"), {textContent: t})));
   $("files-intro").textContent = wavOnly ? "You will get" : "Your ZIP will contain";
   $("file-count").textContent = wavOnly ? "1 WAV file" : names.length + " WAV files";
